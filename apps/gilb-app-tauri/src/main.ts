@@ -141,9 +141,136 @@ async function stopCapture() {
   refresh();
 }
 
+// ---- MCP connect modal --------------------------------------------------
+
+type McpClientStatus = {
+  id: string;
+  label: string;
+  available: boolean;
+  hint: string | null;
+};
+
+type McpServerInfo = {
+  binary_path: string | null;
+  config_json: string;
+  clients: McpClientStatus[];
+};
+
+type ConnectOutcome =
+  | { kind: "installed"; details: string }
+  | { kind: "opened_deeplink"; url: string }
+  | { kind: "needs_manual"; hint: string };
+
+function setMcpResult(text: string, kind: "info" | "error" = "info") {
+  const el = $("mcp-result");
+  if (!el) return;
+  el.textContent = text;
+  el.dataset.kind = kind;
+}
+
+async function openMcpModal() {
+  const modal = $("mcp-modal");
+  if (!modal) return;
+  setMcpResult("");
+  modal.hidden = false;
+
+  try {
+    const info = await invoke<McpServerInfo>("mcp_server_info");
+    renderMcpModal(info);
+  } catch (err) {
+    setMcpResult(`mcp_server_info error: ${String(err)}`, "error");
+  }
+}
+
+function closeMcpModal() {
+  const modal = $("mcp-modal");
+  if (modal) modal.hidden = true;
+}
+
+function renderMcpModal(info: McpServerInfo) {
+  const pathEl = $("mcp-binary-path");
+  if (pathEl) {
+    pathEl.textContent = info.binary_path
+      ? `Binary: ${info.binary_path}`
+      : "Binary: gilb-mcp не найден — соберите `cargo build --release -p gilb-mcp`.";
+  }
+
+  const list = $<HTMLUListElement>("mcp-clients");
+  if (list) {
+    list.innerHTML = "";
+    for (const client of info.clients) {
+      list.appendChild(renderClientRow(client, !info.binary_path));
+    }
+  }
+
+  const json = $("mcp-other-json");
+  if (json) json.textContent = info.config_json;
+}
+
+function renderClientRow(client: McpClientStatus, binaryMissing: boolean): HTMLLIElement {
+  const li = document.createElement("li");
+  if (!client.available) li.classList.add("unavailable");
+
+  const text = document.createElement("div");
+  text.className = "mcp-client-text";
+  const title = document.createElement("strong");
+  title.textContent = client.label;
+  text.appendChild(title);
+  if (client.hint) {
+    const hint = document.createElement("span");
+    hint.className = "mcp-client-hint";
+    hint.textContent = client.hint;
+    text.appendChild(hint);
+  }
+  li.appendChild(text);
+
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.textContent = "Connect";
+  btn.disabled = binaryMissing;
+  btn.addEventListener("click", () => connectClient(client.id));
+  li.appendChild(btn);
+
+  return li;
+}
+
+async function connectClient(clientId: string) {
+  setMcpResult("Подключаем…");
+  try {
+    const outcome = await invoke<ConnectOutcome>("mcp_connect", { client: clientId });
+    if (outcome.kind === "installed") {
+      setMcpResult(`✓ ${outcome.details}`);
+    } else if (outcome.kind === "opened_deeplink") {
+      setMcpResult("Открыт deeplink — подтвердите установку в клиенте.");
+    } else if (outcome.kind === "needs_manual") {
+      setMcpResult(outcome.hint, "error");
+    }
+  } catch (err) {
+    setMcpResult(String(err), "error");
+  }
+}
+
+async function copyMcpJson() {
+  const json = $("mcp-other-json")?.textContent || "";
+  try {
+    await navigator.clipboard.writeText(json);
+    setMcpResult("✓ JSON скопирован в буфер обмена.");
+  } catch (err) {
+    setMcpResult(`Не удалось скопировать: ${String(err)}`, "error");
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", startCapture);
   $("btn-stop")?.addEventListener("click", stopCapture);
+  $("btn-connect-mcp")?.addEventListener("click", openMcpModal);
+  $("mcp-modal-close")?.addEventListener("click", closeMcpModal);
+  $("mcp-other-copy")?.addEventListener("click", copyMcpJson);
+
+  // Закрытие модала по клику на backdrop.
+  $("mcp-modal")?.addEventListener("click", (ev) => {
+    if (ev.target === ev.currentTarget) closeMcpModal();
+  });
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {

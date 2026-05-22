@@ -1578,6 +1578,8 @@ name = "gilb-app-tauri"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
+ "directories",
  "gilb-a11y",
  "gilb-config",
  "gilb-core",

@@ -66,9 +66,38 @@
         <div class="row">
           <button id="btn-start" type="button">Start</button>
           <button id="btn-stop" type="button" disabled>Stop</button>
+          <button id="btn-connect-mcp" type="button" class="btn-secondary">
+            Connect to MCP&nbsp;client
+          </button>
         </div>
         <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
     </main>
+
+    <div id="mcp-modal" class="modal" hidden>
+      <div class="modal-card">
+        <header class="modal-head">
+          <h2>Connect gilb-mcp</h2>
+          <button type="button" id="mcp-modal-close" class="modal-close" aria-label="Close">×</button>
+        </header>
+        <p class="modal-lead">
+          Подключите MCP-сервер gilb к выбранному агенту. После подключения
+          агент сможет читать историю ваших действий через
+          <code>gilb_recent_actions</code>, <code>gilb_search_actions</code> и др.
+        </p>
+        <p id="mcp-binary-path" class="mcp-binary-path"></p>
+        <ul id="mcp-clients" class="mcp-clients"></ul>
+        <details class="mcp-other">
+          <summary>Другой клиент (manual config)</summary>
+          <p class="modal-hint">
+            Скопируйте JSON ниже в конфиг вашего MCP-клиента (Cline, Goose,
+            Zed, и т.&nbsp;п.).
+          </p>
+          <pre id="mcp-other-json" class="mcp-other-json"></pre>
+          <button type="button" id="mcp-other-copy">Скопировать JSON</button>
+        </details>
+        <p id="mcp-result" class="message" role="status" aria-live="polite"></p>
+      </div>
+    </div>
   </body>
 </html>
