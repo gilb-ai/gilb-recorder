@@ -1,9 +1,9 @@
 # Захват экрана и оркестрация (prior-art-screen / -engine / -core)
 
 Crates:
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-screen/`
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-engine/`
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-core/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-screen/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-engine/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-core/`
 
 Для Gilb: даже если мы не делаем видео-таймлапс, нам нужно **периодически
 снимать snapshot экрана при значимых событиях** (для contex'а therblig'а).

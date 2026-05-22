@@ -1,10 +1,10 @@
 # Events, Tauri ↔ Rust, HTTP API, pipes, redact, config
 
 Crates:
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-events/`
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-redact/`
-- `/Users/leonid/src/gilb/prior-art/crates/prior-art-config/`
-- `/Users/leonid/src/gilb/prior-art/apps/prior-art-app-tauri/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-events/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-redact/`
+- `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-config/`
+- `/Users/leonid/src/gilb/reference/prior-art/apps/prior-art-app-tauri/`
 
 ## 1. Event bus (prior-art-events)
 

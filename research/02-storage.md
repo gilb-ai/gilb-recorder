@@ -1,6 +1,6 @@
 # prior-art-db: хранение длительных данных
 
-Crate: `/Users/leonid/src/gilb/prior-art/crates/prior-art-db/`
+Crate: `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art-db/`
 
 Для Gilb важно: как **хранить терабайты сырого input/UI потока за месяцы**,
 чтобы поиск и анализ паттернов оставались быстрыми.

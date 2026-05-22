@@ -1,6 +1,6 @@
 # prior-art: захват действий пользователя
 
-Crate: `/Users/leonid/src/gilb/prior-art/crates/prior-art/`
+Crate: `/Users/leonid/src/gilb/reference/prior-art/crates/prior-art/`
 
 Это **самый важный** для Gilb crate — он отвечает за всё, что мы планируем
 собирать: input events + accessibility tree + window/app focus.

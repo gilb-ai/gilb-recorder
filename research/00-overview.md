@@ -1,6 +1,6 @@
 # prior-art: архитектурный обзор для Gilb
 
-Источник: `/Users/leonid/src/gilb/prior-art` (Rust workspace + Tauri desktop app).
+Источник: `/Users/leonid/src/gilb/reference/prior-art` (Rust workspace + Tauri desktop app).
 
 ## Контекст для Gilb
 
