@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
+const LOGS_DIR_NAME: &str = "logs";
 
 /// Toggles controlled by `CAPTURE_*` env vars or the future config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,5 +84,19 @@ pub fn ensure_data_dir() -> Result<PathBuf> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create gilb data directory at {}", dir.display()))?;
+    Ok(dir)
+}
+
+/// `$HOME/.gilb/logs/` — directory for rotating log files written by the
+/// Tauri app (the CLI smoke binary stays stdout-only).
+pub fn logs_dir() -> Result<PathBuf> {
+    Ok(data_dir()?.join(LOGS_DIR_NAME))
+}
+
+/// Ensure `$HOME/.gilb/logs/` exists; returns its absolute path.
+pub fn ensure_logs_dir() -> Result<PathBuf> {
+    let dir = logs_dir()?;
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create gilb logs directory at {}", dir.display()))?;
     Ok(dir)
 }
