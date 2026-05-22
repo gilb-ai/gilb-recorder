@@ -1,6 +1,7 @@
 //! gilb Tauri shell — wires the UI to `gilb-engine`.
 
 mod commands;
+mod events;
 mod logging;
 mod state;
 
@@ -17,6 +18,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| match state::build_app_state() {
             Ok(s) => {
+                events::spawn_proxies(app.handle().clone(), s.engine.clone());
                 app.manage(s);
                 Ok(())
             }

@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 type Permissions = {
   accessibility: boolean;
@@ -68,36 +69,48 @@ function updateSplash(perms: Permissions, platform: string) {
   }
 }
 
+// Sequence counter — refresh()-вызовы могут гоняться параллельно (poll, явный
+// вызов после start/stop, и listen("permission"/"health")). Применяем к DOM
+// только результат последнего стартовавшего вызова — out-of-order ответы
+// отбрасываются.
+let refreshSeq = 0;
+
 async function refresh() {
+  const mySeq = ++refreshSeq;
+  let s: EngineStatus;
   try {
-    const s = await invoke<EngineStatus>("status");
-    setText("status-platform", s.platform);
-    setDot("status-platform-dot", true);
-
-    setText("status-ax", s.permissions.accessibility ? "granted" : "not granted");
-    setDot("status-ax-dot", s.permissions.accessibility);
-
-    setText(
-      "status-im",
-      s.permissions.input_monitoring ? "granted" : "not granted",
-    );
-    setDot("status-im-dot", s.permissions.input_monitoring);
-
-    setText("status-rec", s.recording ? "recording" : "stopped");
-    setDot("status-rec-dot", s.recording);
-
-    setText("status-session", s.session_id ? String(s.session_id) : "—");
-    setText("status-actions", String(s.actions_today));
-
-    const startBtn = $<HTMLButtonElement>("btn-start");
-    const stopBtn = $<HTMLButtonElement>("btn-stop");
-    if (startBtn) startBtn.disabled = s.recording;
-    if (stopBtn) stopBtn.disabled = !s.recording;
-
-    updateSplash(s.permissions, s.platform);
+    s = await invoke<EngineStatus>("status");
   } catch (err) {
+    if (mySeq !== refreshSeq) return;
     setMessage(`status error: ${String(err)}`, "error");
+    return;
   }
+  if (mySeq !== refreshSeq) return;
+
+  setText("status-platform", s.platform);
+  setDot("status-platform-dot", true);
+
+  setText("status-ax", s.permissions.accessibility ? "granted" : "not granted");
+  setDot("status-ax-dot", s.permissions.accessibility);
+
+  setText(
+    "status-im",
+    s.permissions.input_monitoring ? "granted" : "not granted",
+  );
+  setDot("status-im-dot", s.permissions.input_monitoring);
+
+  setText("status-rec", s.recording ? "recording" : "stopped");
+  setDot("status-rec-dot", s.recording);
+
+  setText("status-session", s.session_id ? String(s.session_id) : "—");
+  setText("status-actions", String(s.actions_today));
+
+  const startBtn = $<HTMLButtonElement>("btn-start");
+  const stopBtn = $<HTMLButtonElement>("btn-stop");
+  if (startBtn) startBtn.disabled = s.recording;
+  if (stopBtn) stopBtn.disabled = !s.recording;
+
+  updateSplash(s.permissions, s.platform);
 }
 
 async function openPrivacyPane(pane: "accessibility" | "input_monitoring") {
@@ -132,11 +145,6 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", startCapture);
   $("btn-stop")?.addEventListener("click", stopCapture);
 
-  // Показываем splash сразу — до первого ответа status; refresh скроет его,
-  // если оба разрешения уже выданы.
-  const splash = $("splash");
-  if (splash) splash.hidden = false;
-
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {
       const pane = btn.dataset.pane;
@@ -146,6 +154,13 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  // Бэкенд проксирует EventBus сюда — permission/health-события сразу
+  // дёргают refresh(). Permissions, recording, session_id обновляются по
+  // событию; медленный 5-секундный poll нужен только для счётчика
+  // actions_today и как fallback на случай пропущенного broadcast'а.
+  listen("permission", () => refresh());
+  listen("health", () => refresh());
+
   refresh();
-  setInterval(refresh, 1500);
+  setInterval(refresh, 5000);
 });
