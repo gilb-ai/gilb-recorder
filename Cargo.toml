@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "apps/gilb-app-tauri/src-tauri",
+    "apps/gilb-mcp",
     "crates/gilb-core",
     "crates/gilb-config",
     "crates/gilb-events",
@@ -54,6 +55,10 @@ directories = "5"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+
+# MCP
+rmcp = { version = "1", features = ["server", "macros", "transport-io", "schemars"] }
+schemars = "1"
 
 # error
 anyhow = "1"

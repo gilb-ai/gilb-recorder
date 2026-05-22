@@ -68,3 +68,32 @@ pub async fn migrate(db: &Db) -> Result<()> {
         .context("running gilb-db migrations")?;
     Ok(())
 }
+
+/// Open `path` in **read-only mode** — for processes (like `gilb-mcp`) that
+/// must not modify the database. Does **not** create the file or run
+/// migrations; the caller is expected to point at an already-initialised DB
+/// (typically the same `~/.gilb/db.sqlite` that the Tauri app writes to).
+///
+/// Concurrent reads alongside the Tauri-app's writes are safe — `gilb-db.rs`
+/// already enables WAL journaling.
+pub async fn open_db_read_only(path: impl AsRef<Path>) -> Result<Db> {
+    let path = path.as_ref();
+    let url = format!("sqlite://{}", path.display());
+    let connect_opts = SqliteConnectOptions::from_str(&url)?
+        .read_only(true)
+        .create_if_missing(false)
+        .immutable(false)
+        .busy_timeout(Duration::from_secs(5))
+        .pragma("cache_size", "-32768")
+        .pragma("temp_store", "MEMORY");
+
+    let pool = SqlitePoolOptions::new()
+        .max_connections(4)
+        .acquire_timeout(Duration::from_secs(5))
+        .connect_with(connect_opts)
+        .await
+        .with_context(|| format!("failed to open sqlite db read-only at {}", path.display()))?;
+
+    info!(?path, "gilb-db open (read-only)");
+    Ok(pool)
+}
