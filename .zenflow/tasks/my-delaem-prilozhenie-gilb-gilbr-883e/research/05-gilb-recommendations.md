@@ -3,8 +3,13 @@
 Этот файл — синтез: что **взять напрямую**, что **адаптировать**, что
 **пропустить** в первой версии Gilb.
 
-Напоминание: задача Gilb — записывать a11y-поток действий пользователя на
-macOS и находить **повторяющиеся последовательности (therbligs)**.
+Напоминание: задача Gilb — записывать a11y-поток действий пользователя и
+находить **повторяющиеся последовательности (therbligs)**.
+
+**Target platforms: macOS + Windows (обе обязательны).** Linux вне scope. MVP
+делаем macOS-first, но архитектура с самого начала должна быть расширяема на
+Windows — без macOS-specific API в публичных интерфейсах `gilb-a11y` /
+`gilb-engine`.
 
 ## A. Что взять напрямую (proven patterns)
 
@@ -25,11 +30,8 @@ gilb/
 
 ### 2. A11y capture (1-в-1 со prior-art, см. `01-a11y-capture.md`)
 
-- **CGEventTap** (`LISTEN_ONLY`, через `prior-art`) + worker threads для AX
-  context.
-- **`AX_QUERY_LOCK` mutex** для серилизации AX queries; try-lock в hot path.
-- **AX Observer** на focused pid, переподписка на app switch.
-- **Clipboard poller** 750 мс (`NSPasteboard.changeCount()`).
+Платформо-независимые механики (нужны и на macOS, и на Windows):
+
 - **TextBuffer** аггрегатор с timeout 300 мс.
 - **Adaptive FPS** (`activity_feed.rs`).
 - **Per-app `WalkBudget`** (Light/Moderate/Heavy/Critical).
@@ -37,8 +39,25 @@ gilb/
 - **`SimHash` dedup** в `TreeCache`.
 - **`ArcSwap`** для lock-free current_app/window.
 
-Это всё кодом обкатано, можно реально форкнуть `prior-art` целиком как
-стартовую точку и срезать только Windows/Linux ветки.
+Platform-specific backends:
+
+**macOS** (`platform/macos.rs` стиль):
+- **CGEventTap** (`LISTEN_ONLY`, через `prior-art`) + worker threads для AX
+  context.
+- **`AX_QUERY_LOCK` mutex** для серилизации AX queries; try-lock в hot path.
+- **AX Observer** на focused pid, переподписка на app switch.
+- **Clipboard poller** 750 мс (`NSPasteboard.changeCount()`).
+
+**Windows** (`platform/windows_uia.rs` стиль):
+- **SetWindowsHookEx** (WH_MOUSE_LL + WH_KEYBOARD_LL) на отдельном потоке.
+- **UIA `IUIAutomation`** через crate `windows@0.58` на apartment-threaded
+  worker'е, с **CacheRequest batching** (одна COM call = все свойства
+  subtree).
+- **Control View + TreeWalker fallback** для Chromium/Electron.
+- **`IUIAutomationFocusChangedEventHandler`** для focus tracking.
+
+Это всё кодом обкатано — можно реально форкнуть `prior-art` целиком как
+стартовую точку и срезать только Linux-ветку, оставив macOS и Windows.
 
 ### 3. SQLite tuning (1-в-1 со prior-art-db, см. `02-storage.md`)
 
@@ -179,7 +198,8 @@ hard-coded detectors.
 
 | Из prior-art | Почему пропускаем |
 |---------------|-------------------|
-| Windows/Linux в a11y | macOS-only старт |
+| Linux в a11y | вне scope Gilb |
+| Windows в **v0 MVP** (но в v1 обязательно) | macOS-first старт; Windows-ветка добавляется сразу после MVP — архитектуру под обе платформы закладываем сразу |
 | ScreenCaptureKit видео + ffmpeg | snapshot'ов достаточно |
 | OCR pipeline (Vision/Tesseract) | a11y текста достаточно для большинства apps |
 | Audio capture/diarization | вне scope therblig'ов |
@@ -205,36 +225,49 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-tracing-oslog = "0.2"               # macOS only
 anyhow = "1"
 thiserror = "1"
 dashmap = "5"
+arboard = "3"                       # clipboard, both platforms
 
-# macOS native
+[target.'cfg(target_os = "macos")'.dependencies]
 prior-art = { version = "0.13", features = ["ax", "cg", "blocks", "ns", "dispatch"] }
-arboard = "3"
+tracing-oslog = "0.2"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_Accessibility",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+] }
 ```
 
 ## E. Дорожная карта Gilb v0 → v1
 
-**v0 (proof of concept)** — 1-2 недели:
-1. Скопировать структуру `prior-art` (только macOS).
+**v0 (proof of concept, macOS-only)** — 1-2 недели:
+1. Скопировать структуру `prior-art` с per-platform `mod platform` —
+   реализован только `macos.rs`, `windows.rs` существует как заглушка trait'а.
 2. Тривиальный `gilb-db` со схемой выше, без write_queue.
 3. CLI binary, который пишет actions в SQLite.
 4. Просмотр через `sqlite3 ~/.gilb/db.sqlite "select * from actions limit 50"`.
 
-**v0.5**:
+**v0.5 (macOS совершенствуем)**:
 5. Adaptive FPS + per-app WalkBudget.
 6. `SimHash` дедупликация tree snapshots.
 7. Write queue с батчингом.
 8. Tauri app: simple timeline view.
 
-**v1 (therblig detection)**:
-9. Detector trait + первые правила (clipboard copy/paste pair, drag-drop,
-   N-gram repetition).
-10. Sliding-window pattern mining.
-11. Snapshot capture на triggers (Frame Linker pattern).
-12. UI для просмотра найденных therblig'ов и их инстансов.
+**v1 (Windows + therblig detection)**:
+9. **Windows backend**: `SetWindowsHookEx` + UIA через crate `windows`,
+   CacheRequest batching, focus event handler. CI добавляет windows runner.
+10. Detector trait + первые правила (clipboard copy/paste pair, drag-drop,
+    N-gram repetition).
+11. Sliding-window pattern mining.
+12. Snapshot capture на triggers (Frame Linker pattern, ScreenCaptureKit на
+    macOS, Windows Graphics Capture на Windows).
+13. UI для просмотра найденных therblig'ов и их инстансов.
 
 **v1.5+**: PII redaction, multi-monitor, экспорт паттернов, AI-эвристики
 ("это похоже на форму отправки отчёта").

@@ -193,9 +193,16 @@ thread обновляет через CAS. Zero contention на самом гор
 
 ## 12. Что упростить для Gilb v0
 
-- Сначала только **macOS** (prior-art + CGEventTap + AXUIElement); Windows/Linux
-  отложить.
-- Дерево можно начинать с **focused window only** (без full system walk).
+- Gilb должен работать на **macOS И Windows** в дальнейшем; Linux вне scope.
+- **MVP — macOS-first** (prior-art + CGEventTap + AXUIElement), но архитектуру
+  сразу проектируем с per-platform trait'ами (как `platform/macos.rs` vs
+  `platform/windows_uia.rs` у prior-art). Windows ветка добавляется сразу
+  после proof-of-concept на macOS, не "когда-нибудь потом".
+- На Windows будем использовать ту же модель: `SetWindowsHookEx` (mouse+kb
+  low-level hooks) + UI Automation COM через crate `windows@0.58` с
+  CacheRequest batching.
+- Дерево можно начинать с **focused window only** (без full system walk) на
+  обеих платформах.
 - `tree/enhanced_mode_cache.rs` и Electron app-state resolution — overkill
   для MVP.
 - Image PII (rfdetr-mlx) точно не нужен в v0.
