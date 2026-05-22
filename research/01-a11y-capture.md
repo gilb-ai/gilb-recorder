@@ -1,6 +1,6 @@
 # screenpipe-a11y: захват действий пользователя
 
-Crate: `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-a11y/`
+Crate: `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-a11y/`
 
 Это **самый важный** для Gilb crate — он отвечает за всё, что мы планируем
 собирать: input events + accessibility tree + window/app focus.

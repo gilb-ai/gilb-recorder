@@ -1,10 +1,10 @@
 # Events, Tauri ↔ Rust, HTTP API, pipes, redact, config
 
 Crates:
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-events/`
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-redact/`
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-config/`
-- `/Users/leonid/src/gilb/screenpipe/apps/screenpipe-app-tauri/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-events/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-redact/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-config/`
+- `/Users/leonid/src/gilb/reference/screenpipe/apps/screenpipe-app-tauri/`
 
 ## 1. Event bus (screenpipe-events)
 

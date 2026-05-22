@@ -1,6 +1,6 @@
 # Screenpipe: архитектурный обзор для Gilb
 
-Источник: `/Users/leonid/src/gilb/screenpipe` (Rust workspace + Tauri desktop app).
+Источник: `/Users/leonid/src/gilb/reference/screenpipe` (Rust workspace + Tauri desktop app).
 
 ## Контекст для Gilb
 

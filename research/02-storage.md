@@ -1,6 +1,6 @@
 # screenpipe-db: хранение длительных данных
 
-Crate: `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-db/`
+Crate: `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-db/`
 
 Для Gilb важно: как **хранить терабайты сырого input/UI потока за месяцы**,
 чтобы поиск и анализ паттернов оставались быстрыми.

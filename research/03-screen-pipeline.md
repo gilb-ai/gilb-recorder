@@ -1,9 +1,9 @@
 # Захват экрана и оркестрация (screenpipe-screen / -engine / -core)
 
 Crates:
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-screen/`
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-engine/`
-- `/Users/leonid/src/gilb/screenpipe/crates/screenpipe-core/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-screen/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-engine/`
+- `/Users/leonid/src/gilb/reference/screenpipe/crates/screenpipe-core/`
 
 Для Gilb: даже если мы не делаем видео-таймлапс, нам нужно **периодически
 снимать snapshot экрана при значимых событиях** (для contex'а therblig'а).
