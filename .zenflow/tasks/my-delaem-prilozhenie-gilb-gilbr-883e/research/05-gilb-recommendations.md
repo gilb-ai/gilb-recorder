@@ -3,8 +3,20 @@
 Этот файл — синтез: что **взять напрямую**, что **адаптировать**, что
 **пропустить** в первой версии Gilb.
 
-Напоминание: задача Gilb — записывать a11y-поток действий пользователя и
-находить **повторяющиеся последовательности (therbligs)**.
+## Архитектурная рамка: 3 слоя
+
+| Слой | Что | Текущий статус |
+|------|-----|----------------|
+| **1. Сбор сырых данных** через a11y | event stream + tree snapshots + надёжное хранение | **ТЕКУЩИЙ ФОКУС** |
+| 2. Анализ / pattern mining (therbligs) | поиск повторяющихся последовательностей | отложено |
+| 3. Agent skill creation | генерация автоматизаций из паттернов | отложено |
+
+**Этот документ описывает только Слой 1.** Детальный чек-лист качества
+Слоя 1 (completeness / scalability / robustness / lightweight) — в
+[`06-layer1-capture-quality.md`](06-layer1-capture-quality.md).
+
+Слои 2-3 упоминаются ниже исключительно как контракт ("какие гарантии Слоя 1
+им нужны"), **не реализуем сейчас**.
 
 **Target platforms: macOS + Windows (обе обязательны).** Linux вне scope. MVP
 делаем macOS-first, но архитектура с самого начала должна быть расширяема на
@@ -13,20 +25,23 @@ Windows — без macOS-specific API в публичных интерфейса
 
 ## A. Что взять напрямую (proven patterns)
 
-### 1. Структура crates
+### 1. Структура crates (для Слоя 1)
 
 ```
 gilb/
-├── apps/gilb-app-tauri/          UI
+├── apps/gilb-app-tauri/          UI (минимальный — статус записи, пауза, перм-чек)
 ├── crates/
-│   ├── gilb-a11y/                ★ event capture (analog prior-art)
-│   ├── gilb-db/                  ★ SQLite + write queue
-│   ├── gilb-engine/              orchestration
-│   ├── gilb-core/                shared types
-│   ├── gilb-detector/            ★ therblig detection (НОВОЕ для нас)
-│   ├── gilb-config/              shared settings
-│   └── gilb-events/              broadcast pub/sub
+│   ├── gilb-a11y/                ★★★ event capture (analog prior-art)
+│   ├── gilb-db/                  ★★★ SQLite + write queue + retention
+│   ├── gilb-engine/              ★★  orchestration (capture session lifecycle)
+│   ├── gilb-core/                ★   shared types (Action, ElementContext, ...)
+│   ├── gilb-config/              ★   shared settings
+│   └── gilb-events/              ★   broadcast pub/sub (permission/health events)
 ```
+
+`gilb-detector` (Слой 2) и agent skill runtime (Слой 3) — отложены, добавим
+позже. Crates обозначены ★★★ — критичные для Слоя 1 сейчас; ★ — нужны, но
+минималистично.
 
 ### 2. A11y capture (1-в-1 со prior-art, см. `01-a11y-capture.md`)
 
@@ -76,9 +91,10 @@ PRAGMA busy_timeout = 5000;
 
 ### 4. Frame ↔ event linking через correlation_id
 
-Если будем снимать snapshot экрана при действиях — **`FrameLinker` actor
-pattern** (см. `03-screen-pipeline.md` §7) уже решает order-independent
-матчинг. Никаких timestamp-based hacks.
+**Отложено на Слой 1.** Snapshot экрана в v0 не делаем — pure a11y stream
+(см. §C). Когда добавим snapshot'ы — берём **`FrameLinker` actor pattern**
+(см. `03-screen-pipeline.md` §7), он решает order-independent матчинг без
+timestamp-based hacks.
 
 ### 5. ServerCore vs CaptureSession разделение
 
@@ -95,119 +111,151 @@ prior-art (см. `04-events-and-integration.md` §2) — идеальная мо
 └── logs/
 ```
 
-## B. Что адаптировать под therblig'и
+## B. Что адаптировать под Слой 1 Gilb
 
-### 1. Схема БД — упростить и переориентировать
+### 1. Схема БД — минимальная, под чистый event log
 
-prior-art оптимизирован под **search "когда я последний раз видел X"**.
-Gilb — под **pattern mining "какие последовательности действий повторяются"**.
-
-Предлагаемая схема (MVP):
+Слой 1 пишет **действия и контекст**. Анализ — отдельная подсистема Слоя 2,
+поэтому здесь **нет** таблиц `therbligs` / `therblig_instances` / `detector
+runs`. Их добавим позже миграциями.
 
 ```sql
--- атомарное действие (therblig)
+-- сессии записи (между паузами, перезапусками, sleep'ами)
+CREATE TABLE sessions (
+    id INTEGER PRIMARY KEY,
+    started_at INTEGER NOT NULL,
+    ended_at INTEGER,
+    device_id TEXT NOT NULL,
+    gilb_version TEXT NOT NULL,
+    stop_reason TEXT                       -- paused / sleep / crash / permission_lost / shutdown
+);
+
+-- атомарное действие — единица потока Слоя 1
 CREATE TABLE actions (
     id INTEGER PRIMARY KEY,
-    ts INTEGER NOT NULL,                    -- ms since epoch
-    session_id INTEGER NOT NULL,            -- сессия пользователя
-    kind TEXT NOT NULL,                     -- click/key/text/scroll/app_switch/...
+    ts INTEGER NOT NULL,                    -- ms epoch
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,                     -- click|move|scroll|key|text|app_switch|window_focus|element_focus|clipboard
     app_name TEXT,
     app_pid INTEGER,
     window_title TEXT,
-    -- payload зависит от kind:
-    x INTEGER, y INTEGER, button INTEGER,
+    -- payload по kind:
+    x INTEGER, y INTEGER, button INTEGER, click_count INTEGER,
+    delta_x INTEGER, delta_y INTEGER,
     key_code INTEGER, modifiers INTEGER,
     text_content TEXT,
-    -- контекст a11y:
+    text_char_count INTEGER,
+    clipboard_op TEXT,                      -- c|x|v|p
+    -- a11y контекст кликнутого / сфокусированного элемента:
     element_role TEXT,
     element_name TEXT,
-    element_value TEXT,
+    element_value TEXT,                     -- с password-field маскированием
     element_automation_id TEXT,
     element_bounds_json TEXT,
-    -- дедупликация:
-    context_hash INTEGER,                   -- быстрый exact match
-    snapshot_path TEXT
+    -- редакция:
+    is_password_context INTEGER DEFAULT 0,
+    -- быстрый dedup и потенциальное связывание с tree_snapshot:
+    tree_snapshot_id INTEGER REFERENCES tree_snapshots(id)
 );
-CREATE INDEX idx_actions_ts ON actions(ts);
-CREATE INDEX idx_actions_session ON actions(session_id, ts);
-CREATE INDEX idx_actions_app ON actions(app_name, ts);
-CREATE INDEX idx_actions_context_hash ON actions(context_hash);
+CREATE INDEX idx_actions_ts             ON actions(ts);
+CREATE INDEX idx_actions_session_ts     ON actions(session_id, ts);
+CREATE INDEX idx_actions_app_ts         ON actions(app_name, ts);
+CREATE INDEX idx_actions_kind_ts        ON actions(kind, ts);
 
--- a11y дерево (опционально, periodic snapshots)
-CREATE TABLE ui_trees (
+-- periodic a11y tree snapshots (по focus change + SimHash dedup)
+CREATE TABLE tree_snapshots (
     id INTEGER PRIMARY KEY,
     ts INTEGER NOT NULL,
+    session_id INTEGER NOT NULL REFERENCES sessions(id),
     app_name TEXT, window_title TEXT, pid INTEGER,
-    tree_hash INTEGER,                      -- SimHash для dedup
+    tree_hash INTEGER NOT NULL,             -- SimHash для дедупа
     element_count INTEGER,
-    root_json TEXT                          -- compressed JSON
+    root_json TEXT,                         -- gzipped/zstd по желанию
+    walk_duration_ms INTEGER,
+    truncated INTEGER DEFAULT 0
+);
+CREATE INDEX idx_trees_ts        ON tree_snapshots(ts);
+CREATE INDEX idx_trees_app_ts    ON tree_snapshots(app_name, ts);
+CREATE INDEX idx_trees_hash      ON tree_snapshots(tree_hash);
+
+-- per-app capture бюджет (для наблюдения и persistent throttling)
+CREATE TABLE app_budgets (
+    app_name TEXT PRIMARY KEY,
+    tier TEXT NOT NULL,                     -- light|moderate|heavy|critical
+    last_walk_ms INTEGER,
+    avg_walk_ms REAL,
+    truncated_count INTEGER DEFAULT 0,
+    updated_at INTEGER NOT NULL
 );
 
--- найденные паттерны
-CREATE TABLE therbligs (
+-- health/observability события
+CREATE TABLE health_events (
     id INTEGER PRIMARY KEY,
-    label TEXT,                             -- "copy file to dropbox"
-    fingerprint_hash INTEGER,
-    occurrence_count INTEGER,
-    avg_duration_ms INTEGER,
-    last_seen_at INTEGER
+    ts INTEGER NOT NULL,
+    kind TEXT NOT NULL,                     -- permission_lost|permission_restored|wake|crash|drop|...
+    detail TEXT
 );
 
-CREATE TABLE therblig_instances (
-    id INTEGER PRIMARY KEY,
-    therblig_id INTEGER NOT NULL,
-    start_ts INTEGER NOT NULL,
-    end_ts INTEGER NOT NULL,
-    confidence REAL,
-    action_ids_json TEXT
+-- FTS5 поверх actions для дебага и Слоя 2 потом:
+CREATE VIRTUAL TABLE actions_fts USING fts5(
+    text_content, element_name, window_title, app_name,
+    content='actions', content_rowid='id'
 );
+-- + AFTER INSERT/UPDATE/DELETE triggers (синхронные, см. prior-art-db §8)
 ```
-
-FTS5 потом (`actions_fts(text_content, element_name, window_title)`) — для
-"искать действия с текстом X".
 
 ### 2. Soft-evict policy
 
-prior-art evict'ит media но сохраняет rows. Для Gilb evict'ить **snapshots**,
-но **никогда не actions** — они нужны для history mining.
+prior-art evict'ит media, сохраняет rows. Для Gilb на Слое 1:
+- `actions` — **никогда не удаляем** (малый размер, нужен Слою 2 на годы).
+- `tree_snapshots.root_json` — evict через N дней (хранится hash + metadata).
+- `health_events` — rotate по count (последние 10 000).
 
-### 3. Detector — новая абстракция
+### 3. Snapshot-on-trigger (когда добавим экранные кадры)
 
-```rust
-trait Detector {
-    fn name(&self) -> &str;
-    fn process(&mut self, actions: &[Action]) -> Vec<TherbligCandidate>;
-}
-```
+**Не в v0 Слоя 1.** Когда дойдём — снимаем кадр на:
+- focus change / app switch,
+- click по элементу с cache-miss контекстом,
+- значимое визуальное изменение.
 
-Запускается на batch'ах из write_queue (post-commit hook?) или periodic
-sliding-window job. Pipes-style (см. `04`) — overkill для v0; начинаем с
-hard-coded detectors.
+См. `03-screen-pipeline.md` §2 (event-driven, debounce 500 мс) +
+correlation_id для связывания (см. §A.4).
 
-### 4. Snapshot — только при значимых триггерах
+### 4. Контракт API между Слоем 1 и будущим Слоем 2
 
-Не на каждый click, а на:
-- focus change
-- app switch
-- click по элементу с уже неизвестной структурой (cache miss)
-- значимое визуальное изменение
+Чтобы Слой 2 потом не требовал переписать Слой 1, фиксируем контракт сейчас:
 
-Это уже описано в `03-screen-pipeline.md` §2 (event-driven, debounce 500 мс).
+- Все actions **ordered по `(session_id, ts, id)`** — гарантия из write
+  queue (single-writer per session).
+- `kind` — закрытое перечисление, расширяется только миграциями.
+- `element_*` поля либо все NULL (нет AX context), либо все вместе.
+- `is_password_context = 1` ⇒ `text_content` и `element_value` зачищены.
+- Между `actions` и `tree_snapshots` связь идёт через `tree_snapshot_id`,
+  не через timestamp.
 
-## C. Что пропустить в v0
+Это даёт Слою 2 чистый stream без сюрпризов.
+
+## C. Что пропустить в v0 Слоя 1
+
+Цель — не тащить ничего, что не нужно для **качественного сбора** прямо
+сейчас. Всё остальное добавим, когда Слой 1 пройдёт чек-лист из
+`06-layer1-capture-quality.md` §5.
 
 | Из prior-art | Почему пропускаем |
 |---------------|-------------------|
-| Linux в a11y | вне scope Gilb |
-| Windows в **v0 MVP** (но в v1 обязательно) | macOS-first старт; Windows-ветка добавляется сразу после MVP — архитектуру под обе платформы закладываем сразу |
-| ScreenCaptureKit видео + ffmpeg | snapshot'ов достаточно |
-| OCR pipeline (Vision/Tesseract) | a11y текста достаточно для большинства apps |
-| Audio capture/diarization | вне scope therblig'ов |
-| sqlite-vec embeddings | пока не нужно |
-| Tinfoil PII enclave | regex redaction хватит |
-| Pipes / Agent executors | detector логика в Rust |
+| **Слой 2: therblig detection** | отдельная подсистема, делаем после стабильного Слоя 1 |
+| **Слой 3: agent skill / replay** | ещё позже |
+| Linux в a11y | вне scope Gilb навсегда |
+| Windows в **v0 MVP** (но в v1 обязательно) | macOS-first старт; Windows-ветка идёт сразу после MVP. Архитектуру под обе платформы закладываем сразу (per-platform trait) |
+| Screen video / snapshots | в v0 Слой 1 — **pure a11y stream**. Snapshot'ы добавим как опцию позже, когда основной stream стабилен |
+| ScreenCaptureKit + ffmpeg видео | snapshot'ов достаточно (и тех — позже) |
+| OCR pipeline (Vision/Tesseract) | a11y текста достаточно; OCR — feature Слоя 2 при необходимости |
+| Audio capture / diarization | вне scope, audio не относится к a11y потоку |
+| sqlite-vec embeddings | для Слоя 2 |
+| Tinfoil PII enclave | regex redaction + password-field detection хватит на Слое 1 |
+| Pipes / Agent executors | это инфра Слоя 3 |
 | Cloud sync, multi-device | local-only v0 |
-| HTTP API (axum) | только Tauri IPC |
+| HTTP API (axum) | только Tauri IPC для UI статуса; API наружу — позже |
 | Meeting detection | вне scope |
 | Image PII (RFDETR ONNX) | вне scope |
 | sentry / analytics | потом |
@@ -244,33 +292,68 @@ windows = { version = "0.58", features = [
 ] }
 ```
 
-## E. Дорожная карта Gilb v0 → v1
+## E. Дорожная карта Gilb (Слой 1 → 2 → 3)
 
-**v0 (proof of concept, macOS-only)** — 1-2 недели:
-1. Скопировать структуру `prior-art` с per-platform `mod platform` —
-   реализован только `macos.rs`, `windows.rs` существует как заглушка trait'а.
-2. Тривиальный `gilb-db` со схемой выше, без write_queue.
-3. CLI binary, который пишет actions в SQLite.
-4. Просмотр через `sqlite3 ~/.gilb/db.sqlite "select * from actions limit 50"`.
+### Слой 1 — текущий фокус
 
-**v0.5 (macOS совершенствуем)**:
-5. Adaptive FPS + per-app WalkBudget.
-6. `SimHash` дедупликация tree snapshots.
-7. Write queue с батчингом.
-8. Tauri app: simple timeline view.
+**v0.1 — walking skeleton (macOS):**
+1. Скелет crates с per-platform `mod platform` (`macos.rs` реализован,
+   `windows.rs` — trait-stub).
+2. Тривиальный `gilb-db` со схемой §B (sessions + actions + tree_snapshots
+   + app_budgets + health_events). Без write_queue, без FTS.
+3. CGEventTap + AX observer для focused pid, write actions в SQLite.
+4. Просмотр через `sqlite3 ~/.gilb/db.sqlite "select … from actions limit 50"`.
 
-**v1 (Windows + therblig detection)**:
-9. **Windows backend**: `SetWindowsHookEx` + UIA через crate `windows`,
-   CacheRequest batching, focus event handler. CI добавляет windows runner.
-10. Detector trait + первые правила (clipboard copy/paste pair, drag-drop,
-    N-gram repetition).
-11. Sliding-window pattern mining.
-12. Snapshot capture на triggers (Frame Linker pattern, ScreenCaptureKit на
-    macOS, Windows Graphics Capture на Windows).
-13. UI для просмотра найденных therblig'ов и их инстансов.
+**v0.2 — completeness:**
+5. Clipboard poller (NSPasteboard.changeCount() 750 мс).
+6. TextBuffer аггрегатор 300 мс.
+7. AppSwitch / WindowFocus / FocusedUIElement.
+8. ElementContext capture на click (через worker thread + AX_QUERY_LOCK
+   try-lock).
 
-**v1.5+**: PII redaction, multi-monitor, экспорт паттернов, AI-эвристики
-("это похоже на форму отправки отчёта").
+**v0.3 — lightweight / scalable:**
+9. Adaptive FPS (activity_feed.rs стиль).
+10. Per-app WalkBudget с persisted state в `app_budgets`.
+11. SimHash dedup tree snapshots.
+12. Write queue с батчингом ≤500 ops/TX, ImmediateTx, WAL tuning.
+
+**v0.4 — robustness:**
+13. Bounded channels everywhere + drop-with-warn.
+14. ArcSwap для current_app/window.
+15. Sleep monitor (CFNotification) → stream re-create.
+16. Permission lost/restored detection + health_events publish.
+17. `gilb db recover` CLI (VACUUM/REINDEX/integrity_check).
+18. Excluded apps list (1Password, Bitwarden, KeePassXC, ...) + password
+    field detection + regex PII redactor.
+
+**v0.5 — UI и pause:**
+19. Tauri app: tray icon (recording / paused / unhealthy), глобальная пауза,
+    permission status, simple "сегодня записано N actions" view.
+20. ServerCore vs CaptureSession разделение (см. §A.5).
+
+**v0.6 — Windows backend:**
+21. `SetWindowsHookEx` (WH_MOUSE_LL + WH_KEYBOARD_LL) + UIA через crate
+    `windows`, CacheRequest batching, focus event handler.
+22. CI: windows-latest runner.
+23. Прогон того же стресс-теста "8 ч реальной работы" на Windows.
+
+→ **Gate**: чек-лист `06-layer1-capture-quality.md` §5 закрыт на обеих
+платформах. Только после этого начинаем Слой 2.
+
+### Слой 2 — потом (вне scope сейчас)
+
+- Detector trait, первые правила (clipboard copy/paste pair, drag-drop,
+  N-gram repetition).
+- Sliding-window pattern mining.
+- Snapshot capture on triggers (Frame Linker pattern, ScreenCaptureKit на
+  macOS, Windows Graphics Capture на Windows).
+- UI для просмотра найденных therblig'ов.
+
+### Слой 3 — ещё позже
+
+- Agent skill generation из найденных паттернов.
+- Replay / автоматизация.
+- Pipes-style система с permissions.
 
 ## F. Ссылки на ключевые файлы prior-art
 

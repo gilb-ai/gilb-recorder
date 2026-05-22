@@ -4,14 +4,24 @@
 
 Понять, как prior-art реализует запись через a11y, хранение длительных
 данных, оркестрацию pipeline и интеграцию с UI. Зафиксировать архитектурные
-находки в md-файлах, на которых можно потом построить v0 Gilb.
+находки в md-файлах, на которых можно потом построить Слой 1 Gilb.
+
+## Рамка: Gilb из 3 слоёв
+
+1. **Сбор сырых данных** через a11y (как prior-art) — **текущий фокус**.
+2. Анализ / pattern mining (therbligs) — отложено.
+3. Создание agent skill — отложено.
+
+Цель текущего этапа: **идеально / масштабируемо / устойчиво / не нагружая
+компьютер** собрать a11y-поток. Без качественной нижней прослойки Слои 2-3
+бессмысленны.
 
 ## Результат
 
 Все находки записаны в `research/`:
 
 - [`research/00-overview.md`](research/00-overview.md) — карта репо + общая
-  архитектурная картина + ключевые принципы из VISION.md.
+  архитектурная картина + 3-слойная рамка Gilb.
 - [`research/01-a11y-capture.md`](research/01-a11y-capture.md) — детально про
   `prior-art`: CGEventTap, AX observer, clipboard poller, adaptive FPS,
   per-app walk budget, SimHash dedup, lock-free hot path, privacy.
@@ -22,13 +32,23 @@
 - [`research/03-screen-pipeline.md`](research/03-screen-pipeline.md) —
   захват экрана (SCK/WGC/xcap), hybrid OCR (a11y first), VisionManager,
   Frame Linker actor с correlation_id, multi-monitor, power awareness.
+  Эти механики понадобятся когда добавим snapshot'ы — **в Слое 1 v0 экран
+  не снимаем**.
 - [`research/04-events-and-integration.md`](research/04-events-and-integration.md) —
   event bus (`tokio::broadcast` singleton), Tauri ↔ Rust (ServerCore vs
   CaptureSession), HTTP API (axum), pipes/агенты, redact pipeline,
   RecordingSettings, storage layout, observability.
 - [`research/05-gilb-recommendations.md`](research/05-gilb-recommendations.md) —
-  синтез: что взять напрямую, что адаптировать под therblig'и, что пропустить
-  в v0; набросок схемы БД под therblig mining; дорожная карта v0 → v1.
+  что взять / адаптировать / пропустить; минимальная схема БД под Слой 1
+  (sessions, actions, tree_snapshots, app_budgets, health_events); контракт
+  Слой 1 ↔ Слой 2; дорожная карта v0.1 → v0.6 → Слой 2.
+- **[`research/06-layer1-capture-quality.md`](research/06-layer1-capture-quality.md)** —
+  **главный документ итерации**: что значит "идеально / масштабируемо /
+  устойчиво / не нагружая" на Слое 1, конкретные механики из prior-art
+  (adaptive FPS, per-app WalkBudget, SimHash dedup, lock-free hot path,
+  bounded channels, WAL discipline, graceful degradation), **чек-лист
+  готовности Слоя 1** и список того, что **не делать сейчас**, чтобы не
+  размывать фокус.
 
 ## Шаги исследования
 
@@ -68,11 +88,20 @@ redaction, RecordingSettings, storage layout, observability stack. Резуль�
 
 ### [x] Step: Синтез рекомендаций для Gilb
 
-Сведено в `research/05-gilb-recommendations.md`: что взять напрямую (a11y,
-SQLite tuning, write queue, Frame Linker, ServerCore split), что адаптировать
-(схема БД под therblig mining, snapshot-on-trigger вместо непрерывного видео,
-detector trait), что пропустить в v0 (Win/Linux, OCR, audio, embeddings,
-Tinfoil, pipes, cloud sync), плюс дорожная карта v0 → v1.
+Сведено в `research/05-gilb-recommendations.md`: 3-слойная рамка, что взять
+напрямую (a11y, SQLite tuning, write queue, ServerCore split), что
+адаптировать (минимальная схема БД под Слой 1: sessions/actions/
+tree_snapshots/app_budgets/health_events, контракт Слой 1 ↔ Слой 2), что
+пропустить (Слои 2-3, Linux, screen capture в v0, OCR, audio, embeddings,
+Tinfoil, pipes, cloud sync), плюс дорожная карта v0.1 → v0.6.
+
+### [x] Step: Глубокий разбор качества Слоя 1
+
+Создан `research/06-layer1-capture-quality.md` — главный документ итерации.
+Покрывает четыре свойства качества (completeness / scalability / robustness /
+lightweight), конкретные механики из prior-art для каждого, бюджет
+ресурсов, чек-лист "Слой 1 production-ready" (~15 пунктов) и явный список
+того, чего **не делать сейчас**, чтобы не размывать фокус.
 
 ## Что НЕ покрыто в этом исследовании (для следующих итераций)
 
