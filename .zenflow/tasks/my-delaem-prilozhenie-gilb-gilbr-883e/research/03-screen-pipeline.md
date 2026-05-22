@@ -251,8 +251,10 @@ DB write queue:
 
 ## 15. Что упростить для Gilb v0
 
-- Только macOS, только **ScreenCaptureKit** (никаких fallback'ов).
-- **Без видео** — только JPEG snapshots при триггерах.
+- Gilb должен работать на **macOS + Windows** (обе обязательны). MVP начинаем
+  с macOS (**ScreenCaptureKit**), сразу после этого добавляем Windows
+  (**Windows Graphics Capture** через тот же интерфейс). Linux пропускаем.
+- **Без видео** — только JPEG snapshots при триггерах (на обеих платформах).
 - OCR можно сначала **выключить** (полагаемся на a11y текст).
 - PowerProfile тоже опционально — фиксированные дефолты вначале.
 - Multi-monitor — позже; стартуем с primary.
