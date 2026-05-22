@@ -1,0 +1,44 @@
+[package]
+name = "gilb-a11y"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gilb-core = { workspace = true }
+gilb-config = { workspace = true }
+gilb-events = { workspace = true }
+gilb-db = { workspace = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+arc-swap = { workspace = true }
+crossbeam-channel = { workspace = true }
+once_cell = { workspace = true }
+regex = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+async-trait = "0.1"
+
+# CLI bin only
+clap = { version = "4", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-graphics = "0.25"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+accessibility-sys = "0.2"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSValue", "NSDictionary", "NSDate", "NSArray", "NSNotification", "NSRunLoop"] }
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSPasteboard"] }
+libc = "0.2"
+
+[[bin]]
+name = "gilb-a11y-cli"
+path = "src/bin/gilb-a11y-cli.rs"

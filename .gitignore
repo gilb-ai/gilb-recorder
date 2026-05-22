@@ -1,2 +1,28 @@
 reference/
 .zenflow/
+
+# Rust
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Node / Tauri frontend
+node_modules/
+dist/
+.vite/
+.parcel-cache/
+
+# Tauri build artifacts
+*.dmg
+*.msi
+*.app.zip
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local DB
+~/.gilb/

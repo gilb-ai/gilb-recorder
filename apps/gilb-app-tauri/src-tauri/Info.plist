@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSAccessibilityUsageDescription</key>
+    <string>gilb записывает действия в фокусном окне через Accessibility API, чтобы построить локальный журнал ваших шагов.</string>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>gilb слушает события клавиатуры и мыши, чтобы синхронизировать действия с интерфейсом приложений.</string>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>gilb запрашивает контекст активного приложения и окна.</string>
+</dict>
+</plist>

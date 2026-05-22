@@ -1,0 +1,21 @@
+[package]
+name = "gilb-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gilb-core = { workspace = true }
+gilb-config = { workspace = true }
+gilb-events = { workspace = true }
+gilb-a11y = { workspace = true }
+gilb-db = { workspace = true }
+
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+serde = { workspace = true }

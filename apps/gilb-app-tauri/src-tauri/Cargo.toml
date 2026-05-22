@@ -1,0 +1,33 @@
+[package]
+name = "gilb-app-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "gilb (Gilbreth) — accessibility-driven activity recorder"
+authors = ["Leonid Dinershtein"]
+
+[lib]
+name = "gilb_app_tauri_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+parking_lot = { workspace = true }
+
+gilb-core = { workspace = true }
+gilb-config = { workspace = true }
+gilb-events = { workspace = true }
+gilb-a11y = { workspace = true }
+gilb-db = { workspace = true }
+gilb-engine = { workspace = true }
