@@ -8,6 +8,42 @@
     <script type="module" src="/src/main.ts" defer></script>
   </head>
   <body>
+    <div id="splash" class="splash" hidden>
+      <div class="splash-card">
+        <h1>Нужны разрешения macOS</h1>
+        <p class="splash-lead">
+          gilb записывает действия через Accessibility API. Чтобы это работало,
+          выдайте приложению два разрешения в System Settings → Privacy &amp; Security.
+        </p>
+        <ol class="splash-steps">
+          <li id="splash-step-ax">
+            <span class="dot" id="splash-ax-dot"></span>
+            <div class="splash-step-text">
+              <strong>Accessibility</strong>
+              <span class="splash-status" id="splash-ax-status">проверка…</span>
+            </div>
+            <button type="button" class="splash-btn" data-pane="accessibility">
+              Открыть Accessibility
+            </button>
+          </li>
+          <li id="splash-step-im">
+            <span class="dot" id="splash-im-dot"></span>
+            <div class="splash-step-text">
+              <strong>Input Monitoring</strong>
+              <span class="splash-status" id="splash-im-status">проверка…</span>
+            </div>
+            <button type="button" class="splash-btn" data-pane="input_monitoring">
+              Открыть Input Monitoring
+            </button>
+          </li>
+        </ol>
+        <p class="splash-hint">
+          После того как поставите галочку напротив gilb, окно обновится автоматически.
+          Если разрешение уже выдано, но статус не меняется — перезапустите приложение.
+        </p>
+      </div>
+    </div>
+
     <main class="container">
       <header>
         <h1>gilb</h1>
