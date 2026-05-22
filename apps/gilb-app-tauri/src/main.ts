@@ -35,6 +35,39 @@ function setMessage(text: string, kind: "info" | "error" = "info") {
   el.dataset.kind = kind;
 }
 
+function updateSplash(perms: Permissions, platform: string) {
+  const splash = $("splash");
+  if (!splash) return;
+
+  // Splash имеет смысл только на macOS; на других платформах ничего не делаем.
+  const macOnly = platform === "macos";
+  const needsAx = macOnly && !perms.accessibility;
+  const needsIm = macOnly && !perms.input_monitoring;
+  const visible = needsAx || needsIm;
+
+  splash.hidden = !visible;
+  if (!visible) return;
+
+  setDot("splash-ax-dot", perms.accessibility);
+  setDot("splash-im-dot", perms.input_monitoring);
+  setText(
+    "splash-ax-status",
+    perms.accessibility ? "выдано" : "не выдано",
+  );
+  setText(
+    "splash-im-status",
+    perms.input_monitoring ? "выдано" : "не выдано",
+  );
+
+  for (const step of ["splash-step-ax", "splash-step-im"]) {
+    const el = $(step);
+    if (!el) continue;
+    const granted =
+      step === "splash-step-ax" ? perms.accessibility : perms.input_monitoring;
+    el.classList.toggle("granted", granted);
+  }
+}
+
 async function refresh() {
   try {
     const s = await invoke<EngineStatus>("status");
@@ -60,8 +93,18 @@ async function refresh() {
     const stopBtn = $<HTMLButtonElement>("btn-stop");
     if (startBtn) startBtn.disabled = s.recording;
     if (stopBtn) stopBtn.disabled = !s.recording;
+
+    updateSplash(s.permissions, s.platform);
   } catch (err) {
     setMessage(`status error: ${String(err)}`, "error");
+  }
+}
+
+async function openPrivacyPane(pane: "accessibility" | "input_monitoring") {
+  try {
+    await invoke("open_privacy_pane", { pane });
+  } catch (err) {
+    setMessage(`open_privacy_pane error: ${String(err)}`, "error");
   }
 }
 
@@ -88,6 +131,21 @@ async function stopCapture() {
 window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", startCapture);
   $("btn-stop")?.addEventListener("click", stopCapture);
+
+  // Показываем splash сразу — до первого ответа status; refresh скроет его,
+  // если оба разрешения уже выданы.
+  const splash = $("splash");
+  if (splash) splash.hidden = false;
+
+  for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
+    btn.addEventListener("click", () => {
+      const pane = btn.dataset.pane;
+      if (pane === "accessibility" || pane === "input_monitoring") {
+        openPrivacyPane(pane);
+      }
+    });
+  }
+
   refresh();
   setInterval(refresh, 1500);
 });
