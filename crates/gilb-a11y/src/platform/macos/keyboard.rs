@@ -1,14 +1,9 @@
-//! Translate raw `keyCode`+`modifiers` events into Unicode strings using
-//! `UCKeyTranslate` with persistent dead-key state.
+//! Classification of non-printable navigation/editing keys.
 //!
-//! This is a *best-effort* layer-aware decoder. It honors the user's current
-//! keyboard input source (RU, EN, etc.) and survives dead-key composition.
-
-use core_foundation::base::TCFType;
-use core_foundation::data::{CFData, CFDataRef};
-use parking_lot::Mutex;
-
-use super::ffi;
+//! Printable characters (RU/EN/composite/dead-key compositions) come straight
+//! out of `CGEventKeyboardGetUnicodeString` in
+//! [`super::event_tap::extract_unicode`] — the OS already composes them with
+//! the current layout, so we don't need a layer-aware decoder here.
 
 /// Special, non-printable navigation/editing keys that the TextBuffer treats
 /// as flush triggers.
@@ -68,126 +63,6 @@ impl SpecialKey {
                 | SpecialKey::PageDown
                 | SpecialKey::Escape
         )
-    }
-}
-
-/// Lazily-initialised `UCKeyTranslate` decoder with per-call dead-key state.
-pub struct KeyboardDecoder {
-    dead_state: Mutex<u32>,
-}
-
-impl KeyboardDecoder {
-    pub fn new() -> Self {
-        Self {
-            dead_state: Mutex::new(0),
-        }
-    }
-
-    /// Translate `keyCode` + modifier flags into a string of characters that
-    /// the user actually typed (may be empty for dead keys awaiting a follow-up
-    /// keystroke).
-    pub fn translate(&self, keycode: u16, modifier_flags: u32) -> String {
-        // SAFETY: All FFI calls below take owned/static CF objects. We always
-        // release the input source via `CFRelease` after use.
-        unsafe {
-            let source = ffi::TISCopyCurrentKeyboardLayoutInputSource();
-            if source.is_null() {
-                return String::new();
-            }
-            // `kTISPropertyUnicodeKeyLayoutData` is a global CFStringRef.
-            let layout_data_ref = ffi::TISGetInputSourceProperty(
-                source,
-                ffi::kTISPropertyUnicodeKeyLayoutData,
-            ) as CFDataRef;
-            let result = if layout_data_ref.is_null() {
-                // Some sources (e.g. handwriting) don't ship Unicode layouts —
-                // fall back to ASCII-capable source.
-                let ascii_source = ffi::TISCopyCurrentASCIICapableKeyboardLayoutInputSource();
-                if ascii_source.is_null() {
-                    String::new()
-                } else {
-                    let ascii_layout_ref = ffi::TISGetInputSourceProperty(
-                        ascii_source,
-                        ffi::kTISPropertyUnicodeKeyLayoutData,
-                    ) as CFDataRef;
-                    let s = if ascii_layout_ref.is_null() {
-                        String::new()
-                    } else {
-                        self.translate_with_layout(ascii_layout_ref, keycode, modifier_flags)
-                    };
-                    core_foundation::base::CFRelease(ascii_source as _);
-                    s
-                }
-            } else {
-                self.translate_with_layout(layout_data_ref, keycode, modifier_flags)
-            };
-
-            core_foundation::base::CFRelease(source as _);
-            result
-        }
-    }
-
-    unsafe fn translate_with_layout(
-        &self,
-        layout_data_ref: CFDataRef,
-        keycode: u16,
-        modifier_flags: u32,
-    ) -> String {
-        let layout = CFData::wrap_under_get_rule(layout_data_ref);
-        let layout_ptr = layout.bytes().as_ptr();
-
-        let kbd_type = ffi::LMGetKbdType() as u32;
-        // `UCKeyTranslate` wants Carbon-style modifier bits in the high byte.
-        // Mac CGEventFlags use bits 16..23 for shift/ctrl/option/cmd. Convert.
-        // Bit definitions (NSEventModifierFlags):
-        //   shift  = 1<<17,  ctrl = 1<<18,  option = 1<<19,  cmd = 1<<20.
-        // Carbon modifiers expected by UCKeyTranslate (shifted right by 8):
-        //   shift  = 1<<9,   ctrl = 1<<12, option = 1<<11, cmd = 1<<8.
-        let mut carbon_mods: u32 = 0;
-        if modifier_flags & (1 << 17) != 0 {
-            carbon_mods |= 1 << 9;
-        }
-        if modifier_flags & (1 << 18) != 0 {
-            carbon_mods |= 1 << 12;
-        }
-        if modifier_flags & (1 << 19) != 0 {
-            carbon_mods |= 1 << 11;
-        }
-        if modifier_flags & (1 << 20) != 0 {
-            carbon_mods |= 1 << 8;
-        }
-        let carbon_mod_state = (carbon_mods >> 8) & 0xFF;
-
-        let mut unicode: [u16; 8] = [0; 8];
-        let mut actual_len: libc::c_ulong = 0;
-        let mut dead_state = self.dead_state.lock();
-
-        let status = ffi::UCKeyTranslate(
-            layout_ptr,
-            keycode,
-            ffi::kUCKeyActionDown,
-            carbon_mod_state,
-            kbd_type,
-            ffi::kUCKeyTranslateNoDeadKeysBit,
-            &mut *dead_state,
-            unicode.len() as libc::c_ulong,
-            &mut actual_len,
-            unicode.as_mut_ptr(),
-        );
-        if status != 0 || actual_len == 0 {
-            return String::new();
-        }
-        String::from_utf16_lossy(&unicode[..actual_len as usize])
-    }
-
-    pub fn reset_dead_state(&self) {
-        *self.dead_state.lock() = 0;
-    }
-}
-
-impl Default for KeyboardDecoder {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -33,6 +33,7 @@ clap = { version = "4", features = ["derive"] }
 core-graphics = "0.25"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
+foreign-types-shared = "0.3"
 accessibility-sys = "0.2"
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSValue", "NSDictionary", "NSDate", "NSArray", "NSNotification", "NSRunLoop"] }
