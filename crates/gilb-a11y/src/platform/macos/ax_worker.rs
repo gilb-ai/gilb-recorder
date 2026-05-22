@@ -22,7 +22,7 @@ use accessibility_sys::{
     AXUIElementCopyElementAtPosition, AXUIElementCreateSystemWide, AXUIElementRef,
     AXUIElementSetMessagingTimeout,
 };
-use core_foundation::base::{CFRelease, CFTypeRef, TCFType};
+use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
 use crossbeam_channel as cc;
 use parking_lot::Mutex;
@@ -177,14 +177,21 @@ fn read_string_attr(element: AXUIElementRef, attr: CFString) -> Option<String> {
     if res != kAXErrorSuccess as AXError || value.is_null() {
         return None;
     }
-    // Try to interpret the returned value as a CFString.
-    let cf_string_ref = value as CFStringRef;
-    let s = unsafe { CFString::wrap_under_create_rule(cf_string_ref) }.to_string();
-    if s.is_empty() {
-        None
+
+    // `kAXValueAttribute` (and a couple of others) can return CFNumber /
+    // CFBoolean / CFData / CFArray depending on the element kind (slider,
+    // checkbox, etc.). Treating those as CFString trips an NSException in
+    // CF internals, which propagates as a foreign exception through Rust
+    // frames and aborts the process. Type-check before wrapping.
+    let s = if unsafe { CFGetTypeID(value) } == CFString::type_id() {
+        let cf_string_ref = value as CFStringRef;
+        Some(unsafe { CFString::wrap_under_create_rule(cf_string_ref) }.to_string())
     } else {
-        Some(s)
-    }
+        unsafe { CFRelease(value) };
+        None
+    };
+
+    s.filter(|t| !t.is_empty())
 }
 
 // SAFETY: `AxWorker` only holds a `crossbeam` sender which is Send + Sync.

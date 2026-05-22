@@ -2,8 +2,11 @@
 //!
 //! Owns:
 //! - [`TextBuffer`] with 300ms debounce,
-//! - [`KeyboardDecoder`] with dead-key state,
 //! - flushes on click / focus change / navigation key / timeout / stop.
+//!
+//! Key→text translation lives in the CGEventTap callback (see
+//! `event_tap.rs::extract_unicode`) — the OS gives us composed chars
+//! directly on the event, so we don't need a TIS/UCKeyTranslate detour.
 //!
 //! Reads:
 //! - `raw_rx`: [`RawEvent`] from the CGEventTap thread,
@@ -32,7 +35,7 @@ use crate::text_buffer::{FlushReason, FlushedText, TextBuffer};
 use super::ax_worker::{AxJob, AxWorker};
 use super::event_tap::{MouseButton, RawEvent};
 use super::focus::{frontmost_app, FocusSnapshot, FocusState};
-use super::keyboard::{KeyboardDecoder, SpecialKey};
+use super::keyboard::SpecialKey;
 use super::pasteboard::ClipboardChange;
 
 /// How long we wait between drop-stat publishes on the health bus.
@@ -55,7 +58,6 @@ impl Normalizer {
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) {
         let mut buffer = TextBuffer::default();
-        let decoder = KeyboardDecoder::new();
 
         // Prime focus once so the first event already carries app context.
         self.focus.update_app(frontmost_app());
@@ -107,7 +109,7 @@ impl Normalizer {
                     }
                 }
                 Some(ev) = raw_rx.recv() => {
-                    self.handle_raw(ev, &mut buffer, &decoder, &mut drops_since_report).await;
+                    self.handle_raw(ev, &mut buffer, &mut drops_since_report).await;
                 }
                 Some(change) = clip_rx.recv() => {
                     if self.settings.capture_clipboard {
@@ -123,7 +125,6 @@ impl Normalizer {
         &self,
         ev: RawEvent,
         buffer: &mut TextBuffer,
-        decoder: &KeyboardDecoder,
         drops: &mut u64,
     ) {
         let snap = self.focus.current();
@@ -137,7 +138,7 @@ impl Normalizer {
         }
 
         match ev {
-            RawEvent::KeyDown { keycode, flags } => {
+            RawEvent::KeyDown { keycode, text, .. } => {
                 if let Some(special) = SpecialKey::from_keycode(keycode) {
                     if special.is_navigation() {
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
@@ -155,10 +156,7 @@ impl Normalizer {
                     }
                 }
 
-                let s = decoder.translate(keycode, flags as u32);
-                if s.is_empty() {
-                    return;
-                }
+                let Some(s) = text else { return };
                 let masked = snap
                     .focused_role
                     .as_deref()
@@ -217,7 +215,7 @@ impl Normalizer {
                 "char_count": flushed.text.chars().count(),
             })),
         };
-        self.send_action(action).await;
+        self.emit_blocking(action).await;
     }
 
     async fn emit_click(
@@ -263,9 +261,7 @@ impl Normalizer {
                 "y": y,
             })),
         };
-        if self.action_tx.try_send(action).is_err() {
-            *drops += 1;
-        }
+        self.emit_lossy(action, drops);
     }
 
     async fn emit_key(
@@ -290,9 +286,7 @@ impl Normalizer {
                 "key": format!("{:?}", special),
             })),
         };
-        if self.action_tx.try_send(action).is_err() {
-            *drops += 1;
-        }
+        self.emit_lossy(action, drops);
     }
 
     async fn emit_scroll(
@@ -316,9 +310,7 @@ impl Normalizer {
                 "delta_y": dy,
             })),
         };
-        if self.action_tx.try_send(action).is_err() {
-            *drops += 1;
-        }
+        self.emit_lossy(action, drops);
     }
 
     async fn emit_focus_change(&self, app: AppInfo) {
@@ -333,7 +325,7 @@ impl Normalizer {
             tree_snapshot_id: None,
             extra_json: None,
         };
-        self.send_action(action).await;
+        self.emit_blocking(action).await;
     }
 
     async fn handle_clipboard(&self, change: ClipboardChange, drops: &mut u64) {
@@ -360,16 +352,30 @@ impl Normalizer {
                 "change_count": change.change_count,
             })),
         };
-        if self.action_tx.try_send(action).is_err() {
-            *drops += 1;
+        self.emit_lossy(action, drops);
+    }
+
+    fn log_emit(action: &Action) {
+        debug!(
+            kind = action.kind.as_str(),
+            app = action.app.name.as_deref().unwrap_or("-"),
+            role = action.element.role.as_deref().unwrap_or("-"),
+            masked = action.password_flag,
+            "normalizer: emit"
+        );
+    }
+
+    async fn emit_blocking(&self, action: Action) {
+        Self::log_emit(&action);
+        if let Err(err) = self.action_tx.send(action).await {
+            warn!(?err, "normalizer: action channel closed");
         }
     }
 
-    async fn send_action(&self, action: Action) {
-        if let Err(err) = self.action_tx.send(action).await {
-            warn!(?err, "normalizer: action channel closed");
-        } else {
-            debug!("normalizer: emitted action");
+    fn emit_lossy(&self, action: Action, drops: &mut u64) {
+        Self::log_emit(&action);
+        if self.action_tx.try_send(action).is_err() {
+            *drops += 1;
         }
     }
 }

@@ -31,12 +31,15 @@ fn events_of_interest() -> Vec<CGEventType> {
     ]
 }
 
-/// Minimal, allocation-free representation handed to the normalizer.
+/// Minimal representation handed to the normalizer. `KeyDown.text` is
+/// extracted in the event-tap callback via `CGEventKeyboardGetUnicodeString`
+/// — see [`super::ffi`] for the rationale.
 #[derive(Debug, Clone)]
 pub enum RawEvent {
     KeyDown {
         keycode: u16,
         flags: u64,
+        text: Option<String>,
     },
     FlagsChanged {
         keycode: u16,
@@ -181,7 +184,12 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
         CGEventType::KeyDown => {
             let keycode =
                 event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
-            RawEvent::KeyDown { keycode, flags }
+            let text = extract_unicode(event);
+            RawEvent::KeyDown {
+                keycode,
+                flags,
+                text,
+            }
         }
         CGEventType::FlagsChanged => {
             let keycode =
@@ -215,4 +223,38 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
         _ => return None,
     };
     Some(raw)
+}
+
+/// Read the Unicode characters this keyboard event represents (already
+/// composed with the current layout + modifiers + dead-key state by the OS).
+/// Returns `None` for events with no printable characters.
+fn extract_unicode(event: &core_graphics::event::CGEvent) -> Option<String> {
+    use foreign_types_shared::ForeignType;
+
+    // 8 UniChars covers everything sane (emoji surrogate pairs included).
+    let mut buf: [u16; 8] = [0; 8];
+    let mut actual_len: libc::c_ulong = 0;
+    let event_ref = event.as_ptr() as super::ffi::CGEventRef;
+
+    // SAFETY: `event_ref` is non-null and lives for the duration of this
+    // callback (CGEvent borrowed). The function writes at most `buf.len()`
+    // UniChars and sets `actual_len`.
+    unsafe {
+        super::ffi::CGEventKeyboardGetUnicodeString(
+            event_ref,
+            buf.len() as libc::c_ulong,
+            &mut actual_len,
+            buf.as_mut_ptr(),
+        );
+    }
+
+    if actual_len == 0 {
+        return None;
+    }
+    let s = String::from_utf16_lossy(&buf[..actual_len as usize]);
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
