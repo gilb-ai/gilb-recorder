@@ -246,8 +246,10 @@ Explain HOW, not a restatement of Scope.>
 
 ## Tests
 - `cargo test -p <crate> <filter>` — what it covers
-- `cargo clippy --workspace --all-targets` — mandatory
-- `cargo fmt --all -- --check` — mandatory
+- `cargo clippy -p <crate> --all-targets` — mandatory, one entry per
+  crate in `## Files`
+- `cargo fmt -p <crate> -- --check` — mandatory, one entry per crate
+  in `## Files`
 - <manual step, if needed>
 
 ## Out of scope
