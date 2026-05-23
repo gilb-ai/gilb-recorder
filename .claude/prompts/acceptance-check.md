@@ -25,9 +25,16 @@ only inspect and run tools.
 
 # Procedure
 
-`cd <worktree-path>` and run the eight checks below in order. Each
+`cd <worktree-path>` and run the six checks below in order. Each
 failure produces one entry in `gaps`. Do NOT short-circuit — the human
 deserves a full picture if multiple things broke.
+
+Clippy and fmt are NOT separate checks: they are commands inside
+`## Tests` (mandated by `plan-format.md`, one `-p <crate>` entry per
+crate touched). Check 4 runs them like any other Tests command. The
+old workspace-wide Check 5 / Check 6 were removed because they
+duplicated Check 4 and routinely flagged pre-existing drift in
+untouched crates as gaps — see GILB-10.
 
 ## 1. Files coverage
 
@@ -68,27 +75,7 @@ Verify exit 0. No `--no-run`, no dry flags — actually execute.
 
 Gap: `Test <command> failed. Output: <last 20 lines>`.
 
-## 5. Clippy clean
-
-```bash
-cargo clippy --workspace --all-targets 2>&1 | tail -50
-```
-
-Exit 0 AND no `warning:` lines.
-
-Gap: `Clippy: <first warning/error line>`.
-
-## 6. Formatting clean
-
-```bash
-cargo fmt --all -- --check
-```
-
-Exit 0.
-
-Gap: `Formatting: cargo fmt --all -- --check failed`.
-
-## 7. PR metadata correct
+## 5. PR metadata correct
 
 ```bash
 gh pr view <pr_url> --json title,body
@@ -101,7 +88,7 @@ Verify:
 
 Gap: `PR body missing section <X>` or `PR does not link to card`.
 
-## 8. Commits hygiene
+## 6. Commits hygiene
 
 ```bash
 git log --format="%H%n%s%n%b%n---" origin/main..HEAD

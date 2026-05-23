@@ -27,9 +27,20 @@ Explain HOW, not a restatement of Scope.>
 
 ## Tests
 - `cargo test -p <crate> <filter>` — what it covers
-- `cargo clippy --workspace --all-targets` — mandatory
-- `cargo fmt --all -- --check` — mandatory
+- `cargo clippy -p <crate> --all-targets` — mandatory, one entry per
+  crate in `## Files`
+- `cargo fmt -p <crate> -- --check` — mandatory, one entry per crate
+  in `## Files`
 - <manual step, if needed> — what and how to verify
+
+**Scoping rule for clippy / fmt.** By default, scope these to the
+crates the card actually touches: one `-p <crate>` entry per crate
+listed in `## Files`. Use `--workspace` / `--all` ONLY when the card
+deliberately covers the whole workspace — typically a card whose
+`## Files` spans three or more distinct crates, OR a card whose
+explicit purpose is workspace-wide cleanup. The default scoped form
+prevents pre-existing drift in untouched crates from blocking this
+card's gates (see GILB-10).
 
 ## Out of scope
 <what is NOT done in this card — explicit boundary so the worker doesn't drift>
@@ -61,6 +72,12 @@ Walk this checklist; if any item fails — rework or downgrade to QUESTIONS
       marked `(new)`.
 - [ ] Every command in `## Tests` will actually run (correct crate name,
       test filter resolves).
+- [ ] `## Tests` includes a `cargo clippy ... --all-targets` entry and
+      a `cargo fmt ... -- --check` entry.
+- [ ] Clippy / fmt scope in `## Tests` matches the crate scope of
+      `## Files` — one `-p <crate>` per crate touched. Workspace-wide
+      (`--workspace` / `--all`) only when `## Files` spans 3+ crates
+      or the card is deliberately a workspace-wide cleanup.
 - [ ] `## Scope` and `## Out of scope` together cover anything a reader
       might wonder about.
 - [ ] `## Approach` explains HOW; it does not repeat `## Scope` content.

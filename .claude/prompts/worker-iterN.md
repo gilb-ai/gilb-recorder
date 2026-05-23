@@ -65,8 +65,9 @@ discard them, or restart the iteration.
 2. Make NEW commits per the engineering role's commit conventions —
    do NOT amend (pre-commit hooks + general hygiene).
 
-3. Run every command from the original plan's `## Tests` + clippy +
-   fmt — all must pass.
+3. Run every command from the original plan's `## Tests`. ALL must
+   pass. The plan's scoping for clippy / fmt (`-p <crate>`) is
+   canonical — do not widen to `--workspace` / `--all`.
 
 4. Push to the same branch:
 

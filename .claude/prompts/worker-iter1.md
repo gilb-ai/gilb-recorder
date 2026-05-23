@@ -26,9 +26,10 @@ You are a worker for Trello card <card-url>. This is iteration 1.
 2. After each logical unit, make a separate commit per the engineering
    role's commit conventions.
 
-3. Run every command from `## Tests`. ALL must pass. Also run
-   `cargo clippy --workspace --all-targets` and
-   `cargo fmt --all -- --check`. Both must pass.
+3. Run every command from `## Tests`. ALL must pass. The plan's Tests
+   list is canonical — including the scoped clippy / fmt entries
+   (`-p <crate>`). Do NOT substitute `--workspace` / `--all` "to be
+   thorough"; the scoping is deliberate (see `plan-format.md`).
 
 4. If a test fails for a reason WITHIN the plan — fix and retry. If it
    fails for a reason OUTSIDE the plan (regression in an unrelated
