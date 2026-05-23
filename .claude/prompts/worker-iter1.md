@@ -1,7 +1,9 @@
 # Worker prompt template — iteration 1
 
-This is the template the meta-agent passes to `claude -p` for the FIRST
-attempt on a card. Worker opens the PR.
+Body for `/trello-run` to concatenate with `roles/engineering.md` and
+`roles/formatting.md` before passing to `claude -p`. The body below
+focuses on workflow logic; persona, style, commit conventions, and the
+stdout contract live in the role files.
 
 Placeholders (replaced by meta before spawn):
 - `<card-url>` — Trello card short URL
@@ -12,14 +14,6 @@ Placeholders (replaced by meta before spawn):
 
 You are a worker for Trello card <card-url>. This is iteration 1.
 
-# Project context
-
-Read CLAUDE.md in the repo. Follow its conventions:
-- English commit messages
-- Subject ≤72 chars, body wraps ~72 cols, imperative mood
-- Footer: `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
-- No emoji in code unless explicitly requested
-
 # Plan
 
 <PLAN-comment>
@@ -29,21 +23,22 @@ Read CLAUDE.md in the repo. Follow its conventions:
 1. Implement the plan strictly as written. Do not change files outside
    `## Files`. Do not violate `## Out of scope`.
 
-2. After each logical unit, make a separate commit with the convention above.
+2. After each logical unit, make a separate commit per the engineering
+   role's commit conventions.
 
-3. Run every command from `## Tests`. ALL must pass.
-   Also run `cargo clippy --workspace --all-targets` and
+3. Run every command from `## Tests`. ALL must pass. Also run
+   `cargo clippy --workspace --all-targets` and
    `cargo fmt --all -- --check`. Both must pass.
 
-4. If a test fails for a reason WITHIN the plan — fix and retry. If it fails
-   for a reason OUTSIDE the plan (regression in an unrelated module, env
-   issue, etc.) — do NOT improvise. See "When to BLOCKED" below.
+4. If a test fails for a reason WITHIN the plan — fix and retry. If it
+   fails for a reason OUTSIDE the plan (regression in an unrelated
+   module, env issue, etc.) — do NOT improvise. See "When to BLOCKED".
 
 5. Push:
 
        git push -u origin <branch>
 
-6. Open the PR via gh:
+6. Open the PR via `gh`:
 
        gh pr create --title "<short, from card title>" --body "$(cat <<'EOF'
        Trello: <card-url>
@@ -62,13 +57,9 @@ Read CLAUDE.md in the repo. Follow its conventions:
        EOF
        )"
 
-7. Output ONE line to stdout:
+7. Emit the success line per the formatting role: `PR_URL=<url>`. Exit 0.
 
-       PR_URL=<URL of the created PR>
-
-8. Exit 0.
-
-# When to BLOCKED (exit 2)
+# When to BLOCKED
 
 Do NOT improvise if:
 - Tests fail for reasons outside the plan.
@@ -76,11 +67,7 @@ Do NOT improvise if:
 - A merge conflict appears that requires decisions outside the plan.
 - A dependency the plan assumed turns out to be missing.
 
-Then output ONE line:
-
-    BLOCKED: <reason in one sentence>
-
-Exit 2.
+Emit `BLOCKED: <reason>` per the formatting role and exit 2.
 
 # What you must NOT do
 

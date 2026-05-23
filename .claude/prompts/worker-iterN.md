@@ -1,7 +1,8 @@
 # Worker prompt template — iteration N (N > 1)
 
-This is the template the meta-agent passes to `claude -p` for iterations 2+.
-The PR already exists; worker pushes additional commits.
+Body for `/trello-run` to concatenate with `roles/engineering.md` and
+`roles/formatting.md` before passing to `claude -p`. The PR already
+exists; worker pushes additional commits.
 
 Placeholders (replaced by meta before spawn):
 - `<card-url>` — Trello card short URL
@@ -15,16 +16,10 @@ Placeholders (replaced by meta before spawn):
 
 ---
 
-You are a worker for Trello card <card-url>. This is iteration <iter> (of <MAX_ITER>).
-
-# What happened before
-
-In iteration 1 a worker implemented the plan and opened PR <pr_url>. The
-meta-agent ran the acceptance check and found the gaps listed below.
-
-# Project context
-
-Read CLAUDE.md in the repo.
+You are a worker for Trello card <card-url>. This is iteration <iter>
+(of <MAX_ITER>). In iteration 1 a worker implemented the plan and
+opened PR <pr_url>. Meta then ran the acceptance check and found the
+gaps listed below.
 
 # Original plan (for reference)
 
@@ -38,31 +33,26 @@ Read CLAUDE.md in the repo.
 
 1. Fix every listed gap. Do not exceed the plan's scope.
 
-2. Make NEW commits (do NOT amend — pre-commit hooks + general hygiene).
-   English, ≤72/72, with footer
-   `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`.
+2. Make NEW commits per the engineering role's commit conventions —
+   do NOT amend (pre-commit hooks + general hygiene).
 
-3. Run every command from the original plan's `## Tests` + clippy + fmt —
-   all must pass.
+3. Run every command from the original plan's `## Tests` + clippy +
+   fmt — all must pass.
 
 4. Push to the same branch:
 
        git push origin <branch>
 
-   The PR updates automatically. Do NOT open a new PR. Do NOT force-push
-   without need.
+   The PR updates automatically. Do NOT open a new PR. Do NOT
+   force-push without need.
 
-5. Output ONE line to stdout:
-
-       PR_URL=<same URL as before — for meta to verify>
-
-6. Exit 0.
+5. Emit the success line per the formatting role: `PR_URL=<same URL as
+   before>`. Exit 0.
 
 # If you cannot fix at least one gap
 
-       BLOCKED: <gap you could not close and why>
-
-Exit 2.
+Emit `BLOCKED: <gap you could not close and why>` per the formatting
+role and exit 2.
 
 # Same restrictions as iteration 1
 
