@@ -93,7 +93,10 @@ pub async fn get_session(db: &SqlitePool, session_id: i64) -> Result<Option<Sess
     .await?;
     let Some(head) = head else { return Ok(None) };
 
-    let kinds = sqlx::query(
+    // `kinds` and `top_apps` are independent reads; run them concurrently to
+    // halve wall-clock latency. The read-only pool has 4 connections, so two
+    // parallel queries comfortably fit.
+    let kinds_fut = sqlx::query(
         r#"
         SELECT kind, COUNT(*) AS count
         FROM actions
@@ -103,16 +106,9 @@ pub async fn get_session(db: &SqlitePool, session_id: i64) -> Result<Option<Sess
         "#,
     )
     .bind(session_id)
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|r| KindCount {
-        kind: r.get("kind"),
-        count: r.get("count"),
-    })
-    .collect();
+    .fetch_all(db);
 
-    let top_apps = sqlx::query(
+    let top_apps_fut = sqlx::query(
         r#"
         SELECT
           app_bundle_id, app_name,
@@ -128,11 +124,18 @@ pub async fn get_session(db: &SqlitePool, session_id: i64) -> Result<Option<Sess
         "#,
     )
     .bind(session_id)
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(row_to_app)
-    .collect();
+    .fetch_all(db);
+
+    let (kinds_rows, top_apps_rows) = tokio::try_join!(kinds_fut, top_apps_fut)?;
+
+    let kinds = kinds_rows
+        .into_iter()
+        .map(|r| KindCount {
+            kind: r.get("kind"),
+            count: r.get("count"),
+        })
+        .collect();
+    let top_apps = top_apps_rows.into_iter().map(row_to_app).collect();
 
     Ok(Some(SessionDetail {
         row: SessionRow {
@@ -341,61 +344,72 @@ pub struct TextSnippet {
 
 pub async fn activity_summary(db: &SqlitePool, range: ResolvedRange) -> Result<ActivitySummary> {
     let (from, to) = range.as_strings();
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM actions WHERE captured_at >= ?1 AND captured_at < ?2",
-    )
-    .bind(&from)
-    .bind(&to)
-    .fetch_one(db)
-    .await?;
 
-    let per_kind = sqlx::query(
-        r#"
-        SELECT kind, COUNT(*) AS count
-        FROM actions
-        WHERE captured_at >= ?1 AND captured_at < ?2
-        GROUP BY kind
-        ORDER BY count DESC
-        "#,
-    )
-    .bind(&from)
-    .bind(&to)
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|r| KindCount {
-        kind: r.get("kind"),
-        count: r.get("count"),
-    })
-    .collect();
+    // Three independent range scans — fire them concurrently to keep
+    // wall-clock close to the slowest of the three rather than their sum.
+    // `total_actions` is derived from `per_kind`, so we don't issue a 4th
+    // `SELECT COUNT(*)` round-trip.
+    let per_kind_fut = async {
+        sqlx::query(
+            r#"
+            SELECT kind, COUNT(*) AS count
+            FROM actions
+            WHERE captured_at >= ?1 AND captured_at < ?2
+            GROUP BY kind
+            ORDER BY count DESC
+            "#,
+        )
+        .bind(&from)
+        .bind(&to)
+        .fetch_all(db)
+        .await
+        .map_err(anyhow::Error::from)
+    };
 
-    let apps = list_apps(db, range, 20).await?;
+    let apps_fut = list_apps(db, range, 20);
 
-    let snippets = sqlx::query(
-        r#"
-        SELECT captured_at, app_name, window_title, text_content
-        FROM actions
-        WHERE captured_at >= ?1 AND captured_at < ?2
-          AND kind = 'text'
-          AND password_flag = 0
-          AND text_content IS NOT NULL
-          AND length(text_content) >= 4
-        ORDER BY length(text_content) DESC, captured_at DESC
-        LIMIT 10
-        "#,
-    )
-    .bind(&from)
-    .bind(&to)
-    .fetch_all(db)
-    .await?
-    .into_iter()
-    .map(|r| TextSnippet {
-        captured_at: r.get("captured_at"),
-        app_name: r.try_get("app_name").ok(),
-        window_title: r.try_get("window_title").ok(),
-        text: r.get::<String, _>("text_content"),
-    })
-    .collect();
+    let snippets_fut = async {
+        sqlx::query(
+            r#"
+            SELECT captured_at, app_name, window_title, text_content
+            FROM actions
+            WHERE captured_at >= ?1 AND captured_at < ?2
+              AND kind = 'text'
+              AND password_flag = 0
+              AND text_content IS NOT NULL
+              AND length(text_content) >= 4
+            ORDER BY length(text_content) DESC, captured_at DESC
+            LIMIT 10
+            "#,
+        )
+        .bind(&from)
+        .bind(&to)
+        .fetch_all(db)
+        .await
+        .map_err(anyhow::Error::from)
+    };
+
+    let (per_kind_rows, apps, snippet_rows) =
+        tokio::try_join!(per_kind_fut, apps_fut, snippets_fut)?;
+
+    let per_kind: Vec<KindCount> = per_kind_rows
+        .into_iter()
+        .map(|r| KindCount {
+            kind: r.get("kind"),
+            count: r.get("count"),
+        })
+        .collect();
+    let total: i64 = per_kind.iter().map(|k| k.count).sum();
+
+    let snippets = snippet_rows
+        .into_iter()
+        .map(|r| TextSnippet {
+            captured_at: r.get("captured_at"),
+            app_name: r.try_get("app_name").ok(),
+            window_title: r.try_get("window_title").ok(),
+            text: r.get::<String, _>("text_content"),
+        })
+        .collect();
 
     Ok(ActivitySummary {
         range: SummaryRange { from, to },

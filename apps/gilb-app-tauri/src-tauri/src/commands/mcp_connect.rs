@@ -43,11 +43,7 @@ pub enum ConnectOutcome {
 pub async fn mcp_server_info() -> Result<ServerInfo, String> {
     let binary_path = locate_mcp_binary().map(|p| p.to_string_lossy().into_owned());
     let config_json = build_config_json(binary_path.as_deref().unwrap_or("/path/to/gilb-mcp"));
-    let clients = vec![
-        probe_claude_code(),
-        probe_claude_desktop(),
-        probe_cursor(),
-    ];
+    let clients = vec![probe_claude_code(), probe_claude_desktop(), probe_cursor()];
     Ok(ServerInfo {
         binary_path,
         config_json,
@@ -56,12 +52,10 @@ pub async fn mcp_server_info() -> Result<ServerInfo, String> {
 }
 
 #[tauri::command]
-pub async fn mcp_connect(
-    app: tauri::AppHandle,
-    client: String,
-) -> Result<ConnectOutcome, String> {
-    let binary = locate_mcp_binary()
-        .ok_or_else(|| "gilb-mcp binary not found — build it with `cargo build --release -p gilb-mcp`".to_string())?;
+pub async fn mcp_connect(app: tauri::AppHandle, client: String) -> Result<ConnectOutcome, String> {
+    let binary = locate_mcp_binary().ok_or_else(|| {
+        "gilb-mcp binary not found — build it with `cargo build --release -p gilb-mcp`".to_string()
+    })?;
     let binary_str = binary.to_string_lossy().into_owned();
     match client.as_str() {
         "claude_code" => connect_claude_code(&binary_str),
@@ -128,7 +122,10 @@ fn probe_claude_code() -> ClientStatus {
 
 fn probe_claude_desktop() -> ClientStatus {
     let path = claude_desktop_config_path();
-    let available = path.as_ref().map(|p| p.parent().map(|d| d.exists()).unwrap_or(false)).unwrap_or(false);
+    let available = path
+        .as_ref()
+        .map(|p| p.parent().map(|d| d.exists()).unwrap_or(false))
+        .unwrap_or(false);
     ClientStatus {
         id: "claude_desktop".into(),
         label: "Claude Desktop".into(),
@@ -165,7 +162,8 @@ fn connect_claude_code(binary: &str) -> Result<ConnectOutcome, String> {
         Ok(ConnectOutcome::Installed {
             details: stdout.trim().to_string(),
         })
-    } else if stderr.to_lowercase().contains("already") || stdout.to_lowercase().contains("already") {
+    } else if stderr.to_lowercase().contains("already") || stdout.to_lowercase().contains("already")
+    {
         // Treat re-install as success — `claude mcp add` is idempotent for our
         // purposes; the user just clicked twice.
         Ok(ConnectOutcome::Installed {
@@ -185,13 +183,12 @@ fn connect_claude_desktop(binary: &str) -> Result<ConnectOutcome, String> {
     }
 
     let mut root: serde_json::Value = if path.exists() {
-        let text = std::fs::read_to_string(&path)
-            .map_err(|e| format!("read {}: {e}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| format!("read {}: {e}", path.display()))?;
         if text.trim().is_empty() {
             serde_json::json!({})
         } else {
-            serde_json::from_str(&text)
-                .map_err(|e| format!("parse {}: {e}", path.display()))?
+            serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?
         }
     } else {
         serde_json::json!({})
@@ -213,10 +210,9 @@ fn connect_claude_desktop(binary: &str) -> Result<ConnectOutcome, String> {
         }),
     );
 
-    let pretty = serde_json::to_string_pretty(&root)
-        .map_err(|e| format!("serialize config: {e}"))?;
-    std::fs::write(&path, pretty)
-        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    let pretty =
+        serde_json::to_string_pretty(&root).map_err(|e| format!("serialize config: {e}"))?;
+    std::fs::write(&path, pretty).map_err(|e| format!("write {}: {e}", path.display()))?;
     tracing::info!(config = %path.display(), "claude-desktop config updated");
 
     Ok(ConnectOutcome::Installed {
@@ -230,8 +226,7 @@ fn connect_cursor(app: &tauri::AppHandle, binary: &str) -> Result<ConnectOutcome
         "command": binary,
         "args": [],
     });
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(config.to_string());
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(config.to_string());
     let url = format!(
         "cursor://anysphere.cursor-deeplink/mcp/install?name={SERVER_NAME}&config={payload}"
     );
