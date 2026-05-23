@@ -1,8 +1,8 @@
 # Card evaluation procedure
 
-Sub-prompt called by `/check-trello` for each card it triages. Given one
+Sub-prompt called by `/trello-check` for each card it triages. Given one
 card, produce one of three outcomes: **PLAN**, **QUESTIONS**, or **SPLIT
-proposal**. The orchestrator (check-trello.md) handles column moves and
+proposal**. The orchestrator (trello-check.md) handles column moves and
 session-log writes; this file is the decision logic.
 
 ## Input
@@ -110,7 +110,7 @@ This task is larger than one PR. I suggest splitting it into:
 3. **<sub-task 3 title>** — <one-line scope>
 
 To confirm: comment the exact phrase `split confirmed` (case-insensitive)
-on this card. On the next /check-trello I will create the sub-cards in
+on this card. On the next /trello-check I will create the sub-cards in
 Backlog (labeled `ai-generated`) and archive this one.
 
 To reject: refine the scope in a comment so it fits one PR, then move
@@ -118,7 +118,7 @@ back to Backlog.
 ```
 
 Do not create or archive cards yourself in this step. The split-execution
-phase of `/check-trello` handles that when it sees the confirmation
+phase of `/trello-check` handles that when it sees the confirmation
 phrase.
 
 **F2. QUESTIONS** — real gaps need a human.
@@ -165,7 +165,7 @@ QUESTIONS instead.
 ## Output
 
 This procedure does not move the card or post comments by itself — the
-orchestrator (`/check-trello`) does. It just produces:
+orchestrator (`/trello-check`) does. It just produces:
 
 - The outcome type: `PLAN`, `QUESTIONS`, or `SPLIT`.
 - The comment body (formatted per F1/F2/F3 above).

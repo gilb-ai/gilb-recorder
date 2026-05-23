@@ -1,7 +1,7 @@
 # PLAN format (canonical)
 
 Single source of truth for what a `[meta] PLAN` comment must look like in a
-Trello card. Read by `/check-trello` (writes it) and `/run-trello` (parses
+Trello card. Read by `/trello-check` (writes it) and `/trello-run` (parses
 it). When you change this file, both commands pick up the new format on
 their next run — no other updates needed.
 
@@ -69,9 +69,9 @@ Walk this checklist; if any item fails — rework or downgrade to QUESTIONS
 - [ ] **Confidence ≥ 7.** If lower, the plan is not ready — produce
       QUESTIONS instead, asking what would raise confidence.
 
-## Parsing contract (for /run-trello)
+## Parsing contract (for /trello-run)
 
-`/run-trello` parses these exact section headers (`## Scope`, `## Files`,
+`/trello-run` parses these exact section headers (`## Scope`, `## Files`,
 `## Approach`, `## Tests`, `## Out of scope`, `## Metrics`). If a card has
 a `[meta] PLAN` comment that lacks `## Metrics` or has unparseable values
 (non-numeric Confidence, unknown Risk), the card goes to `Blocked` with a

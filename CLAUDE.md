@@ -37,7 +37,7 @@ Desktop-приложение, которое записывает действи
 - `research/` — разбор reference-проектов и рекомендации по Layer 1
   (особенно `05-gilb-recommendations.md`, `06-layer1-capture-quality.md`).
 - `trello-workflow.md` (English) — Trello-based task workflow: 9-column
-  board, `/check-trello` triage, `/run-trello` execution with iteration
+  board, `/trello-check` triage, `/trello-run` execution with iteration
   loop + auto-merge, PLAN/QUESTIONS comment format, knowledge sources.
   Read when working on cards from Trello or modifying the workflow.
 
@@ -156,7 +156,7 @@ audio_*) добавляются миграциями в Phase 8+, **не** за�
 - `.gilb/` — runtime state Trello-workflow (`session-log.md`, etc.); не
   коммитится. Подробности — в `trello-workflow.md`.
 - `.claude/` — конфиг и slash-команды для Claude Code (Trello-workflow):
-  `trello.json`, `commands/check-trello.md`, `commands/run-trello.md`.
+  `trello.json`, `commands/trello-check.md`, `commands/trello-run.md`.
   Коммитится (board IDs публичные).
 
 ## Работа с `reference/`

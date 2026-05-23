@@ -13,7 +13,7 @@ another repo / on another machine.
 | Aspect | Decision |
 |---|---|
 | Where CC runs | Persistent remote machine, always on |
-| Trigger | Manual: user invokes `/check-trello` or `/run-trello` in CC |
+| Trigger | Manual: user invokes `/trello-check` or `/trello-run` in CC |
 | Worker model | One `claude -p` headless process per card, in its own git worktree |
 | Plan approval | User drags card from `Plan Proposed` → `Ready for AI` |
 | Card → PR ratio | Strictly **1 card = 1 PR**. Bigger scope must be split at the planning stage |
@@ -32,7 +32,7 @@ a board-scoped auto-incrementing integer that Trello assigns on card
 creation.
 
 - User-created cards: prefix yourself when creating, or let next
-  `/check-trello` rename (it normalizes any prefix-less card it sees in
+  `/trello-check` rename (it normalizes any prefix-less card it sees in
   Backlog).
 - AI-created cards (split execution only in v1): meta renames immediately
   after Trello returns the new `idShort`.
@@ -60,7 +60,7 @@ In left-to-right order, names case-sensitive:
 ┌─ Backlog ─────────────────────────────────┐
 │ User creates card: title + description    │
 └───────────┬───────────────────────────────┘
-            │ /check-trello
+            │ /trello-check
             ▼
 ┌─ Triage in progress ──────────────────────┐
 │ Meta-agent:                               │
@@ -85,7 +85,7 @@ In left-to-right order, names case-sensitive:
 │ (see Split flow    │           │
 │ section)           │           ▼
 └────────────────────┘  ┌─ Ready for AI ─────────────┐
-                        │ Sits until /run-trello     │
+                        │ Sits until /trello-run     │
                         └────────┬───────────────────┘
                                  │
                                  ▼
@@ -123,7 +123,7 @@ not initiated by the AI:
 ```
 Card in Backlog has scope too big
         │
-        ▼ /check-trello (triage)
+        ▼ /trello-check (triage)
 Meta posts [meta] TOO BIG with proposed 2-5 sub-tasks,
 moves card to Human Questions
         │
@@ -137,7 +137,7 @@ You comment  You refine scope
 confirmed"   and drag back
    │         to Backlog
    ▼
-On next /check-trello, meta creates sub-cards
+On next /trello-check, meta creates sub-cards
 in Backlog (label: ai-generated), posts
 [meta] SPLIT EXECUTED with links, archives the
 original card.
@@ -151,7 +151,7 @@ non-goals for now (see "Explicit non-goals").
 
 Three commands, all manually invoked by user in their CC session on the remote.
 
-### `/check-trello` — triage + split execution
+### `/trello-check` — triage + split execution
 
 Meta-agent:
 
@@ -182,13 +182,13 @@ Standalone utility. Scans every card on the board (all columns, including
 archived) and adds the `[<card_prefix>-<idShort>]` prefix to any card
 without it. Does NOT triage. Does NOT comment. Does NOT move cards.
 
-Use after a bulk Trello-UI import, when a card slipped past `/check-trello`
+Use after a bulk Trello-UI import, when a card slipped past `/trello-check`
 in a non-Backlog column, or on first onboarding of an existing board.
 
-`/check-trello` already normalizes Backlog cards as Phase 2 step 1; this
+`/trello-check` already normalizes Backlog cards as Phase 2 step 1; this
 command is the superset for the rest of the board.
 
-### `/run-trello` — execution + auto-acceptance
+### `/trello-run` — execution + auto-acceptance
 
 Meta-agent:
 1. Reads board state, recent session-log entries.
@@ -252,7 +252,7 @@ instead of publishing PLAN. The plan isn't ready.
 
 ## Worker contract
 
-Worker (a `claude -p` process spawned by `/run-trello`) reads the PLAN from
+Worker (a `claude -p` process spawned by `/trello-run`) reads the PLAN from
 the card and follows it strictly. Worker is given:
 
 - The `[meta] PLAN` comment text in full.
@@ -319,7 +319,7 @@ Anything without a prefix is human input.
 
 Required meta comments per card:
 - **At triage**: `[meta] PLAN` OR `[meta] QUESTIONS` OR `[meta] TOO BIG`
-- **At each iteration in /run-trello**: `[meta] Iteration <N>: ...` (either accepted or with gaps)
+- **At each iteration in /trello-run**: `[meta] Iteration <N>: ...` (either accepted or with gaps)
 - **At completion**: `[meta] AUTO-MERGED` OR `[meta] READY FOR REVIEW` OR `[meta] BLOCKED`
 
 Worker proxy comments:
@@ -349,8 +349,8 @@ Where each kind of state lives.
 - `tauri-plan.md` — phased roadmap.
 - `research/*.md` — reference-project breakdowns.
 
-**Workflow runtime (fast-moving)** — pulled at the start of each `/check-trello`
-or `/run-trello` invocation:
+**Workflow runtime (fast-moving)** — pulled at the start of each `/trello-check`
+or `/trello-run` invocation:
 - **Trello board itself** — meta queries the full board (all columns) for
   cross-card awareness ("there's a related card in Plan Proposed", "this
   duplicates a recently-Done card").
@@ -485,8 +485,8 @@ binaries available) — only config + server start + plugin are missing.
 .claude/                         # committed
 ├── trello.json                  # board id, list ids, branch_prefix, auto-merge criteria, labels
 ├── commands/                    # slash command orchestrators
-│   ├── check-trello.md          # /check-trello: triage + split execution
-│   └── run-trello.md            # /run-trello: iteration loop + auto-merge
+│   ├── trello-check.md          # /trello-check: triage + split execution
+│   └── trello-run.md            # /trello-run: iteration loop + auto-merge
 └── prompts/                     # reusable sub-prompts (called by orchestrators)
     ├── card-eval.md             # per-card triage decision procedure
     ├── plan-format.md           # PLAN canonical structure + self-check
@@ -570,7 +570,7 @@ Empty file with header (see existing file as template). Gitignored.
 
 In CC inside the project repo:
 ```
-/check-trello
+/trello-check
 ```
 Should report "Backlog empty" or process whatever's in Backlog. Then create a
 trivial test card in Backlog, re-run, watch it land in Plan Proposed.
@@ -603,7 +603,7 @@ trivial test card in Backlog, re-run, watch it land in Plan Proposed.
 
 - When should worktrees be removed? Candidate: when card hits `Done` →
   `git worktree remove`. Adds a destructive action; needs care.
-- Parallel worker execution: currently strictly sequential per `/run-trello`.
+- Parallel worker execution: currently strictly sequential per `/trello-run`.
   Add a limit (max 2?) once we see real throughput needs.
 - Decisions store (`.gilb/decisions/` or `decisions/` at root) — wire when we
   have a first real cross-card decision to record. Not in v1.

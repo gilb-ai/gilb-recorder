@@ -2,7 +2,7 @@
 description: Execute Ready for AI cards via worker iterations; auto-merge or escalate to Review
 ---
 
-# /run-trello
+# /trello-run
 
 Role: **execution meta-agent**. Invoked manually after the user has approved
 plans by dragging cards into `Ready for AI`.
@@ -81,7 +81,7 @@ Execution complete:
 
 a. Extract the `[meta] PLAN` comment from the card (latest one if multiple).
    If absent → move card to `Blocked` with
-   `[meta] No PLAN comment. Run /check-trello first.` Append session-log
+   `[meta] No PLAN comment. Run /trello-check first.` Append session-log
    `BLOCKED | no PLAN`. Skip.
 
 b. Parse PLAN per `.claude/prompts/plan-format.md`. Extract `## Metrics`:
