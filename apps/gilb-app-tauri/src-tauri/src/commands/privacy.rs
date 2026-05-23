@@ -1,10 +1,10 @@
 //! macOS Privacy & Security pane shortcuts.
 //!
-//! Opens `x-apple.systempreferences:…` через Rust-сторону `tauri-plugin-opener`
-//! — это не требует разрешений в capabilities (они нужны только для прямого
-//! вызова opener из JS), но даёт нам нормальный exit-code check и
-//! кросс-платформенную диспетчеризацию через системные APIs вместо ручного
-//! `Command::new("open")`.
+//! Opens `x-apple.systempreferences:…` via the Rust side of
+//! `tauri-plugin-opener`. The Rust API doesn't require an IPC capability
+//! (capabilities are only enforced for JS-side opener calls), but it does
+//! give us a proper exit-code check and cross-platform dispatch through the
+//! OS APIs instead of a hand-rolled `Command::new("open")`.
 
 #[tauri::command]
 pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<(), String> {
