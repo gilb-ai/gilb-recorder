@@ -54,12 +54,11 @@ pub async fn insert_action(db: &Db, action: &Action) -> Result<ActionId> {
 /// Count of actions inserted within the current calendar day (UTC).
 pub async fn count_today(db: &Db) -> Result<i64> {
     let today = chrono::Utc::now().date_naive().to_string();
-    let row: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM actions WHERE substr(captured_at, 1, 10) = ?",
-    )
-    .bind(&today)
-    .fetch_one(db)
-    .await?;
+    let row: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM actions WHERE substr(captured_at, 1, 10) = ?")
+            .bind(&today)
+            .fetch_one(db)
+            .await?;
     Ok(row.0)
 }
 

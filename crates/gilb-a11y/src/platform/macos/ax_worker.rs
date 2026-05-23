@@ -17,10 +17,9 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use accessibility_sys::{
-    kAXErrorSuccess, kAXHelpAttribute, kAXIdentifierAttribute, kAXRoleAttribute,
-    kAXTitleAttribute, kAXValueAttribute, AXError, AXUIElementCopyAttributeValue,
-    AXUIElementCopyElementAtPosition, AXUIElementCreateSystemWide, AXUIElementRef,
-    AXUIElementSetMessagingTimeout,
+    kAXErrorSuccess, kAXHelpAttribute, kAXIdentifierAttribute, kAXRoleAttribute, kAXTitleAttribute,
+    kAXValueAttribute, AXError, AXUIElementCopyAttributeValue, AXUIElementCopyElementAtPosition,
+    AXUIElementCreateSystemWide, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
@@ -132,9 +131,7 @@ fn element_at(
 ) -> Option<ElementContext> {
     // SAFETY: Apple's AX functions are documented thread-safe.
     let mut element: AXUIElementRef = ptr::null_mut();
-    let res = unsafe {
-        AXUIElementCopyElementAtPosition(system, x as f32, y as f32, &mut element)
-    };
+    let res = unsafe { AXUIElementCopyElementAtPosition(system, x as f32, y as f32, &mut element) };
     if res != kAXErrorSuccess as AXError || element.is_null() {
         return None;
     }
@@ -171,9 +168,8 @@ fn ax_attr_name(name: &str) -> CFString {
 
 fn read_string_attr(element: AXUIElementRef, attr: CFString) -> Option<String> {
     let mut value: CFTypeRef = ptr::null_mut() as *const c_void;
-    let res = unsafe {
-        AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value)
-    };
+    let res =
+        unsafe { AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value) };
     if res != kAXErrorSuccess as AXError || value.is_null() {
         return None;
     }

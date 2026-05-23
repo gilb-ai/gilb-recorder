@@ -12,8 +12,8 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 /// If the logs directory cannot be created we fall back to stdout-only, log
 /// a warning, and return `None`. Capture continues to work in that case.
 pub fn init_tracing() -> Option<WorkerGuard> {
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,gilb=debug"));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,gilb=debug"));
 
     let stdout_layer = fmt::layer().with_target(true);
 

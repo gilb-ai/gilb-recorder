@@ -74,8 +74,8 @@ impl CapturePlatform for MacosPlatform {
         let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
         let (clip_shutdown_tx, clip_shutdown_rx) = oneshot::channel::<()>();
 
-        let event_tap = EventTap::spawn(raw_tx)
-            .map_err(|e| anyhow!("failed to start event tap: {e}"))?;
+        let event_tap =
+            EventTap::spawn(raw_tx).map_err(|e| anyhow!("failed to start event tap: {e}"))?;
 
         let (ax_worker, ax_handle) = AxWorker::spawn(self.focus.clone());
 

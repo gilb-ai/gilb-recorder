@@ -30,8 +30,8 @@ impl SpecialKey {
     pub fn from_keycode(code: u16) -> Option<Self> {
         // Values from `Carbon/HIToolbox/Events.h`.
         Some(match code {
-            0x24 => SpecialKey::Return,            // kVK_Return
-            0x4C => SpecialKey::Return,            // kVK_ANSI_KeypadEnter
+            0x24 => SpecialKey::Return, // kVK_Return
+            0x4C => SpecialKey::Return, // kVK_ANSI_KeypadEnter
             0x30 => SpecialKey::Tab,
             0x35 => SpecialKey::Escape,
             0x33 => SpecialKey::Backspace,
