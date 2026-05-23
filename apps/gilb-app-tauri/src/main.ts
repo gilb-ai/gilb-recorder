@@ -40,7 +40,7 @@ function updateSplash(perms: Permissions, platform: string) {
   const splash = $("splash");
   if (!splash) return;
 
-  // Splash имеет смысл только на macOS; на других платформах ничего не делаем.
+  // Splash only makes sense on macOS; do nothing on other platforms.
   const macOnly = platform === "macos";
   const needsAx = macOnly && !perms.accessibility;
   const needsIm = macOnly && !perms.input_monitoring;
@@ -53,11 +53,11 @@ function updateSplash(perms: Permissions, platform: string) {
   setDot("splash-im-dot", perms.input_monitoring);
   setText(
     "splash-ax-status",
-    perms.accessibility ? "выдано" : "не выдано",
+    perms.accessibility ? "granted" : "not granted",
   );
   setText(
     "splash-im-status",
-    perms.input_monitoring ? "выдано" : "не выдано",
+    perms.input_monitoring ? "granted" : "not granted",
   );
 
   for (const step of ["splash-step-ax", "splash-step-im"]) {
@@ -69,10 +69,10 @@ function updateSplash(perms: Permissions, platform: string) {
   }
 }
 
-// Sequence counter — refresh()-вызовы могут гоняться параллельно (poll, явный
-// вызов после start/stop, и listen("permission"/"health")). Применяем к DOM
-// только результат последнего стартовавшего вызова — out-of-order ответы
-// отбрасываются.
+// Sequence counter — refresh() calls can race in parallel (poll, explicit
+// call after start/stop, listen("permission"/"health")). Apply to the DOM
+// only the result of the most recently started call — out-of-order
+// responses are discarded.
 let refreshSeq = 0;
 
 async function refresh() {
@@ -124,7 +124,7 @@ async function openPrivacyPane(pane: "accessibility" | "input_monitoring") {
 async function startCapture() {
   try {
     const id = await invoke<number>("start_capture");
-    setMessage(`Запись началась, session_id=${id}`);
+    setMessage(`Recording started, session_id=${id}`);
   } catch (err) {
     setMessage(`start_capture error: ${String(err)}`, "error");
   }
@@ -134,7 +134,7 @@ async function startCapture() {
 async function stopCapture() {
   try {
     await invoke("stop_capture");
-    setMessage("Запись остановлена");
+    setMessage("Recording stopped");
   } catch (err) {
     setMessage(`stop_capture error: ${String(err)}`, "error");
   }
@@ -264,7 +264,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("mcp-modal-close")?.addEventListener("click", closeMcpModal);
   $("mcp-other-copy")?.addEventListener("click", copyMcpJson);
 
-  // Закрытие модала по клику на backdrop.
+  // Close the modal on a backdrop click.
   $("mcp-modal")?.addEventListener("click", (ev) => {
     if (ev.target === ev.currentTarget) closeMcpModal();
   });
@@ -278,10 +278,10 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Бэкенд проксирует EventBus сюда — permission/health-события сразу
-  // дёргают refresh(). Permissions, recording, session_id обновляются по
-  // событию; медленный 5-секундный poll нужен только для счётчика
-  // actions_today и как fallback на случай пропущенного broadcast'а.
+  // Backend proxies EventBus events here — permission/health messages
+  // trigger refresh() immediately. Permissions, recording state and
+  // session_id update via events; the slow 5-second poll is only for the
+  // actions_today counter and as a fallback for a missed broadcast.
   listen("permission", () => refresh());
   listen("health", () => refresh());
 

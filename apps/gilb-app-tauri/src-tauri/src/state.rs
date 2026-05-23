@@ -35,9 +35,9 @@ pub fn build_app_state() -> Result<AppState> {
 pub fn show_init_error(app: &AppHandle, err: &anyhow::Error) {
     let log_hint = logs_dir()
         .ok()
-        .map(|p| format!("\n\nДетали в логе: {}", p.display()))
+        .map(|p| format!("\n\nDetails in the log: {}", p.display()))
         .unwrap_or_default();
-    let body = format!("gilb не смог запуститься:\n\n{err:#}{log_hint}");
+    let body = format!("gilb failed to start:\n\n{err:#}{log_hint}");
     let _ = app
         .dialog()
         .message(body)
