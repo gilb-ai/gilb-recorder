@@ -9,6 +9,7 @@ members = [
     "crates/gilb-a11y",
     "crates/gilb-db",
     "crates/gilb-engine",
+    "crates/gilb-meeting",
 ]
 
 [workspace.package]
