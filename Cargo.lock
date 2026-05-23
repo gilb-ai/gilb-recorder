@@ -1684,6 +1684,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "gilb-meeting"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "serde",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "gio"
 version = "0.18.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
