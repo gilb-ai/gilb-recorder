@@ -190,11 +190,24 @@ command is the superset for the rest of the board.
 
 ### `/trello-run` — execution + auto-acceptance
 
+Invocation forms:
+- `/trello-run` — process every card in `Ready for AI`, sequentially.
+- `/trello-run <card-ref>` — process exactly one card. `<card-ref>` accepts
+  shortLink (`6WV4zR2P`), prefix-id (`GILB-3`), or full URL
+  (`https://trello.com/c/6WV4zR2P[/slug]`). The card must already be in
+  `Ready for AI`; otherwise the command exits without changes.
+- `/trello-run --parallel N` (also `-p N`, `--p N`, `--pN`, `-pN`) — same
+  as the no-arg form, but with up to `N` workers running concurrently.
+  `N ∈ [1, 4]`. Default `N=1`.
+
 Meta-agent:
-1. Reads board state, recent session-log entries.
-2. Iterates over all cards in `Ready for AI`, one at a time:
-   - Moves card to `In Progress`, creates git worktree.
-   - Runs **iteration loop** (max 3):
+1. Parses invocation (flag + optional `<card-ref>`), reads board state and
+   recent session-log entries.
+2. Resolves the targets list — either the single resolved card, or all
+   cards in `Ready for AI` — and processes them with the requested
+   parallelism:
+   - Moves each card to `In Progress`, creates its own git worktree.
+   - Runs **iteration loop** (max 3) per card:
      - Spawns `claude -p` worker with plan (iter 1) or plan + previous gaps (iter 2+).
      - Worker writes code, commits, pushes, opens PR (iter 1) or pushes to existing PR (iter 2+).
      - Meta runs **acceptance check** against the plan.
@@ -204,7 +217,12 @@ Meta-agent:
    - After acceptance: runs **auto-merge decision**.
      - All criteria met (confidence ≥ 7, CI green, risk ≤ medium): `gh pr merge --merge`, move to `Done`.
      - Any criterion missed: move to `Review` with comment explaining which criterion blocked auto-merge.
-3. Appends per-card lines to `.gilb/session-log.md`.
+3. With `N > 1`, worker spawns are concurrent but Phase 1 (worktree +
+   card move), acceptance checks, and `gh pr merge` are serialized to
+   avoid `cargo` registry locks and Trello API contention. See the
+   `## Parallel execution` section of `.claude/commands/trello-run.md`
+   for the full contract.
+4. Appends per-card lines to `.gilb/session-log.md`.
 
 ## PLAN format (canonical)
 
@@ -603,8 +621,9 @@ trivial test card in Backlog, re-run, watch it land in Plan Proposed.
 
 - When should worktrees be removed? Candidate: when card hits `Done` →
   `git worktree remove`. Adds a destructive action; needs care.
-- Parallel worker execution: currently strictly sequential per `/trello-run`.
-  Add a limit (max 2?) once we see real throughput needs.
+- Parallel worker execution: opt-in via `/trello-run --parallel N` (N up
+  to 4); default is still sequential. Revisit defaults after we see real
+  throughput on the box hosting the meta-agent.
 - Decisions store (`.gilb/decisions/` or `decisions/` at root) — wire when we
   have a first real cross-card decision to record. Not in v1.
 - AI card creation beyond SPLIT: worker spinoff (B), post-merge follow-up

@@ -1,5 +1,5 @@
 ---
-description: Execute Ready for AI cards via worker iterations; auto-merge or escalate to Review
+description: Execute Ready for AI cards via worker iterations; auto-merge or escalate to Review. Accepts an optional single-card ref and an optional --parallel N flag.
 ---
 
 # /trello-run
@@ -17,6 +17,37 @@ The model is **not one-shot**. Meta spawns a worker, runs an acceptance
 check, and if gaps remain, spawns the worker again (up to 3 iterations).
 After acceptance passes, meta decides whether to auto-merge the PR or
 leave it for human `Review`.
+
+## Invocation
+
+Three forms, all run from a Claude Code session in the repo:
+
+- `/trello-run` — process every card currently in `Ready for AI`,
+  sequentially.
+- `/trello-run <card-ref>` — process exactly one card in `Ready for AI`.
+  `<card-ref>` accepts any of:
+  - `shortLink`, e.g. `6WV4zR2P`
+  - `<prefix>-<idShort>`, e.g. `GILB-3` (prefix from
+    `.claude/trello.json` `card_prefix`)
+  - full Trello URL, e.g. `https://trello.com/c/6WV4zR2P` or
+    `https://trello.com/c/6WV4zR2P/3-gilb-3-mcp-endpoints`
+
+  If the resolved card is NOT in `Ready for AI` → reply
+  `Card <ref> is not in Ready for AI (currently in <list>). Move it to Ready for AI first.`
+  and exit without changes.
+
+- `/trello-run --parallel N` (also accepted: `-p N`, `--p N`, `--pN`,
+  `-pN`) — process every Ready-for-AI card with up to **N** workers
+  running concurrently. `N` is clamped to `[1, 4]`. Default without the
+  flag is `N=1` (sequential). The flag is allowed together with a
+  card-ref, but for a single-card invocation it's a no-op (one card =
+  at most one worker).
+
+Combinations:
+- `/trello-run GILB-3` → exactly that card, sequential by construction.
+- `/trello-run -p2` → all Ready cards, up to 2 in flight.
+- `/trello-run --parallel 3 GILB-3` → single card; flag ignored with a
+  warning line.
 
 ## Contract (what you must NOT do)
 
@@ -45,35 +76,154 @@ leave it for human `Review`.
 
 ### Bootstrap (once)
 
-1. Read `.claude/trello.json`. Extract `lists.{ready, in_progress, review, blocked, done}`,
-   `branch_prefix`, `worktree_root`, `worker_log_dir`, `auto_merge_criteria`,
-   `session_log`.
-2. Read last 30 lines of `.gilb/session-log.md` — skim for patterns (e.g.,
-   a card you're about to work on was just BLOCKED — check why).
-3. Via MCP `trello`, fetch open cards from all columns for cross-card view.
-4. Ensure directories exist: `mkdir -p <worktree_root> <worker_log_dir>`.
+1. Parse the invocation (see `## Invocation`):
+   - Detect `--parallel N` / `-p N` / `--p N` / `--pN` / `-pN`. Clamp to
+     `[1, 4]`. Default `N=1`. Reject non-integer / out-of-range with
+     `Invalid --parallel value: <raw>. Expected integer in [1, 4].` and
+     exit.
+   - The remaining non-flag positional, if any, is `<card-ref>`. Reject
+     `≥2` positionals with
+     `Multiple card refs given. /trello-run accepts at most one card ref.`
+     and exit.
+2. Read `.claude/trello.json`. Extract
+   `lists.{ready, in_progress, review, blocked, done}`, `branch_prefix`,
+   `worktree_root`, `worker_log_dir`, `auto_merge_criteria`, `session_log`,
+   `card_prefix`.
+3. Read last 30 lines of `.gilb/session-log.md` — skim for patterns
+   (e.g., a card you're about to work on was just BLOCKED — check why).
+4. Via MCP `trello`, fetch open cards from all columns for cross-card
+   view, AND specifically the contents of the `ready` list. From these:
+   - **If `<card-ref>` was given:** resolve it (see "Card ref resolution"
+     below). If the resolved card isn't in `ready` → exit per the
+     Invocation rules. Targets list = `[that card]`.
+   - **Otherwise:** targets list = all cards currently in `ready`. If
+     empty → reply "Ready for AI empty" and exit.
+5. Ensure directories exist: `mkdir -p <worktree_root> <worker_log_dir>`.
 
-### Per card (sequential, NOT parallel)
+#### Card ref resolution
 
-For each card in `Ready for AI`:
+Apply these rules in order against the user-supplied `<card-ref>`:
+
+1. If it matches `^https?://trello\.com/c/([A-Za-z0-9]{8})(?:/.*)?$` →
+   `shortLink` = group 1.
+2. Else if it matches `^[A-Za-z0-9]{8}$` → `shortLink` = the ref itself.
+3. Else if it matches `^<card_prefix>-(\d+)$` (case-insensitive on
+   `card_prefix`) → look up the card whose `idShort` equals that
+   integer on the board.
+4. Else → exit with
+   `Unrecognized card ref: <ref>. Expected shortLink, <prefix>-<id>, or trello.com/c/ URL.`
+
+If shortLink lookup yields no card → exit with
+`Card <ref> not found on board.`.
+
+### Per card
+
+For each card in the resolved targets list:
 
 1. **Phase 1: Prepare** (see below).
 2. **Phase 2: Iteration loop** (see below).
 3. **Phase 3: Auto-merge decision** (only if Phase 2 ended in acceptance).
 4. **Phase 4: Finalize** (session-log entry; card already moved by prior phases).
 
-If `Ready for AI` is empty → reply "Ready for AI empty" and exit.
+Execution order:
+- **`N == 1`** — strictly sequential: one card finishes (through Phase 4)
+  before the next begins.
+- **`N > 1`** — meta keeps up to `N` cards "in flight" (each in its own
+  Phase 2 iteration loop, with its own worktree/branch/PR/log). Cards
+  enter and leave in flight independently. See `## Parallel execution`
+  for the orchestration contract.
 
 ### Summary
 
+Print once at the end (after all in-flight cards have finished):
+
 ```
-Execution complete:
-- Cards processed: <N>
+Execution complete (parallelism N=<N>):
+- Cards processed: <count>
   - → Done (auto-merged): <M>
   - → Review (escalated): <R>
   - → Blocked: <K>
 - Mean iterations: <num>
 ```
+
+For single-card invocation, replace `Cards processed: <count>` with the
+card title + shortLink.
+
+---
+
+## Parallel execution
+
+Only applies when `N > 1` AND the targets list has more than one card.
+
+### Concurrency model
+
+Meta keeps a queue of pending cards and a set of in-flight cards (size
+≤ `N`). The unit of concurrency is **one card's Phase 1+2 pipeline** —
+the meta-agent never runs two iteration loops in series for the same
+card simultaneously, only across different cards.
+
+Per-card pipeline is unchanged: Phase 1 → Phase 2 (iter loop) → Phase 3
+(auto-merge decision) → Phase 4 (finalize). The acceptance check
+(Phase 2.3) and the worker spawn (Phase 2.1) are both per-card, so they
+run interleaved across the in-flight set.
+
+### Spawning loop
+
+```
+pending  = targets list (FIFO)
+in_flight = {}            # cardId → {worktree, branch, pr_url, iter, log_path, ...}
+
+while pending or in_flight:
+    while pending and len(in_flight) < N:
+        card = pending.pop(0)
+        run Phase 1 for card           # sync, fast (worktree create + Trello move)
+        spawn iter 1 worker for card   # async (background)
+        in_flight[card.id] = state
+
+    wait for ANY in-flight worker to finish    # harness notification
+    for each finished card:
+        run Phase 2.2 (parse) + 2.3 (acceptance) + 2.4 (decide)
+        if needs another iteration:
+            spawn iter <iter+1> worker for card    # stays in_flight
+        else:
+            run Phase 3 (auto-merge decision) + Phase 4
+            remove from in_flight
+```
+
+### Concurrency-specific rules
+
+- **Phase 1 is serialized.** Worktree creation, the `In Progress` move,
+  and the `[meta] Starting work` comment for the next card all happen
+  on the meta-agent's main thread before the next worker spawn. This
+  keeps the Trello card list ordered and avoids `git` racing itself in
+  the parent repo.
+- **Worker spawns are async.** Each is `claude -p ... &` (background)
+  with its log path written to its own file in `<worker_log_dir>`.
+- **Acceptance checks are serialized** per finished worker. Meta runs
+  one acceptance procedure at a time (it competes for the same `cargo`
+  / `gh` / Trello-API tools as Phase 1 and Phase 3); this prevents
+  cargo registry locks and Trello rate-limit storms.
+- **Auto-merge decisions are serialized.** Only one `gh pr merge` at a
+  time. If two cards both reach Phase 3, the second waits.
+- **Per-card iteration counter is independent.** Card A's iter 3 does
+  not affect card B's iter limits.
+- **Stop condition.** A `Blocked` decision for one card never aborts
+  in-flight work on other cards. The summary at the end reports per-card
+  outcomes.
+
+### Cross-card conflicts (best-effort handling)
+
+- Two PRs that both touch overlapping files in `main`: when the second
+  one tries `gh pr merge` after the first has merged, conflicts may
+  appear. Treat as an auto-merge blocker per "Phase 3" → escalate to
+  `Review` with the `gh` error message in the comment.
+- Two workers running cargo against the same workspace from different
+  worktrees: each worktree has its own `target/`, so this is allowed.
+  If RAM pressure is a concern, lower `N`.
+- `MCP trello` rate-limit: if a Trello API call fails with HTTP 429,
+  retry once after 5s; on second failure, treat as `MCP trello fails
+  mid-card` per Failure modes → stop. Leave already-spawned workers to
+  finish but do not start new ones.
 
 ---
 
@@ -343,3 +493,8 @@ visibility into in-flight work). Then the terminal event (`MERGED` /
 | `gh pr merge` fails (branch protection, conflicts) | Treat as auto-merge blocker; move to Review with `gh` error in comment. |
 | Worker prompt template file (`worker-iter1.md`, `worker-iterN.md`) missing | Stop. Don't inline a fallback. |
 | `acceptance-check.md` missing | Stop. Don't skip acceptance. |
+| `<card-ref>` not in `Ready for AI` | Exit early per Invocation rules; no state change. |
+| `<card-ref>` resolves to no card on the board | Exit with `Card <ref> not found on board.` |
+| `--parallel N` with `N` outside `[1, 4]` or non-integer | Exit with `Invalid --parallel value: <raw>. Expected integer in [1, 4].` |
+| `--parallel N` set but only one card in targets | Treat as `N=1`; no warning needed. |
+| Parallel run, one card hits `Blocked` | Other in-flight cards continue. Pending queue continues to drain. |
