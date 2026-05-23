@@ -1,0 +1,38 @@
+{
+  "board": {
+    "short_id": "aDE3BsQk",
+    "id": "6a11734a5ca0831e4ad16dc0",
+    "name": "Gilb Dev",
+    "url": "https://trello.com/b/aDE3BsQk/gilb-dev"
+  },
+  "lists": {
+    "backlog":          "6a11734a5ca0831e4ad16dbb",
+    "triage":           "6a117f4f7db7a35cc3d0907a",
+    "human_questions":  "6a117f4fc6f3947bdf00f757",
+    "plan_proposed":    "6a117f4fd48f8aca08943283",
+    "ready":            "6a117f4fd545f65159f15073",
+    "in_progress":      "6a11734a5ca0831e4ad16dbd",
+    "review":           "6a117f4f50fe41599a871f97",
+    "blocked":          "6a117f50c043396b7c39ffaa",
+    "done":             "6a118b0a2a00bf0fa1879c1a"
+  },
+  "auto_merge_criteria": {
+    "min_confidence": 7,
+    "require_ci_green": true,
+    "max_risk": "medium",
+    "strategy": "merge"
+  },
+  "labels": {
+    "ai_generated": "6a118f8b2f368e1a93be9c47"
+  },
+  "split_confirmation_phrase": "split confirmed",
+  "card_prefix": "GILB",
+  "branch_prefix": "trello/",
+  "worktree_root": ".gilb/worktrees",
+  "worker_log_dir": ".gilb/worker-logs",
+  "session_log": ".gilb/session-log.md",
+  "comment_prefixes": {
+    "meta": "[meta] ",
+    "worker": "[worker] "
+  }
+}
