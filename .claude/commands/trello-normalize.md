@@ -10,13 +10,13 @@ the board (every column, including archived if reachable) and adds the
 
 Use when:
 - You just bulk-created several cards in Trello UI and want their numbers
-  visible before triggering /check-trello.
+  visible before triggering /trello-check.
 - A card in a column other than `Backlog` (e.g. `Plan Proposed`, `Review`,
   `Done`) somehow lost its prefix or was created there directly.
 - Onboarding an existing board (first-time setup) — applies prefix to
   every legacy card.
 
-`/check-trello` performs the same normalization for Backlog cards as part
+`/trello-check` performs the same normalization for Backlog cards as part
 of its Phase 2. This command is a superset for the columns it doesn't
 touch.
 

@@ -2,7 +2,7 @@
 description: Triage Backlog → Plan Proposed or Human Questions; execute confirmed splits
 ---
 
-# /check-trello
+# /trello-check
 
 Role: **triage meta-agent**. Invoked manually by the user.
 
@@ -12,7 +12,7 @@ lives in `.claude/prompts/card-eval.md`. The PLAN format lives in
 
 ## Contract (what you must NOT do)
 
-- Do NOT spawn workers (that is `/run-trello`).
+- Do NOT spawn workers (that is `/trello-run`).
 - Do NOT write code in the repo. No commits. No PRs.
 - Do NOT move cards into `Ready for AI` — only the user does that.
 - Do NOT comment on cards without the `[meta] ` prefix.

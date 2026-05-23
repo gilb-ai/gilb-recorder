@@ -1,6 +1,6 @@
 # Acceptance check procedure
 
-Sub-prompt called by `/run-trello` after each worker iteration to verify the
+Sub-prompt called by `/trello-run` after each worker iteration to verify the
 worker's deliverables match the PLAN. The orchestrator collects gaps and
 decides next steps; this file is the verification logic.
 
