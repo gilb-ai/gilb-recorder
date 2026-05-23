@@ -320,11 +320,41 @@ Read the worker log; look at exit code + stdout patterns.
     `[worker] Worker crashed (iter <iter>, exit <EXIT>)\nLog: <log>`.
   - Append iter_log entry. Exit loop.
 
-### Step 2.3 — Acceptance check
+### Step 2.3 — Acceptance check (subagent)
 
-Run the procedure in `.claude/prompts/acceptance-check.md`. It returns:
-- `gaps[]` — list of strings (empty if all checks pass).
-- `gaps_summary` — one-line `; `-joined short form.
+Spawn the acceptance check as a separate subagent — meta does NOT run
+the procedure inline. This keeps verification isolated from
+orchestration and leaves room for multi-model consensus later.
+
+Build the acceptance prompt by concatenating, in order:
+
+1. `.claude/prompts/roles/engineering.md`
+2. `.claude/prompts/roles/formatting.md`
+3. `.claude/prompts/acceptance-check.md` with placeholders substituted:
+   `<card-url>`, `<pr_url>`, `<worktree-path>`, `<branch>`,
+   `<PLAN-comment>`.
+
+Spawn:
+```bash
+claude -p "<acceptance-prompt>" --dangerously-skip-permissions \
+  --output-format text > <worker_log_dir>/<card-short>-iter<iter>-acceptance.log 2>&1
+EXIT=$?
+```
+
+Parse the result:
+- `EXIT == 0` and `stdout` contains exactly one JSON line matching
+  `{"gaps":[...],"gaps_summary":"..."}`: extract `gaps[]` and
+  `gaps_summary`. Empty `gaps` means acceptance passes.
+- `EXIT == 2` and `stdout` contains `BLOCKED: <reason>`: the acceptance
+  subagent could not run the checks. Move card to `Blocked` with
+  `[meta] Acceptance subagent failed (iter <iter>): <reason>. Log: <log>`.
+  Skip Phase 3, go to Phase 4 (Blocked path).
+- Any other (crash, non-JSON, multi-line stdout): treat as
+  `Worker produced ambiguous output` — Blocked, comment with the log
+  path, skip Phase 3.
+
+The `gaps[]` and `gaps_summary` fed into Step 2.4 below come from the
+parsed JSON.
 
 ### Step 2.4 — Decide outcome of this iteration
 
