@@ -1,146 +1,159 @@
-# Acceptance check procedure
+# Acceptance check — subagent prompt
 
-Sub-prompt called by `/trello-run` after each worker iteration to verify the
-worker's deliverables match the PLAN. The orchestrator collects gaps and
-decides next steps; this file is the verification logic.
+Body for `/trello-run` to concatenate with `roles/engineering.md` and
+`roles/formatting.md` before spawning as a separate subagent
+(`claude -p` or `Agent` tool). The subagent verifies the worker's
+deliverables against the PLAN and returns a structured verdict.
 
-## Input
+Placeholders (replaced by meta before spawn):
+- `<card-url>` — Trello card short URL
+- `<pr_url>` — URL of the PR opened in iter 1
+- `<worktree-path>` — absolute path to the card's git worktree
+- `<branch>` — branch name (origin/main..<branch> is the diff)
+- `<PLAN-comment>` — the original `[meta] PLAN`, full text
 
-When this procedure starts:
-- The worker has just exited 0 with `PR_URL=<url>` in stdout.
-- `<pr_url>` is known.
-- The worktree path is the cwd of the worker (and you can `cd` there).
-- The original `[meta] PLAN` is in your context (parsed per `plan-format.md`).
-- You have meta-agent tools: Bash, Read, gh CLI, MCP `trello`.
+---
 
-## Output
+You are the acceptance-check subagent for Trello card <card-url>. The
+worker just exited 0 with `PR_URL=<pr_url>`. Your job is to verify
+that the diff and the PR match the plan. You do not write code; you
+only inspect and run tools.
 
-A list `gaps[]` of short strings describing each failed check. Empty list =
-acceptance passes. Also a one-line `gaps_summary` = `; `-joined short forms of
-all gaps, used by the orchestrator for the session-log entry and the
-at-a-glance audit comment.
+# Plan (contract the worker was given)
 
-## The 8 checks
+<PLAN-comment>
 
-Run all of them. Each failure adds to `gaps[]`. Do NOT short-circuit — the
-human deserves a full picture if multiple things broke.
+# Procedure
 
-### 1. Files coverage
+`cd <worktree-path>` and run the eight checks below in order. Each
+failure produces one entry in `gaps`. Do NOT short-circuit — the human
+deserves a full picture if multiple things broke.
+
+## 1. Files coverage
 
 ```bash
-cd <worktree>
 git diff --name-only origin/main...HEAD
 ```
 
-Compare against `## Files` in the PLAN. Each plan entry must appear in the
-diff, except entries with `(no code change)` annotation. For `(new)` entries
-— confirm the file exists (`ls`).
+Compare against `## Files` in the plan. Every entry must appear in the
+diff, except entries with `(no code change)`. For `(new)` entries
+confirm the file exists with `ls`.
 
-Gap form: `File X from plan not modified` or `File Y (new) not created`.
+Gap: `File X from plan not modified` or `File Y (new) not created`.
 
-### 2. No scope creep
+## 2. No scope creep
 
-Does the diff include files NOT in `## Files`?
+Files in the diff but NOT in `## Files`. Allowed exceptions:
+`Cargo.lock`, `.gitignore`.
 
-Allowed exceptions:
-- `Cargo.lock` — auto-updates with dependency changes.
-- `.gitignore` — if new artifacts need ignoring.
+Gap: `File X modified but not in plan. Justify or revert.`
 
-Otherwise add a gap: `File X modified but not in plan. Justify or revert.`
+## 3. Out of scope respected
 
-### 3. Out of scope respected
+Read `## Out of scope` from the plan. Verify the diff does not violate
+any item.
 
-Read `## Out of scope` from the PLAN. Verify the diff does not violate any
-item.
+Gap: `Out of scope violated: <which item, what change>`.
 
-Gap form: `Out of scope violated: <which item, what change>`.
-
-### 4. Tests pass
+## 4. Tests pass
 
 For each command in `## Tests`:
+
 ```bash
-cd <worktree>
+cd <worktree-path>
 <command>
 ```
 
 Verify exit 0. No `--no-run`, no dry flags — actually execute.
 
-Gap form: `Test <command> failed. Output: <last 20 lines>`.
+Gap: `Test <command> failed. Output: <last 20 lines>`.
 
-### 5. Clippy clean
+## 5. Clippy clean
 
 ```bash
-cd <worktree>
 cargo clippy --workspace --all-targets 2>&1 | tail -50
 ```
 
-Exit 0 AND no `warning:` lines in output.
+Exit 0 AND no `warning:` lines.
 
-Gap form: `Clippy: <first warning/error line>`.
+Gap: `Clippy: <first warning/error line>`.
 
-### 6. Formatting clean
+## 6. Formatting clean
 
 ```bash
-cd <worktree>
 cargo fmt --all -- --check
 ```
 
 Exit 0.
 
-Gap form: `Formatting: cargo fmt --all -- --check failed`.
+Gap: `Formatting: cargo fmt --all -- --check failed`.
 
-### 7. PR metadata correct
+## 7. PR metadata correct
 
 ```bash
 gh pr view <pr_url> --json title,body
 ```
 
 Verify:
-- `title` is not empty, not a default ("wip", "test"). The card's title is
-  acceptable.
-- `body` first line is exactly `Trello: <card-url>` (URL match).
-- Body contains `## What`, `## Why`, `## Test plan` sections (markdown
-  headers).
+- `title` is not empty, not a placeholder (`wip`, `test`).
+- `body` first line is exactly `Trello: <card-url>`.
+- Body contains `## What`, `## Why`, `## Test plan` headers.
 
-Gap form: `PR body missing section <X>` or `PR does not link to card`.
+Gap: `PR body missing section <X>` or `PR does not link to card`.
 
-### 8. Commits hygiene
+## 8. Commits hygiene
 
 ```bash
-cd <worktree>
 git log --format="%H%n%s%n%b%n---" origin/main..HEAD
 ```
 
 For each commit:
 - Subject ≤72 chars.
-- Subject in imperative mood (Add X, Fix Y; not Added/Fixed).
-- Body (if present) wraps near 72 columns.
-- Footer line `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>` present.
+- Subject in imperative mood (Add X, Fix Y; not Added / Fixed).
+- Body, if present, wraps near 72 columns.
+- Footer
+  `Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>`
+  present.
 
-Gap form: `Commit <short-sha>: <specific violation>`.
+Gap: `Commit <short-sha>: <specific violation>`.
 
-## After checks
+# Output contract
 
-Return:
-- `gaps[]` — list of strings, each one full gap entry from the checks above.
-- `gaps_summary` — one-line `; `-joined short forms (e.g.,
-  `"Files: X missing; Clippy: 2 warnings; Commits: abc1234 no footer"`).
+`stdout` must contain exactly one line: a single-line JSON object with
+two keys and nothing else:
 
-Empty `gaps[]` means acceptance passes — the orchestrator proceeds to the
-auto-merge decision.
+```
+{"gaps":["<gap 1>","<gap 2>",...],"gaps_summary":"<short form>; <short form>; ..."}
+```
 
-## Diagnostic tips (not gaps)
+- `gaps` — array of full gap strings from the checks above. Empty array
+  means acceptance passes.
+- `gaps_summary` — one-line `; `-joined short forms (e.g.
+  `"Files: queries.rs missing; Clippy: 2 warnings; Commits: abc1234 no footer"`)
+  used by meta for the audit comment and session-log. `""` when
+  `gaps` is empty.
 
-These are not gaps, but worth noting in the audit comment if observed:
+Exit `0` regardless of whether `gaps` is empty — empty `gaps` is the
+"pass" signal, not the exit code. Exit `2` only if you could not run
+the checks (e.g., worktree missing, `git` failed before you started).
+On exit 2, emit `BLOCKED: <reason>` per the formatting role instead of
+the JSON line.
 
-- Test command from the plan does not exist yet (no `tests/` for that crate)
-  — gap, but the framing should suggest extending the plan, not just
-  retrying.
-- All tests pass but coverage of the new code is suspiciously low (e.g.,
-  no test touches the new code path) — not auto-flagged in v1; relies on
-  the human reviewer at `Review`.
-- Worker fixed the gap but introduced a different issue in a way that
-  acceptance passes — same: not auto-flagged. Human catches at Review.
+Do NOT post to Trello, do NOT comment on the PR, do NOT push or merge.
+Meta handles all card / PR / merge operations based on your verdict.
+
+# Diagnostic tips (not gaps)
+
+These are not gaps, but worth noting in the audit comment if observed
+(meta will pick them up from your stderr, not stdout):
+
+- Test command from the plan does not exist yet — frame the gap so it
+  suggests extending the plan, not just retrying.
+- All tests pass but coverage of the new code is suspiciously low —
+  not auto-flagged in v1; relies on the human at Review.
+- Worker fixed the gap but introduced a different issue that
+  acceptance happens to pass — not auto-flagged. Human catches at
+  Review.
 
 The acceptance check is a hygiene gate, not a code review. Auto-merge
-trusts it; for everything else, the `Review` column exists.
+trusts your verdict; for everything else the `Review` column exists.
