@@ -9,8 +9,7 @@ use rmcp::{
     model::{
         CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
     },
-    tool, tool_handler, tool_router,
-    ErrorData as McpError, ServerHandler,
+    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -107,9 +106,8 @@ fn clamp(v: Option<i64>, default: i64, max: i64) -> i64 {
 }
 
 fn json_result<T: Serialize>(value: &T) -> Result<CallToolResult, McpError> {
-    let text = serde_json::to_string_pretty(value).map_err(|e| {
-        McpError::internal_error(format!("serialize: {e}"), None)
-    })?;
+    let text = serde_json::to_string_pretty(value)
+        .map_err(|e| McpError::internal_error(format!("serialize: {e}"), None))?;
     Ok(CallToolResult::success(vec![Content::text(text)]))
 }
 
@@ -176,10 +174,7 @@ impl GilbService {
         Parameters(args): Parameters<ListAppsArgs>,
     ) -> Result<CallToolResult, McpError> {
         let limit = clamp(args.limit, 20, 200);
-        let range = args
-            .range
-            .unwrap_or_default()
-            .resolve(Duration::hours(24));
+        let range = args.range.unwrap_or_default().resolve(Duration::hours(24));
         let rows = queries::list_apps(&self.db, range, limit)
             .await
             .map_err(db_err)?;
@@ -216,10 +211,7 @@ impl GilbService {
         Parameters(args): Parameters<SearchActionsArgs>,
     ) -> Result<CallToolResult, McpError> {
         let limit = clamp(args.limit, 100, 500);
-        let range = args
-            .range
-            .unwrap_or_default()
-            .resolve(Duration::hours(24));
+        let range = args.range.unwrap_or_default().resolve(Duration::hours(24));
         let rows = queries::search_actions(
             &self.db,
             &args.q,
@@ -268,20 +260,18 @@ impl GilbService {
 #[tool_handler]
 impl ServerHandler for GilbService {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder().enable_tools().build(),
-        )
-        .with_server_info(Implementation::new(
-            env!("CARGO_PKG_NAME"),
-            env!("CARGO_PKG_VERSION"),
-        ))
-        .with_protocol_version(ProtocolVersion::V_2024_11_05)
-        .with_instructions(
-            "gilb-mcp exposes the user's recorded activity (keystrokes, clicks, \
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_server_info(Implementation::new(
+                env!("CARGO_PKG_NAME"),
+                env!("CARGO_PKG_VERSION"),
+            ))
+            .with_protocol_version(ProtocolVersion::V_2024_11_05)
+            .with_instructions(
+                "gilb-mcp exposes the user's recorded activity (keystrokes, clicks, \
              clipboard, focus changes, etc.) from a local SQLite database. \
              Call `gilb_help` first for a description of the schema and the \
              other available tools."
-                .to_string(),
-        )
+                    .to_string(),
+            )
     }
 }

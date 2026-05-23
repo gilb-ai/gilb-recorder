@@ -38,7 +38,9 @@ impl TimeRange {
     pub fn resolve(&self, default_lookback: chrono::Duration) -> ResolvedRange {
         let to = self.to.unwrap_or_else(Utc::now);
         let from = if let Some(s) = self.last.as_deref() {
-            parse_lookback(s).map(|d| to - d).unwrap_or_else(|| to - default_lookback)
+            parse_lookback(s)
+                .map(|d| to - d)
+                .unwrap_or_else(|| to - default_lookback)
         } else {
             self.from.unwrap_or(to - default_lookback)
         };
@@ -62,14 +64,20 @@ fn parse_lookback(s: &str) -> Option<chrono::Duration> {
     if s == "today" {
         let now = Local::now();
         let midnight = now.date_naive().and_time(NaiveTime::MIN);
-        let from = midnight.and_local_timezone(Local).single()?.with_timezone(&Utc);
+        let from = midnight
+            .and_local_timezone(Local)
+            .single()?
+            .with_timezone(&Utc);
         return Some(Utc::now() - from);
     }
     if s == "yesterday" {
         // From midnight yesterday (local) to now.
         let now = Local::now();
         let yesterday = now.date_naive().pred_opt()?.and_time(NaiveTime::MIN);
-        let from = yesterday.and_local_timezone(Local).single()?.with_timezone(&Utc);
+        let from = yesterday
+            .and_local_timezone(Local)
+            .single()?
+            .with_timezone(&Utc);
         return Some(Utc::now() - from);
     }
 
