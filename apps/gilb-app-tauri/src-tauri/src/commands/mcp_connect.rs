@@ -115,23 +115,25 @@ fn probe_claude_code() -> ClientStatus {
         id: "claude_code".into(),
         label: "Claude Code".into(),
         available,
-        hint: if available {
-            Some("Will run `claude mcp add` for the user scope.".into())
-        } else {
-            Some("`claude` CLI not found in PATH — install Claude Code first.".into())
-        },
+        hint: Some(
+            if available {
+                "Runs `claude mcp add`."
+            } else {
+                "`claude` CLI not in PATH."
+            }
+            .into(),
+        ),
     }
 }
 
 fn probe_claude_desktop() -> ClientStatus {
     let path = claude_desktop_config_path();
     let available = path.as_ref().map(|p| p.parent().map(|d| d.exists()).unwrap_or(false)).unwrap_or(false);
-    let hint = path.as_ref().map(|p| format!("Will edit {}.", p.display()));
     ClientStatus {
         id: "claude_desktop".into(),
         label: "Claude Desktop".into(),
         available,
-        hint,
+        hint: Some("Edits `claude_desktop_config.json`.".into()),
     }
 }
 
@@ -141,7 +143,7 @@ fn probe_cursor() -> ClientStatus {
         id: "cursor".into(),
         label: "Cursor".into(),
         available: true,
-        hint: Some("Opens a `cursor://…` deeplink; Cursor will prompt to confirm.".into()),
+        hint: Some("Opens an install deeplink.".into()),
     }
 }
 
@@ -215,12 +217,10 @@ fn connect_claude_desktop(binary: &str) -> Result<ConnectOutcome, String> {
         .map_err(|e| format!("serialize config: {e}"))?;
     std::fs::write(&path, pretty)
         .map_err(|e| format!("write {}: {e}", path.display()))?;
+    tracing::info!(config = %path.display(), "claude-desktop config updated");
 
     Ok(ConnectOutcome::Installed {
-        details: format!(
-            "Wrote {}.\nRestart Claude Desktop for the changes to take effect.",
-            path.display()
-        ),
+        details: "Restart Claude Desktop to apply.".into(),
     })
 }
 

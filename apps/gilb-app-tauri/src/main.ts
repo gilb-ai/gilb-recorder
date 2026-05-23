@@ -188,13 +188,6 @@ function closeMcpModal() {
 }
 
 function renderMcpModal(info: McpServerInfo) {
-  const pathEl = $("mcp-binary-path");
-  if (pathEl) {
-    pathEl.textContent = info.binary_path
-      ? `Binary: ${info.binary_path}`
-      : "Binary: gilb-mcp не найден — соберите `cargo build --release -p gilb-mcp`.";
-  }
-
   const list = $<HTMLUListElement>("mcp-clients");
   if (list) {
     list.innerHTML = "";
@@ -205,6 +198,10 @@ function renderMcpModal(info: McpServerInfo) {
 
   const json = $("mcp-other-json");
   if (json) json.textContent = info.config_json;
+
+  if (!info.binary_path) {
+    setMcpResult("gilb-mcp binary not found.", "error");
+  }
 }
 
 function renderClientRow(client: McpClientStatus, binaryMissing: boolean): HTMLLIElement {
@@ -235,13 +232,13 @@ function renderClientRow(client: McpClientStatus, binaryMissing: boolean): HTMLL
 }
 
 async function connectClient(clientId: string) {
-  setMcpResult("Подключаем…");
+  setMcpResult("Connecting…");
   try {
     const outcome = await invoke<ConnectOutcome>("mcp_connect", { client: clientId });
     if (outcome.kind === "installed") {
       setMcpResult(`✓ ${outcome.details}`);
     } else if (outcome.kind === "opened_deeplink") {
-      setMcpResult("Открыт deeplink — подтвердите установку в клиенте.");
+      setMcpResult("Opened deeplink — confirm in your client.");
     } else if (outcome.kind === "needs_manual") {
       setMcpResult(outcome.hint, "error");
     }
@@ -254,9 +251,9 @@ async function copyMcpJson() {
   const json = $("mcp-other-json")?.textContent || "";
   try {
     await navigator.clipboard.writeText(json);
-    setMcpResult("✓ JSON скопирован в буфер обмена.");
+    setMcpResult("✓ Copied to clipboard.");
   } catch (err) {
-    setMcpResult(`Не удалось скопировать: ${String(err)}`, "error");
+    setMcpResult(`Copy failed: ${String(err)}`, "error");
   }
 }
 
