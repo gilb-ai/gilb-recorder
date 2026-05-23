@@ -36,6 +36,10 @@ Before deciding, verify the relevant slice of the repo:
   …) — glance at its `Cargo.toml` and `src/` layout.
 - If the task references a phase from `tauri-plan.md` (Phase 0, Phase 3,
   …) — find that phase and understand its pre-conditions.
+- If the task touches the Tauri frontend — paths under
+  `apps/gilb-app-tauri/src/`, `index.html`, any `.css` / `.ts` / `.tsx`
+  / `.jsx` file — read `.claude/prompts/ui-design.md` BEFORE writing
+  the PLAN, and cite it explicitly in the PLAN's `## Approach`.
 
 Stop when you've verified:
 - Files you'll reference in the plan exist (or are explicitly new).
