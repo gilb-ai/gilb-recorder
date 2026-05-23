@@ -9,9 +9,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
   style of recent commits (terse subject ≤72 chars, body wraps ~72 cols).
 - **All user-visible strings are in English**: HTML, TypeScript messages,
   Rust dialog/error text, Info.plist usage descriptions, plugin READMEs.
-- Project planning docs (`plan.md`, `spec.md`, `tauri-plan.md`,
-  `research/*.md`) and conversational chat with the user remain Russian by
-  preference.
+- **Operational docs in English** (anything the meta-agent or worker reads
+  as instructions): `trello-workflow.md`, `.claude/commands/*.md`,
+  `.claude/trello.json` keys.
+- **Project planning docs in Russian** (`plan.md`, `spec.md`, `tauri-plan.md`,
+  `research/*.md`) and **conversational chat with the user** remain Russian
+  by preference.
 
 # Gilb (Gilbreth)
 
@@ -33,6 +36,10 @@ Desktop-приложение, которое записывает действи
 - `tauri-plan.md` — пофазовый план (Phase 0 → Phase 7 gate).
 - `research/` — разбор reference-проектов и рекомендации по Layer 1
   (особенно `05-gilb-recommendations.md`, `06-layer1-capture-quality.md`).
+- `trello-workflow.md` (English) — Trello-based task workflow: 9-column
+  board, `/check-trello` triage, `/run-trello` execution with iteration
+  loop + auto-merge, PLAN/QUESTIONS comment format, knowledge sources.
+  Read when working on cards from Trello or modifying the workflow.
 
 Перед нетривиальными изменениями архитектуры сверяйся с этими тремя
 файлами — в них уже зафиксированы решения, которые иначе придётся
@@ -146,6 +153,11 @@ audio_*) добавляются миграциями в Phase 8+, **не** за�
   (см. `.gitignore`). Каждая подпапка обычно сама по себе git-репозиторий
   (клон upstream'а).
 - `.zenflow/` — рабочее состояние zenflow (не коммитится).
+- `.gilb/` — runtime state Trello-workflow (`session-log.md`, etc.); не
+  коммитится. Подробности — в `trello-workflow.md`.
+- `.claude/` — конфиг и slash-команды для Claude Code (Trello-workflow):
+  `trello.json`, `commands/check-trello.md`, `commands/run-trello.md`.
+  Коммитится (board IDs публичные).
 
 ## Работа с `reference/`
 

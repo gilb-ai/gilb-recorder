@@ -26,3 +26,6 @@ Thumbs.db
 
 # Local DB
 ~/.gilb/
+
+# Trello-workflow runtime state (session-log, worker logs, worktrees)
+.gilb/
