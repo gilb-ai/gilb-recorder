@@ -98,7 +98,42 @@ a plan. Signs of "too big":
 
 ### F. Decide outcome
 
-One of three:
+First check SPLIT (F1). Otherwise walk the gaps from step D:
+
+- **No gaps** → take F3 PLAN.
+- **Some gaps, but every one is auto-answerable** per the policy below → take
+  F3 PLAN, prefacing it with one `[meta] ASSUMED` comment per gap so the
+  audit trail records each guess.
+- **Any gap is NOT auto-answerable** → take F2 QUESTIONS for all gaps (don't
+  mix; partial auto-answers fragment the audit and the human has to read both
+  branches).
+
+#### Auto-answer policy
+
+Apply ALL four conditions per gap. If any fails, the gap is not
+auto-answerable and the whole card goes F2 QUESTIONS.
+
+1. **Category is on the safe list.** Auto-answerable: `Where`, `Verify`,
+   `Edge`, `Scope` (boundary, i.e. what's NOT in scope; not "Scope is too
+   broad — split it"). Not auto-answerable: `What` (epic-shaping product
+   call), `Why` (motivation/incident), `Dependencies` (cross-card
+   coordination), `Size` when it implies SPLIT.
+2. **Personal confidence on the answer is ≥ 8/10** AND the resulting PLAN's
+   overall Confidence stays ≥ 7. If guessing forces overall confidence to 7
+   only by stretching, drop to QUESTIONS — the threshold is "I'd defend this
+   in code review", not "it's probably fine".
+3. **The guess is reversible in one follow-up PR.** Reversible: a file-path
+   choice, a test-command shape, a default value, a state-machine variant
+   name. NOT reversible without serious churn: a schema/migration shape, a
+   public API contract (trait signature, wire format), a dependency or
+   crate choice that pulls in transitive deps, a UI palette / typography
+   pick. Use the rule "if I'm wrong, can a follow-up PR fix it without a
+   migration?" — if no, that's an F2 question.
+4. **Cap: ≤2 auto-answers per card.** Three or more guesses on one card is
+   substantial accumulated uncertainty; route to F2 QUESTIONS instead so
+   the human weighs in once before all the choices compound.
+
+#### Outcomes
 
 **F1. SPLIT** — too big for one card.
 
@@ -125,7 +160,7 @@ Do not create or archive cards yourself in this step. The split-execution
 phase of `/trello-check` handles that when it sees the confirmation
 phrase.
 
-**F2. QUESTIONS** — real gaps need a human.
+**F2. QUESTIONS** — at least one gap is not auto-answerable.
 
 Comment in card (orchestrator moves to `Human Questions`):
 
@@ -142,16 +177,32 @@ I cannot produce a plan without these answers — skipping this card.
 
 Categories from step D table: `What`, `Where`, `Why`, `Verify`, `Scope`,
 `Dependencies`, `Edge`, `Size`. Tag each question so the human grasps the
-gap type quickly.
+gap type quickly. Include every gap from this card here — don't mix with
+auto-answers (see the rule at the top of step F).
 
-**F3. PLAN** — everything clear.
+**F3. PLAN** — everything clear, OR every gap was auto-answerable.
 
 Produce a `[meta] PLAN` comment following the canonical format and
 self-check in `plan-format.md`. The orchestrator moves the card to `Plan
 Proposed`.
 
-If self-check fails (especially Confidence < 7) → downgrade to F2
-QUESTIONS instead.
+If any gap was auto-answered, post one `[meta] ASSUMED` comment per gap
+BEFORE the PLAN comment (so they appear above PLAN in the card's
+chronological view):
+
+```
+[meta] ASSUMED (gap: <category>)
+
+Answer: <one-line specific choice>
+Reasoning: <one-to-two lines on why this default is safe — cite file paths or
+research docs when relevant>
+Override: comment with the alternative and move the card back to Backlog;
+the next /trello-check will re-evaluate.
+```
+
+If self-check fails (especially overall Confidence < 7) → downgrade the
+whole card to F2 QUESTIONS instead, including any gaps you'd planned to
+auto-answer.
 
 ## Edge cases
 
