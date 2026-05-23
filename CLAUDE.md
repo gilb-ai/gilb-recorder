@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Conventions
+
+- **All git commit messages are in English** (subject + body). This is
+  retroactive: existing history has been rewritten to English. Match the
+  style of recent commits (terse subject ≤72 chars, body wraps ~72 cols).
+- **All user-visible strings are in English**: HTML, TypeScript messages,
+  Rust dialog/error text, Info.plist usage descriptions, plugin READMEs.
+- Project planning docs (`plan.md`, `spec.md`, `tauri-plan.md`,
+  `research/*.md`) and conversational chat with the user remain Russian by
+  preference.
+
 # Gilb (Gilbreth)
 
 Desktop-приложение, которое записывает действия пользователя через accessibility API
