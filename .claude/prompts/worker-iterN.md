@@ -25,6 +25,35 @@ gaps listed below.
 
 <PLAN-comment>
 
+# Worktree state check (FIRST, before any edits)
+
+Before touching anything, run:
+
+```bash
+git status --short
+git log -5 --oneline
+```
+
+The expected state at the start of iteration <iter>:
+- HEAD is on branch `<branch>` with the iter <iter-1> commits from
+  the previous worker run.
+- Working tree is clean (no `M`, `A`, `D`, `??` lines from
+  `git status --short`).
+
+If you find unexpected uncommitted changes, files at paths you did
+not touch, or HEAD on a different branch, STOP. Do NOT
+`git reset --hard`, do NOT `git stash`, do NOT `git checkout --`.
+Those changes likely came from a human inspecting / fixing the
+worktree between iterations, and discarding them would destroy work.
+
+Emit:
+
+    BLOCKED: unexpected worktree state — <one-line summary of what you found>
+
+per the formatting role and exit 2. Meta will surface this on the
+Trello card and the human can decide whether to keep their changes,
+discard them, or restart the iteration.
+
 # What to fix (gaps from meta)
 
 <gaps-list>
