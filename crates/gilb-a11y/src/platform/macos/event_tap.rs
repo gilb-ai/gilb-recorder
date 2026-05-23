@@ -147,7 +147,7 @@ fn run_thread(
         Ok(t) => t,
         Err(_) => {
             let _ = ready_tx.send(Err(
-                "CGEventTap::new failed (Input Monitoring not granted?)".into()
+                "CGEventTap::new failed (Input Monitoring not granted?)".into(),
             ));
             return;
         }
@@ -182,8 +182,7 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
     let flags = event.get_flags().bits();
     let raw = match etype {
         CGEventType::KeyDown => {
-            let keycode =
-                event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+            let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             let text = extract_unicode(event);
             RawEvent::KeyDown {
                 keycode,
@@ -192,13 +191,10 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
             }
         }
         CGEventType::FlagsChanged => {
-            let keycode =
-                event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+            let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             RawEvent::FlagsChanged { keycode, flags }
         }
-        CGEventType::LeftMouseDown
-        | CGEventType::RightMouseDown
-        | CGEventType::OtherMouseDown => {
+        CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
             let p = event.location();
             let button = match etype {
                 CGEventType::LeftMouseDown => MouseButton::Left,

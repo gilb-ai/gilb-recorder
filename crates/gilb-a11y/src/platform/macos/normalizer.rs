@@ -27,9 +27,7 @@ use gilb_config::RecordingSettings;
 use gilb_core::{Action, ActionKind, AppInfo, ElementContext, SessionId};
 use gilb_events::{EventBus, HealthEvent};
 
-use crate::password_masking::{
-    is_excluded_app, is_password_field, is_secure_role, redact_pii,
-};
+use crate::password_masking::{is_excluded_app, is_password_field, is_secure_role, redact_pii};
 use crate::text_buffer::{FlushReason, FlushedText, TextBuffer};
 
 use super::ax_worker::{AxJob, AxWorker};
@@ -62,12 +60,10 @@ impl Normalizer {
         // Prime focus once so the first event already carries app context.
         self.focus.update_app(frontmost_app());
 
-        let mut focus_tick =
-            tokio::time::interval(Duration::from_millis(500));
+        let mut focus_tick = tokio::time::interval(Duration::from_millis(500));
         focus_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
-        let mut text_tick =
-            tokio::time::interval(Duration::from_millis(100));
+        let mut text_tick = tokio::time::interval(Duration::from_millis(100));
         text_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         let mut drops_since_report: u64 = 0;
@@ -121,12 +117,7 @@ impl Normalizer {
         }
     }
 
-    async fn handle_raw(
-        &self,
-        ev: RawEvent,
-        buffer: &mut TextBuffer,
-        drops: &mut u64,
-    ) {
+    async fn handle_raw(&self, ev: RawEvent, buffer: &mut TextBuffer, drops: &mut u64) {
         let snap = self.focus.current();
         if let Some(bid) = snap.app.bundle_id.as_deref() {
             if is_excluded_app(bid) {
@@ -264,12 +255,7 @@ impl Normalizer {
         self.emit_lossy(action, drops);
     }
 
-    async fn emit_key(
-        &self,
-        special: SpecialKey,
-        snap: &FocusSnapshot,
-        drops: &mut u64,
-    ) {
+    async fn emit_key(&self, special: SpecialKey, snap: &FocusSnapshot, drops: &mut u64) {
         let action = Action {
             session_id: self.session_id,
             captured_at: Utc::now(),
@@ -289,13 +275,7 @@ impl Normalizer {
         self.emit_lossy(action, drops);
     }
 
-    async fn emit_scroll(
-        &self,
-        dx: i64,
-        dy: i64,
-        snap: &FocusSnapshot,
-        drops: &mut u64,
-    ) {
+    async fn emit_scroll(&self, dx: i64, dy: i64, snap: &FocusSnapshot, drops: &mut u64) {
         let action = Action {
             session_id: self.session_id,
             captured_at: Utc::now(),

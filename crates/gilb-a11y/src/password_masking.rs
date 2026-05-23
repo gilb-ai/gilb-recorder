@@ -19,9 +19,20 @@ pub const EXCLUDED_BUNDLE_IDS: &[&str] = &[
 
 /// Lowercase substrings that mark an element / field name as password-like.
 pub const PASSWORD_NAME_SUBSTRINGS: &[&str] = &[
-    "password", "passwd", "passphrase", "secret", "pin code", "pincode",
-    "cvv", "cvc", "security code", "card number", "credit card", "token",
-    "api key", "private key",
+    "password",
+    "passwd",
+    "passphrase",
+    "secret",
+    "pin code",
+    "pincode",
+    "cvv",
+    "cvc",
+    "security code",
+    "card number",
+    "credit card",
+    "token",
+    "api key",
+    "private key",
 ];
 
 /// AX role identifying a secure (masked) text field.
