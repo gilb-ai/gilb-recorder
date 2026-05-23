@@ -277,17 +277,28 @@ In-memory state for this card:
 
 Log path: `<worker_log_dir>/<card-short>-iter<iter>.log`.
 
-Build the worker prompt from the template:
-- `iter == 1` → `.claude/prompts/worker-iter1.md`, substitute `<card-url>`,
-  `<branch>`, `<PLAN-comment>` placeholders.
-- `iter > 1` → `.claude/prompts/worker-iterN.md`, substitute `<card-url>`,
-  `<iter>`, `<MAX_ITER>`, `<pr_url>`, `<branch>`, `<PLAN-comment>`,
-  `<gaps-list>` (from previous iteration's audit comment).
+Build the worker prompt by concatenating role blocks with the
+iteration-specific template body, in this order:
+
+1. `.claude/prompts/roles/engineering.md`
+2. `.claude/prompts/roles/formatting.md`
+3. The iteration body:
+   - `iter == 1` → `.claude/prompts/worker-iter1.md`, substitute
+     `<card-url>`, `<branch>`, `<PLAN-comment>` placeholders.
+   - `iter > 1` → `.claude/prompts/worker-iterN.md`, substitute
+     `<card-url>`, `<iter>`, `<MAX_ITER>`, `<pr_url>`, `<branch>`,
+     `<PLAN-comment>`, `<gaps-list>` (from previous iteration's
+     audit comment).
+
+The role files are appended verbatim (no placeholder substitution);
+only the body has placeholders. If any role file is missing → stop
+with `Role prompt file missing: <path>`. Do not inline a fallback.
 
 Spawn:
 ```bash
 cd <worktree-path>
-claude -p "<prompt>" --output-format text > <log> 2>&1
+claude -p "<prompt>" --dangerously-skip-permissions \
+  --output-format text > <log> 2>&1
 EXIT=$?
 ```
 
@@ -492,6 +503,7 @@ visibility into in-flight work). Then the terminal event (`MERGED` /
 | Auto-merge succeeds but card move to Done fails | Comment in card that merge happened; chat error. Manual card move. |
 | `gh pr merge` fails (branch protection, conflicts) | Treat as auto-merge blocker; move to Review with `gh` error in comment. |
 | Worker prompt template file (`worker-iter1.md`, `worker-iterN.md`) missing | Stop. Don't inline a fallback. |
+| Role prompt file (`roles/engineering.md`, `roles/formatting.md`) missing | Stop with `Role prompt file missing: <path>`. Don't inline a fallback. |
 | `acceptance-check.md` missing | Stop. Don't skip acceptance. |
 | `<card-ref>` not in `Ready for AI` | Exit early per Invocation rules; no state change. |
 | `<card-ref>` resolves to no card on the board | Exit with `Card <ref> not found on board.` |
