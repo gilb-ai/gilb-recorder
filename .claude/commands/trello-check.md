@@ -91,8 +91,14 @@ For each Backlog card **sequentially**:
 3. Apply the procedure in `.claude/prompts/card-eval.md`. It returns:
    - `outcome` ∈ {`PLAN`, `QUESTIONS`, `SPLIT`}
    - `comment_body` (already formatted, including `[meta] ` prefix)
+   - `assumed[]` (only for `PLAN` taken via the auto-answer fast-path per
+     card-eval.md step F): an ordered list of `[meta] ASSUMED` comment
+     bodies, one per auto-answered gap. Empty for plain `PLAN`.
    - For `PLAN`: parsed metrics (confidence, value, risk, expected_iters, size)
-3. Post `comment_body` on the card via MCP.
+3. Post `comment_body` on the card via MCP. If the outcome carries
+   auto-answers (PLAN with one or more `[meta] ASSUMED` comments per
+   `card-eval.md` step F), post those ASSUMED comments FIRST, then the
+   PLAN, so the chronological view reads top-down.
 4. Move the card to the target column:
    - `PLAN` → `Plan Proposed`
    - `QUESTIONS` → `Human Questions`
@@ -103,6 +109,8 @@ For each Backlog card **sequentially**:
    ```
    Where EVENT and summary by outcome:
    - PLAN: `TRIAGED→PLAN | conf=<N> risk=<low|med|high> size=<S|M|L>: <terse description>`
+     Append ` [assumed=<N>: <categories>]` when one or more gaps were
+     auto-answered, e.g. `... size=S: feature flag default for X [assumed=2: Where, Verify]`.
    - QUESTIONS: `TRIAGED→QUESTIONS | <gap categories, e.g. "What, Scope">`
    - SPLIT: `TRIAGED→SPLIT | <N> proposed sub-cards`
 
