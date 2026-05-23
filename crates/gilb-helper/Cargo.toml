@@ -1,0 +1,23 @@
+[package]
+name = "gilb-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+interprocess = { workspace = true }
+anyhow = { workspace = true }
+gilb-config = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+rmp-serde = { workspace = true }
+interprocess = { workspace = true }
+anyhow = { workspace = true }
