@@ -207,6 +207,7 @@ pub async fn list_apps(db: &SqlitePool, range: ResolvedRange, limit: i64) -> Res
 #[derive(Debug, Clone, Serialize)]
 pub struct ActionRow {
     pub id: i64,
+    pub session_id: i64,
     pub captured_at: String,
     pub kind: String,
     pub app_name: Option<String>,
@@ -228,6 +229,7 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
     let pwd: i64 = r.get("password_flag");
     ActionRow {
         id: r.get("id"),
+        session_id: r.get("session_id"),
         captured_at: r.get("captured_at"),
         kind: r.get("kind"),
         app_name: r.try_get("app_name").ok(),
@@ -247,7 +249,7 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
 /// `password_flag = 1`. The masking happens column-side, so even ill-behaved
 /// callers can't read the underlying text.
 const ACTION_COLUMNS: &str = r#"
-    id, captured_at, kind, app_bundle_id, app_name, window_title, browser_url,
+    id, session_id, captured_at, kind, app_bundle_id, app_name, window_title, browser_url,
     element_role, element_name,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE element_value END AS element_value,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE text_content  END AS text_content,

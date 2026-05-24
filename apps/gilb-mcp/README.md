@@ -64,7 +64,7 @@ For interactive exploration: `npx @modelcontextprotocol/inspector
 
 ## Tool surface (v0)
 
-8 tools, all read-only:
+10 tools, all read-only:
 
 | Tool | Description |
 |---|---|
@@ -75,6 +75,8 @@ For interactive exploration: `npx @modelcontextprotocol/inspector
 | `gilb_recent_actions` | Timeline of last N actions (default: 10 min) |
 | `gilb_search_actions` | LIKE substring search |
 | `gilb_activity_summary` | Aggregated overview for a range |
+| `gilb_list_tree_snapshots` | a11y tree snapshot metadata (id, app, browser_url, simhash, json_bytes) |
+| `gilb_get_tree_snapshot` | Full AX tree (parsed JSON) for one snapshot id |
 | `gilb_list_health_events` | Capture diagnostics |
 
 See `help.md` for query examples and the `range` parameter format.
@@ -91,5 +93,4 @@ file.
 - FTS5-backed search (lands when the `actions_fts` migration is applied)
 - Write tools (pause capture, delete actions) — would need cooperation with
   the running gilb-app
-- `gilb_get_tree_snapshot` — when tree snapshots start populating
 - Sidecar bundling inside `.app` — separate concern, see project plan

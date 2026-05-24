@@ -7,6 +7,9 @@ activity log. Each captured action is one row.
 
 The main table is `actions`. One row per atomic user action:
 
+- `id` — primary key (i64). Stable across reads.
+- `session_id` — FK to `sessions.id`. Group by this to scope queries
+  to one Start → Stop recording.
 - `captured_at` — ISO 8601 UTC timestamp (e.g. `2026-05-22T22:04:35.802740Z`)
 - `kind` — one of:
   - `click` — mouse button down. Has `element_role`, `element_name`,
