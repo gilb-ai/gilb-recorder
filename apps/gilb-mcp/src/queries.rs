@@ -423,6 +423,102 @@ pub async fn activity_summary(db: &SqlitePool, range: ResolvedRange) -> Result<A
     })
 }
 
+// ---------- tree snapshots ---------------------------------------------
+
+/// Lightweight `tree_snapshots` row — everything except `root_json`. Use
+/// `get_tree_snapshot` to fetch the full tree for a single id.
+#[derive(Debug, Clone, Serialize)]
+pub struct TreeSnapshotMeta {
+    pub id: i64,
+    pub session_id: i64,
+    pub captured_at: String,
+    pub app_bundle_id: Option<String>,
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
+    pub simhash: i64,
+    pub json_bytes: i64,
+}
+
+fn row_to_snapshot_meta(r: sqlx::sqlite::SqliteRow) -> TreeSnapshotMeta {
+    TreeSnapshotMeta {
+        id: r.get("id"),
+        session_id: r.get("session_id"),
+        captured_at: r.get("captured_at"),
+        app_bundle_id: r.try_get("app_bundle_id").ok(),
+        app_name: r.try_get("app_name").ok(),
+        window_title: r.try_get("window_title").ok(),
+        browser_url: r.try_get("browser_url").ok(),
+        simhash: r.get("simhash"),
+        json_bytes: r.get("json_bytes"),
+    }
+}
+
+pub async fn list_tree_snapshots(
+    db: &SqlitePool,
+    range: ResolvedRange,
+    app: Option<&str>,
+    limit: i64,
+) -> Result<Vec<TreeSnapshotMeta>> {
+    let (from, to) = range.as_strings();
+    let rows = sqlx::query(
+        r#"
+        SELECT
+          id, session_id, captured_at, app_bundle_id, app_name,
+          window_title, browser_url, simhash,
+          length(root_json) AS json_bytes
+        FROM tree_snapshots
+        WHERE captured_at >= ?1 AND captured_at < ?2
+          AND (?3 IS NULL OR app_name = ?3 OR app_bundle_id = ?3)
+        ORDER BY captured_at DESC
+        LIMIT ?4
+        "#,
+    )
+    .bind(from)
+    .bind(to)
+    .bind(app)
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+    Ok(rows.into_iter().map(row_to_snapshot_meta).collect())
+}
+
+/// Full snapshot with `root_json` already parsed into a JSON value so the
+/// LLM doesn't have to re-parse a stringified blob.
+#[derive(Debug, Clone, Serialize)]
+pub struct TreeSnapshotFull {
+    #[serde(flatten)]
+    pub meta: TreeSnapshotMeta,
+    pub root: serde_json::Value,
+}
+
+pub async fn get_tree_snapshot(db: &SqlitePool, id: i64) -> Result<Option<TreeSnapshotFull>> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+          id, session_id, captured_at, app_bundle_id, app_name,
+          window_title, browser_url, simhash,
+          length(root_json) AS json_bytes,
+          root_json
+        FROM tree_snapshots
+        WHERE id = ?1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(db)
+    .await?;
+    let Some(row) = row else { return Ok(None) };
+
+    let root_text: String = row.get("root_json");
+    let root: serde_json::Value =
+        serde_json::from_str(&root_text).unwrap_or_else(|_| serde_json::Value::String(root_text));
+    Ok(Some(TreeSnapshotFull {
+        meta: row_to_snapshot_meta(row),
+        root,
+    }))
+}
+
 // ---------- health events ----------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]

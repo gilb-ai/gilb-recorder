@@ -29,8 +29,20 @@ The main table is `actions`. One row per atomic user action:
 - `text_content`, `element_value` — **already replaced with `'[masked]'`**
   when `password_flag = true`. Do not try to recover masked content.
 
-Other tables: `sessions` (Start → Stop boundaries), `health_events` (capture
-diagnostics: dropped events, sleep/wake, AX timeouts).
+Other tables:
+
+- `sessions` — Start → Stop boundaries.
+- `health_events` — capture diagnostics (dropped events, sleep/wake, AX
+  timeouts).
+- `tree_snapshots` — one row per focused-window change that the
+  snapshotter decided was substantively different (SimHash-deduped) from
+  the previous one. Captures the AX tree of the focused window as a JSON
+  blob (`role`/`name`/`value`/`depth` per node, depth- and node-bounded).
+  Correlate to `actions` by `(session_id, captured_at)` within a short
+  window. Useful when you need to know **what was on screen** at a
+  specific moment, not just what the user clicked. List metadata via
+  `gilb_list_tree_snapshots`, fetch one tree by id via
+  `gilb_get_tree_snapshot`.
 
 ## How to query
 
@@ -75,6 +87,8 @@ Units: `s`/`m`/`h`/`d`/`w`. If unset, each tool picks a sensible default
 | `gilb_recent_actions` | timeline of last N actions |
 | `gilb_search_actions` | LIKE substring search over text/element/window |
 | `gilb_activity_summary` | per-range aggregate: totals, per-kind, top apps, top text snippets |
+| `gilb_list_tree_snapshots` | a11y tree snapshots metadata (id, app, window, browser_url, simhash, json_bytes) |
+| `gilb_get_tree_snapshot` | full AX tree (parsed JSON) for one snapshot id |
 | `gilb_list_health_events` | diagnostic events (drops, sleep/wake) |
 
 ## Output format

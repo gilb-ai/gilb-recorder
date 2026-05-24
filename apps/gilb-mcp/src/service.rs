@@ -90,6 +90,26 @@ pub struct ActivitySummaryArgs {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct ListTreeSnapshotsArgs {
+    /// Time-window filter on `captured_at`. Default: last 24h.
+    #[serde(default)]
+    pub range: Option<TimeRange>,
+    /// Optional app filter (matches `app_name` or `app_bundle_id`).
+    #[serde(default)]
+    pub app: Option<String>,
+    /// Maximum rows (default 50, cap 500). `root_json` is NOT included —
+    /// each row carries `json_bytes` so callers can budget before fetching.
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct GetTreeSnapshotArgs {
+    /// `tree_snapshots.id` from a prior `gilb_list_tree_snapshots` call.
+    pub id: i64,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct ListHealthEventsArgs {
     /// Optional time-window filter on `captured_at`.
     #[serde(default)]
@@ -238,6 +258,46 @@ impl GilbService {
             .await
             .map_err(db_err)?;
         json_result(&summary)
+    }
+
+    #[tool(description = "\
+        List a11y tree snapshots in the time window — one row per focused-window \
+        change that the snapshotter decided was substantively different from \
+        its predecessor. Returns metadata only (id, app, window, browser_url, \
+        simhash, json_bytes); use `gilb_get_tree_snapshot` to fetch the full \
+        AX tree by id. Snapshots are the structural counterpart to `actions` \
+        — correlate by (session_id, captured_at) within a short window.")]
+    async fn gilb_list_tree_snapshots(
+        &self,
+        Parameters(args): Parameters<ListTreeSnapshotsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = clamp(args.limit, 50, 500);
+        let range = args.range.unwrap_or_default().resolve(Duration::hours(24));
+        let rows = queries::list_tree_snapshots(&self.db, range, args.app.as_deref(), limit)
+            .await
+            .map_err(db_err)?;
+        json_result(&rows)
+    }
+
+    #[tool(description = "\
+        Fetch one tree snapshot's full AX tree as parsed JSON. The tree is a \
+        list of nodes with role/name/value/depth — walk it to understand what \
+        was on screen at `captured_at`. Use sparingly: each snapshot can be \
+        tens-to-hundreds of KB.")]
+    async fn gilb_get_tree_snapshot(
+        &self,
+        Parameters(args): Parameters<GetTreeSnapshotArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match queries::get_tree_snapshot(&self.db, args.id)
+            .await
+            .map_err(db_err)?
+        {
+            Some(snap) => json_result(&snap),
+            None => Err(McpError::invalid_params(
+                format!("tree_snapshot {} not found", args.id),
+                None,
+            )),
+        }
     }
 
     #[tool(description = "\
