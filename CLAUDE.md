@@ -64,6 +64,10 @@ cargo fmt --all                            # format
 cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5
 cargo run -p gilb-a11y --bin gilb-a11y-cli -- --db /tmp/gilb.sqlite --seconds 10
 
+# MCP-сервер поверх записанной БД (stdio). Запускается Claude Code'ом,
+# но удобно проверять и вручную:
+cargo run -p gilb-mcp
+
 # Tauri (frontend + Rust shell). Запускать из apps/gilb-app-tauri.
 cd apps/gilb-app-tauri
 npm install                                # один раз
@@ -100,9 +104,22 @@ gilb-engine ─► все crates выше
               (Engine — длительный процесс-wide объект; владеет DB pool,
                EventBus, текущей CaptureSession; spawn'ит writer task)
 
+gilb-helper ─► gilb-config
+              (привилегированный демон поверх unix-socket IPC;
+               сейчас скелет — Ping/Pong handshake, rmp-serde фреймы)
+
+gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum
+               + in-memory MockDetector; нативные детекторы — позже.
+               Контракт событий — research/07-meeting-detection.md §5)
+
 apps/gilb-app-tauri/src-tauri ─► gilb-engine + gilb-config + gilb-events
               (Tauri commands: start_capture/stop_capture/status/
                open_privacy_pane; AppState держит Arc<Engine>)
+
+apps/gilb-mcp ─► gilb-core + gilb-config + gilb-db
+              (read-only MCP-сервер поверх ~/.gilb/db.sqlite, stdio
+               транспорт; набор gilb_* инструментов для Claude Code.
+               LLM-facing контракт — apps/gilb-mcp/help.md)
 ```
 
 Дополнительные дочерние линии:
@@ -138,11 +155,20 @@ Permission / health события идут параллельно через `E
 `spec.md §4`). Multimodal-таблицы (frames / elements / ocr_text /
 audio_*) добавляются миграциями в Phase 8+, **не** заводятся заранее.
 
+**Второй потребитель схемы — `apps/gilb-mcp`.** Он читает ту же
+`~/.gilb/db.sqlite` и отдаёт `gilb_*` инструменты Claude Code'у с
+зафиксированным пользовательским контрактом в `apps/gilb-mcp/help.md`
+(имена/семантика колонок `actions`, `kind`, маскирование паролей,
+`range` форматы). Любая миграция, меняющая форму `actions`,
+`sessions` или `health_events`, должна пройтись и по `gilb-mcp`
+(SQL запросы + `help.md`).
+
 ## Структура репо
 
 - `Cargo.toml` — workspace root (members = `apps/gilb-app-tauri/src-tauri`
-  + `crates/*`). Общие версии зависимостей — в `[workspace.dependencies]`,
-  каждый crate подтягивает их через `workspace = true`.
+  + `apps/gilb-mcp` + `crates/*`). Общие версии зависимостей — в
+  `[workspace.dependencies]`, каждый crate подтягивает их через
+  `workspace = true`.
 - `plan.md` — старый план разбора prior-art (см. также `research/`).
 - `tauri-plan.md` — текущий пофазовый план имплементации.
 - `spec.md` — целевая архитектура Tauri-проекта.
@@ -152,12 +178,13 @@ audio_*) добавляются миграциями в Phase 8+, **не** за�
   копируем подходы. **Не наш код**, **не коммитится**
   (см. `.gitignore`). Каждая подпапка обычно сама по себе git-репозиторий
   (клон upstream'а).
-- `.zenflow/` — рабочее состояние zenflow (не коммитится).
 - `.gilb/` — runtime state Trello-workflow (`session-log.md`, etc.); не
   коммитится. Подробности — в `trello-workflow.md`.
 - `.claude/` — конфиг и slash-команды для Claude Code (Trello-workflow):
-  `trello.json`, `commands/trello-check.md`, `commands/trello-run.md`.
-  Коммитится (board IDs публичные).
+  `trello.json` плюс `commands/{trello-check,trello-run,trello-normalize,trello-questions}.md`
+  (последняя — интерактивный Q&A meta-agent для карточек в `Human
+  Questions`; `trello-normalize` проставляет `[<prefix>-<idShort>]`
+  префиксы). Коммитится (board IDs публичные).
 
 ## Работа с `reference/`
 
