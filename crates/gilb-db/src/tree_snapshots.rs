@@ -16,8 +16,8 @@ pub async fn insert_tree_snapshot(db: &Db, snap: &TreeSnapshot) -> Result<TreeSn
         r#"
         INSERT INTO tree_snapshots (
             session_id, captured_at, app_bundle_id, app_name, window_title,
-            simhash, root_json
-        ) VALUES (?,?,?,?,?,?,?)
+            browser_url, simhash, root_json
+        ) VALUES (?,?,?,?,?,?,?,?)
         "#,
     )
     .bind(snap.session_id)
@@ -25,6 +25,7 @@ pub async fn insert_tree_snapshot(db: &Db, snap: &TreeSnapshot) -> Result<TreeSn
     .bind(&snap.app.bundle_id)
     .bind(&snap.app.name)
     .bind(&snap.app.window_title)
+    .bind(&snap.app.browser_url)
     .bind(snap.simhash)
     .bind(&snap.root_json)
     .execute(db)

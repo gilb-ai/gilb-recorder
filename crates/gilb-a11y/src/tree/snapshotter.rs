@@ -41,9 +41,17 @@ impl Snapshotter {
         let tokens = tokens(&nodes);
         let hash = simhash(&tokens);
         let app_key = app.bundle_id.as_deref().unwrap_or("-");
-        let window_key = app.window_title.as_deref().unwrap_or("-");
+        // SPA navigation keeps window_title stable across URL transitions, so
+        // the dedup key must include browser_url — otherwise two distinct
+        // Crunchbase company pages with the same tab title collide.
+        let window_key = match (app.window_title.as_deref(), app.browser_url.as_deref()) {
+            (Some(t), Some(u)) => format!("{t}\t{u}"),
+            (Some(t), None) => t.to_string(),
+            (None, Some(u)) => u.to_string(),
+            (None, None) => "-".to_string(),
+        };
 
-        if !self.cache.should_store(app_key, window_key, hash) {
+        if !self.cache.should_store(app_key, &window_key, hash) {
             return None;
         }
 

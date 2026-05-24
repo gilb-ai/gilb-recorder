@@ -88,7 +88,11 @@ impl Normalizer {
                     let prev = self.focus.current();
                     let app_changed = prev.app.bundle_id != app.bundle_id
                         || prev.app.pid != app.pid;
-                    let window_changed = prev.app.window_title != app.window_title;
+                    // SPA navigation (Gmail / Linear / Crunchbase) often keeps the
+                    // window title stable across URL transitions; URL change alone
+                    // should still trigger a focus_change + fresh tree snapshot.
+                    let window_changed = prev.app.window_title != app.window_title
+                        || prev.app.browser_url != app.browser_url;
                     if app_changed || window_changed {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
