@@ -80,8 +80,9 @@ Parse it on your side; we keep field names stable across versions.
 - Rows with `password_flag = true` have `text_content` and `element_value`
   pre-replaced with `'[masked]'` at the SQL layer. `gilb_search_actions`
   additionally **excludes** masked rows entirely from search results.
-- Some apps (1Password, Bitwarden, Keychain Access, etc.) are dropped at
-  capture time and won't appear in the log at all.
+- A fixed block-list of password managers (1Password, Bitwarden,
+  KeePassXC, macOS Keychain Access) is dropped at capture time and
+  won't appear in the log at all.
 
 ## Style hints for summarizing
 
