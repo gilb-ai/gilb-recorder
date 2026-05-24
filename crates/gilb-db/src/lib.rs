@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod sessions;
+pub mod tree_snapshots;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};

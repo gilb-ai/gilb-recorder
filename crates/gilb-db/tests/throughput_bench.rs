@@ -40,6 +40,7 @@ fn synthetic_action(session_id: i64, i: usize) -> Action {
         name: Some(format!("App {}", i % 5)),
         pid: Some(1000 + (i as i32 % 50)),
         window_title: Some(format!("Window title {} — some realistic length", i)),
+        browser_url: None,
     };
 
     let element = ElementContext {

@@ -85,7 +85,7 @@ impl CapturePlatform for MacosPlatform {
 
         let normalizer = Normalizer {
             session_id: ctx.session_id,
-            action_tx: ctx.action_tx,
+            writer_tx: ctx.writer_tx,
             event_bus: ctx.event_bus.clone(),
             settings: ctx.settings,
             focus: self.focus.clone(),

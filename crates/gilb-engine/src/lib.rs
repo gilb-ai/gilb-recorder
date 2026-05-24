@@ -18,8 +18,8 @@ use tracing::{info, warn};
 
 use gilb_a11y::{current_platform, CapturePlatform, Permissions, RunningCapture, StartContext};
 use gilb_config::RecordingSettings;
-use gilb_core::SessionId;
-use gilb_db::{actions, open_db, sessions, Db};
+use gilb_core::{SessionId, WriterMessage};
+use gilb_db::{actions, open_db, sessions, tree_snapshots, Db};
 use gilb_events::EventBus;
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
@@ -105,16 +105,16 @@ impl Engine {
             .context("failed to insert session row")?;
         info!(%session_id, "engine: session started");
 
-        let (action_tx, action_rx) = mpsc::channel(ACTION_CHANNEL_CAPACITY);
+        let (writer_tx, writer_rx) = mpsc::channel(ACTION_CHANNEL_CAPACITY);
         let (writer_shutdown_tx, writer_shutdown_rx) = tokio::sync::oneshot::channel();
-        let writer_join = spawn_writer(self.inner.db.clone(), action_rx, writer_shutdown_rx);
+        let writer_join = spawn_writer(self.inner.db.clone(), writer_rx, writer_shutdown_rx);
 
         let handle = self
             .inner
             .platform
             .start(StartContext {
                 session_id,
-                action_tx,
+                writer_tx,
                 event_bus: self.inner.event_bus.clone(),
                 settings,
             })
@@ -154,32 +154,40 @@ impl Engine {
 
 fn spawn_writer(
     db: Db,
-    mut rx: mpsc::Receiver<gilb_core::Action>,
+    mut rx: mpsc::Receiver<WriterMessage>,
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             tokio::select! {
                 _ = &mut shutdown => {
-                    // Drain anything still pending, then exit.
-                    while let Ok(action) = rx.try_recv() {
-                        if let Err(err) = actions::insert_action(&db, &action).await {
-                            warn!(?err, "failed to insert action on shutdown drain");
-                        }
+                    while let Ok(msg) = rx.try_recv() {
+                        write_one(&db, msg).await;
                     }
                     break;
                 }
-                maybe_action = rx.recv() => {
-                    match maybe_action {
-                        Some(action) => {
-                            if let Err(err) = actions::insert_action(&db, &action).await {
-                                warn!(?err, "failed to insert action");
-                            }
-                        }
+                maybe_msg = rx.recv() => {
+                    match maybe_msg {
+                        Some(msg) => write_one(&db, msg).await,
                         None => break,
                     }
                 }
             }
         }
     })
+}
+
+async fn write_one(db: &Db, msg: WriterMessage) {
+    match msg {
+        WriterMessage::Action(action) => {
+            if let Err(err) = actions::insert_action(db, &action).await {
+                warn!(?err, "failed to insert action");
+            }
+        }
+        WriterMessage::TreeSnapshot(snap) => {
+            if let Err(err) = tree_snapshots::insert_tree_snapshot(db, &snap).await {
+                warn!(?err, "failed to insert tree_snapshot");
+            }
+        }
+    }
 }

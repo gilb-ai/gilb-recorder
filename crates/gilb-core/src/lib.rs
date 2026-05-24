@@ -42,6 +42,25 @@ impl ActionKind {
     }
 }
 
+/// Periodic AX-tree snapshot of a single focused window.
+///
+/// Emitted on focus transitions (Phase 2 may also trigger on clipboard
+/// and opaque-element clicks). Persisted to `tree_snapshots`; correlated
+/// to nearby `actions` rows by `(session_id, captured_at)` within a
+/// short time window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TreeSnapshot {
+    pub session_id: SessionId,
+    pub captured_at: DateTime<Utc>,
+    pub app: AppInfo,
+    /// 64-bit SimHash over 3-word shingles of element-role + element-text.
+    /// Stored as i64 because SQLite has no native u64.
+    pub simhash: i64,
+    /// Serialized tree as JSON. Shape is intentionally not part of the
+    /// schema — it's a blob the analyzer LLM parses on demand.
+    pub root_json: String,
+}
+
 /// Foreground app context attached to every event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppInfo {
@@ -88,6 +107,29 @@ pub struct Action {
     pub password_flag: bool,
     pub tree_snapshot_id: Option<TreeSnapshotId>,
     pub extra_json: Option<serde_json::Value>,
+}
+
+/// Anything the capture pipeline can hand to the engine writer.
+///
+/// Phase 2: the channel between [`crate::Action`] producers and the DB
+/// writer fans in [`crate::TreeSnapshot`]s too. Keep this enum small —
+/// we route on the variant in the writer's hot loop.
+#[derive(Debug, Clone)]
+pub enum WriterMessage {
+    Action(Action),
+    TreeSnapshot(TreeSnapshot),
+}
+
+impl From<Action> for WriterMessage {
+    fn from(a: Action) -> Self {
+        WriterMessage::Action(a)
+    }
+}
+
+impl From<TreeSnapshot> for WriterMessage {
+    fn from(s: TreeSnapshot) -> Self {
+        WriterMessage::TreeSnapshot(s)
+    }
 }
 
 impl Action {

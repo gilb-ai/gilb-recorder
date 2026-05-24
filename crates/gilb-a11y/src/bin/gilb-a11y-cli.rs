@@ -12,7 +12,8 @@ use tracing::{info, warn};
 
 use gilb_a11y::{current_platform, StartContext};
 use gilb_config::RecordingSettings;
-use gilb_db::{actions, open_db, sessions};
+use gilb_core::WriterMessage;
+use gilb_db::{actions, open_db, sessions, tree_snapshots};
 use gilb_events::EventBus;
 
 #[derive(Parser, Debug)]
@@ -48,7 +49,7 @@ async fn main() -> Result<()> {
     let db = open_db(&db_path).await?;
     let session_id = sessions::start_session(&db).await?;
 
-    let (action_tx, mut action_rx) = mpsc::channel(1024);
+    let (writer_tx, mut writer_rx) = mpsc::channel::<WriterMessage>(1024);
     let event_bus = EventBus::new();
 
     let platform = current_platform();
@@ -59,18 +60,28 @@ async fn main() -> Result<()> {
     let handle = platform
         .start(StartContext {
             session_id,
-            action_tx,
+            writer_tx,
             event_bus: event_bus.clone(),
             settings: RecordingSettings::from_env(),
         })
         .await?;
 
-    // Consume actions for `seconds` then stop.
     let db_for_writer = db.clone();
     let writer = tokio::spawn(async move {
-        while let Some(action) = action_rx.recv().await {
-            if let Err(err) = actions::insert_action(&db_for_writer, &action).await {
-                warn!(?err, "failed to insert action");
+        while let Some(msg) = writer_rx.recv().await {
+            match msg {
+                WriterMessage::Action(action) => {
+                    if let Err(err) = actions::insert_action(&db_for_writer, &action).await {
+                        warn!(?err, "failed to insert action");
+                    }
+                }
+                WriterMessage::TreeSnapshot(snap) => {
+                    if let Err(err) =
+                        tree_snapshots::insert_tree_snapshot(&db_for_writer, &snap).await
+                    {
+                        warn!(?err, "failed to insert tree_snapshot");
+                    }
+                }
             }
         }
     });

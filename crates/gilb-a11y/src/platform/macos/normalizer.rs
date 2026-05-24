@@ -24,11 +24,12 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use gilb_config::RecordingSettings;
-use gilb_core::{Action, ActionKind, AppInfo, ElementContext, SessionId};
+use gilb_core::{Action, ActionKind, AppInfo, ElementContext, SessionId, WriterMessage};
 use gilb_events::{EventBus, HealthEvent};
 
 use crate::password_masking::{is_excluded_app, is_password_field, is_secure_role, redact_pii};
 use crate::text_buffer::{FlushReason, FlushedText, TextBuffer};
+use crate::tree::snapshotter::Snapshotter;
 
 use super::ax_worker::{AxJob, AxWorker};
 use super::event_tap::{MouseButton, RawEvent};
@@ -41,7 +42,7 @@ const DROP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
 pub struct Normalizer {
     pub session_id: SessionId,
-    pub action_tx: mpsc::Sender<Action>,
+    pub writer_tx: mpsc::Sender<WriterMessage>,
     pub event_bus: EventBus,
     pub settings: RecordingSettings,
     pub focus: FocusState,
@@ -56,6 +57,7 @@ impl Normalizer {
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) {
         let mut buffer = TextBuffer::default();
+        let mut snapshotter = Snapshotter::new(self.session_id);
 
         // Prime focus once so the first event already carries app context.
         self.focus.update_app(frontmost_app());
@@ -90,7 +92,12 @@ impl Normalizer {
                     if app_changed || window_changed {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
-                        self.emit_focus_change(app).await;
+                        self.emit_focus_change(app.clone()).await;
+                        if self.settings.capture_tree_snapshots {
+                            if let Some(snap) = snapshotter.capture_on_focus(&app) {
+                                self.emit_snapshot(snap).await;
+                            }
+                        }
                     } else {
                         self.focus.update_app(app);
                     }
@@ -353,15 +360,32 @@ impl Normalizer {
 
     async fn emit_blocking(&self, action: Action) {
         Self::log_emit(&action);
-        if let Err(err) = self.action_tx.send(action).await {
-            warn!(?err, "normalizer: action channel closed");
+        if let Err(err) = self.writer_tx.send(WriterMessage::Action(action)).await {
+            warn!(?err, "normalizer: writer channel closed");
         }
     }
 
     fn emit_lossy(&self, action: Action, drops: &mut u64) {
         Self::log_emit(&action);
-        if self.action_tx.try_send(action).is_err() {
+        if self
+            .writer_tx
+            .try_send(WriterMessage::Action(action))
+            .is_err()
+        {
             *drops += 1;
+        }
+    }
+
+    async fn emit_snapshot(&self, snap: gilb_core::TreeSnapshot) {
+        debug!(
+            app = snap.app.name.as_deref().unwrap_or("-"),
+            window = snap.app.window_title.as_deref().unwrap_or("-"),
+            simhash = snap.simhash,
+            json_bytes = snap.root_json.len(),
+            "normalizer: emit tree_snapshot"
+        );
+        if let Err(err) = self.writer_tx.send(WriterMessage::TreeSnapshot(snap)).await {
+            warn!(?err, "normalizer: writer channel closed (snapshot)");
         }
     }
 }

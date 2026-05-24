@@ -22,7 +22,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 
 use gilb_config::RecordingSettings;
-use gilb_core::{Action, SessionId};
+use gilb_core::{SessionId, WriterMessage};
 use gilb_events::EventBus;
 
 /// Runtime permission snapshot reported by the platform.
@@ -35,7 +35,7 @@ pub struct Permissions {
 /// Context wired into a [`CapturePlatform::start`] invocation.
 pub struct StartContext {
     pub session_id: SessionId,
-    pub action_tx: mpsc::Sender<Action>,
+    pub writer_tx: mpsc::Sender<WriterMessage>,
     pub event_bus: EventBus,
     pub settings: RecordingSettings,
 }

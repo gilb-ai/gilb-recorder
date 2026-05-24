@@ -11,12 +11,11 @@ use std::time::Duration;
 
 use accessibility_sys::{
     kAXChildrenAttribute, kAXDocumentAttribute, kAXErrorSuccess, kAXFocusedWindowAttribute,
-    kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, AXError,
-    AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementRef,
-    AXUIElementSetMessagingTimeout,
+    kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, AXError, AXUIElementCopyAttributeValue,
+    AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
-use core_foundation::array::{CFArray, CFArrayRef};
 use arc_swap::ArcSwap;
+use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
 use objc2::rc::Retained;
@@ -116,6 +115,7 @@ pub fn frontmost_app() -> AppInfo {
         name: ns_string_to_rust(app.localizedName().as_deref()),
         pid: Some(app.processIdentifier()),
         window_title: None,
+        browser_url: None,
     }
 }
 
@@ -165,7 +165,9 @@ fn focused_window_and_url(pid: i32, app_name: Option<&str>) -> (Option<String>, 
     // SAFETY: AXUIElementCreateApplication returns +1 retain; release now.
     unsafe { CFRelease(app_elem as CFTypeRef) };
 
-    let Some(window) = window else { return (None, None) };
+    let Some(window) = window else {
+        return (None, None);
+    };
 
     unsafe {
         let _ = AXUIElementSetMessagingTimeout(window, AX_TITLE_TIMEOUT.as_secs_f32());
@@ -252,9 +254,8 @@ fn find_url_in_walk(elem: AXUIElementRef, depth: usize) -> Option<String> {
 fn copy_children(elem: AXUIElementRef) -> Option<CFArray<*const c_void>> {
     let attr = CFString::new(kAXChildrenAttribute);
     let mut value: CFTypeRef = ptr::null_mut() as *const c_void;
-    let res = unsafe {
-        AXUIElementCopyAttributeValue(elem, attr.as_concrete_TypeRef(), &mut value)
-    };
+    let res =
+        unsafe { AXUIElementCopyAttributeValue(elem, attr.as_concrete_TypeRef(), &mut value) };
     if res != kAXErrorSuccess as AXError || value.is_null() {
         return None;
     }
@@ -272,9 +273,8 @@ fn looks_like_url(s: &str) -> bool {
 fn copy_attr_ref(elem: AXUIElementRef, attr: &str) -> Option<AXUIElementRef> {
     let attr = CFString::new(attr);
     let mut value: CFTypeRef = ptr::null_mut() as *const c_void;
-    let res = unsafe {
-        AXUIElementCopyAttributeValue(elem, attr.as_concrete_TypeRef(), &mut value)
-    };
+    let res =
+        unsafe { AXUIElementCopyAttributeValue(elem, attr.as_concrete_TypeRef(), &mut value) };
     if res != kAXErrorSuccess as AXError || value.is_null() {
         return None;
     }
@@ -286,9 +286,8 @@ fn copy_attr_ref(elem: AXUIElementRef, attr: &str) -> Option<AXUIElementRef> {
 fn read_string_attr(element: AXUIElementRef, attr: &str) -> Option<String> {
     let attr = CFString::new(attr);
     let mut value: CFTypeRef = ptr::null_mut() as *const c_void;
-    let res = unsafe {
-        AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value)
-    };
+    let res =
+        unsafe { AXUIElementCopyAttributeValue(element, attr.as_concrete_TypeRef(), &mut value) };
     if res != kAXErrorSuccess as AXError || value.is_null() {
         return None;
     }
