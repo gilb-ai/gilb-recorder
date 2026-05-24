@@ -2,217 +2,189 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## What this is
+
+**Gilb (Gilbreth)** — a desktop app that records the user's actions
+via accessibility APIs (macOS today; Windows backend is a stub).
+Cargo workspace + Tauri 2.
+
+The product is structured in three layers, of which only the first is
+implemented:
+
+1. **Raw a11y capture** — current focus.
+2. Pattern mining (therbligs) — deferred.
+3. Agent skill — deferred.
+
 ## Conventions
 
-- **All git commit messages are in English** (subject + body). This is
-  retroactive: existing history has been rewritten to English. Match the
-  style of recent commits (terse subject ≤72 chars, body wraps ~72 cols).
-- **All user-visible strings are in English**: HTML, TypeScript messages,
-  Rust dialog/error text, Info.plist usage descriptions, plugin READMEs.
-- **Operational docs in English** (anything the meta-agent or worker reads
-  as instructions): `trello-workflow.md`, `.claude/commands/*.md`,
-  `.claude/trello.json` keys.
-- **Project planning docs in Russian** (`plan.md`, `spec.md`, `tauri-plan.md`,
-  `research/*.md`) and **conversational chat with the user** remain Russian
-  by preference.
+- **Commit messages: English** (subject + body). Terse subject ≤72
+  chars, body wraps ~72 cols. Match the style of recent commits.
+- **User-visible strings: English** — HTML, TypeScript messages,
+  Rust dialog/error text, `Info.plist` usage descriptions, READMEs.
+- **CLAUDE.md and any other docs read by an agent as instructions:
+  English.**
 
-# Gilb (Gilbreth)
+## Commands
 
-Desktop-приложение, которое записывает действия пользователя через accessibility API
-(macOS + Windows; Linux вне scope). Cargo workspace + Tauri 2.
-
-## Контекст и фокус
-
-Архитектура из трёх слоёв:
-
-1. **Сбор сырых a11y-данных** — **текущий фокус.**
-2. Pattern mining (therbligs) — отложено.
-3. Agent skill — отложено.
-
-Дорожная карта по фазам, чек-лист готовности Layer 1 и решения,
-зафиксированные с пользователем, лежат в:
-
-- `spec.md` — целевая архитектура и расхождения между планами.
-- `tauri-plan.md` — пофазовый план (Phase 0 → Phase 7 gate).
-- `research/` — разбор reference-проектов и рекомендации по Layer 1
-  (особенно `05-gilb-recommendations.md`, `06-layer1-capture-quality.md`).
-- `trello-workflow.md` (English) — Trello-based task workflow: 9-column
-  board, `/trello-check` triage, `/trello-run` execution with iteration
-  loop + auto-merge, PLAN/QUESTIONS comment format, knowledge sources.
-  Read when working on cards from Trello or modifying the workflow.
-
-Перед нетривиальными изменениями архитектуры сверяйся с этими тремя
-файлами — в них уже зафиксированы решения, которые иначе придётся
-переоткрывать.
-
-## Команды
-
-Сборка и запуск идут через корневой Cargo workspace + npm внутри
+Build and run go through the root Cargo workspace plus `npm` inside
 `apps/gilb-app-tauri`.
 
 ```sh
-# Cargo workspace (Rust). Запускать из корня репо.
-cargo build                                # вся workspace
-cargo build -p gilb-a11y                   # один crate
-cargo test                                 # все тесты
-cargo test -p gilb-db                      # тесты одного crate
-cargo test -p gilb-a11y text_buffer        # тесты с фильтром по имени
+# Cargo workspace (Rust). Run from the repo root.
+cargo build                                # whole workspace
+cargo build -p gilb-a11y                   # one crate
+cargo test                                 # all tests
+cargo test -p gilb-db                      # one crate's tests
+cargo test -p gilb-a11y text_buffer        # name-filtered tests
 cargo clippy --workspace --all-targets     # lint
 cargo fmt --all                            # format
 
-# CLI smoke для Layer 1 (без Tauri UI).
+# Headless capture smoke test (no Tauri UI).
 cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5
 cargo run -p gilb-a11y --bin gilb-a11y-cli -- --db /tmp/gilb.sqlite --seconds 10
 
-# MCP-сервер поверх записанной БД (stdio). Запускается Claude Code'ом,
-# но удобно проверять и вручную:
+# MCP server over the recorded DB (stdio). Spawned by Claude Code,
+# but handy to run manually:
 cargo run -p gilb-mcp
 
-# Tauri (frontend + Rust shell). Запускать из apps/gilb-app-tauri.
+# Tauri (frontend + Rust shell). Run from apps/gilb-app-tauri.
 cd apps/gilb-app-tauri
-npm install                                # один раз
-npm run tauri dev                          # dev shell (горячая перезагрузка фронта)
-npm run tauri build                        # release .dmg/.msi с подписью из tauri.conf.json
+npm install                                # once
+npm run tauri dev                          # dev shell with hot-reload
+npm run tauri build                        # release .dmg/.msi signed per tauri.conf.json
 ```
 
-Capture defaults управляются env vars из `RecordingSettings::from_env`:
-`CAPTURE_EVENTS`, `CAPTURE_MOUSE_MOVE`, `CAPTURE_CLIPBOARD`,
-`CAPTURE_TREE_SNAPSHOTS`. Логирование — `RUST_LOG=...` (по умолчанию
-`info,gilb=debug` в Tauri shell, `info` в CLI).
+Capture defaults are controlled by env vars consumed by
+`RecordingSettings::from_env`: `CAPTURE_EVENTS`, `CAPTURE_MOUSE_MOVE`,
+`CAPTURE_CLIPBOARD`, `CAPTURE_TREE_SNAPSHOTS`. Logging: `RUST_LOG=...`
+(defaults: `info,gilb=debug` in the Tauri shell, `info` in the CLI).
 
-База лежит в `~/.gilb/db.sqlite` (см. `gilb_config::db_path`); тот же путь
-использует и Tauri-app, и CLI smoke, если не передан `--db`.
+The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`); both
+the Tauri app and the CLI smoke share that path unless `--db` is
+passed.
 
-## Архитектура
+## Architecture
 
-### Crates и зависимости
+### Crates and dependencies
 
 ```
-gilb-core ──► (типы: Action, ActionKind, AppInfo, ElementContext, SessionId)
+gilb-core ──► (types: Action, ActionKind, AppInfo, ElementContext, SessionId)
 gilb-config ─► (RecordingSettings, data_dir / db_path)
 gilb-events ─► (EventBus: broadcast PermissionEvent + HealthEvent)
 
 gilb-db ─────► gilb-core, gilb-config
-              (SqlitePool + миграции в migrations/, модули sessions/actions)
+              (SqlitePool + migrations under migrations/, sessions / actions modules)
 
 gilb-a11y ───► gilb-core, gilb-config, gilb-events, gilb-db
-              (trait CapturePlatform; cfg-разделённые реализации;
+              (trait CapturePlatform; cfg-gated implementations;
                text_buffer, activity_feed, budget, tree/, password_masking;
                bin gilb-a11y-cli)
 
-gilb-engine ─► все crates выше
-              (Engine — длительный процесс-wide объект; владеет DB pool,
-               EventBus, текущей CaptureSession; spawn'ит writer task)
+gilb-engine ─► all crates above
+              (Engine — long-lived process-wide object; owns the DB pool,
+               EventBus, current CaptureSession; spawns the writer task)
 
 gilb-helper ─► gilb-config
-              (привилегированный демон поверх unix-socket IPC;
-               сейчас скелет — Ping/Pong handshake, rmp-serde фреймы)
+              (privileged daemon over unix-socket IPC;
+               currently a skeleton — Ping/Pong handshake, rmp-serde frames)
 
 gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum
-               + in-memory MockDetector; нативные детекторы — позже.
-               Контракт событий — research/07-meeting-detection.md §5)
+               + in-memory MockDetector; native detectors land later)
 
 apps/gilb-app-tauri/src-tauri ─► gilb-engine + gilb-config + gilb-events
               (Tauri commands: start_capture/stop_capture/status/
-               open_privacy_pane; AppState держит Arc<Engine>)
+               open_privacy_pane; AppState holds an Arc<Engine>)
 
 apps/gilb-mcp ─► gilb-core + gilb-config + gilb-db
-              (read-only MCP-сервер поверх ~/.gilb/db.sqlite, stdio
-               транспорт; набор gilb_* инструментов для Claude Code.
-               LLM-facing контракт — apps/gilb-mcp/help.md)
+              (read-only MCP server over ~/.gilb/db.sqlite, stdio
+               transport; gilb_* tools for Claude Code.
+               LLM-facing contract — apps/gilb-mcp/help.md)
 ```
 
-Дополнительные дочерние линии:
-`crates/gilb-a11y/src/platform/{macos,windows,unsupported}` — выбираются
-через `cfg(target_os = ...)`. `macos/` сейчас разбит на под-модули
-(`event_tap`, `ax_worker`, `focus`, `keyboard`, `pasteboard`, `normalizer`,
-`permissions`, `ffi`, `platform`). `windows.rs` — заглушка до Phase 6.
+Platform split: `crates/gilb-a11y/src/platform/{macos,windows,unsupported}`
+is selected via `cfg(target_os = ...)`. `macos/` is broken into sub-modules
+(`event_tap`, `ax_worker`, `focus`, `keyboard`, `pasteboard`,
+`normalizer`, `permissions`, `ffi`, `platform`). `windows.rs` is a stub.
 
-### Поток данных capture → DB
+### Capture → DB data flow
 
-1. UI (или CLI) дёргает `Engine::start_capture(settings)`.
-2. `Engine` пишет строку в `sessions`, открывает mpsc-канал
-   (`ACTION_CHANNEL_CAPACITY = 4096`), спавнит writer-таску и зовёт
+1. UI (or the CLI) calls `Engine::start_capture(settings)`.
+2. `Engine` inserts a row into `sessions`, opens an mpsc channel
+   (`ACTION_CHANNEL_CAPACITY = 4096`), spawns a writer task, and calls
    `CapturePlatform::start(StartContext { session_id, action_tx,
    event_bus, settings })`.
-3. Платформенный capture (на macOS — CGEventTap + AX) кладёт
-   `gilb_core::Action` в `action_tx`.
-4. Writer-таска в `gilb-engine` вызывает `gilb_db::actions::insert_action`
-   по одному (Phase 3 заменит на batched write queue).
-5. `Engine::stop_capture` останавливает worker → отправляет shutdown в
-   writer → закрывает `sessions` row с `stop_reason`.
+3. The platform capture (on macOS — CGEventTap + AX) pushes
+   `gilb_core::Action`s into `action_tx`.
+4. The writer task in `gilb-engine` calls
+   `gilb_db::actions::insert_action` per row (a batched write queue is
+   a planned follow-up).
+5. `Engine::stop_capture` stops the worker → sends shutdown to the
+   writer → closes the `sessions` row with `stop_reason`.
 
-Permission / health события идут параллельно через `EventBus`
-(`tokio::sync::broadcast` каналы внутри `gilb-events`).
+Permission / health events flow in parallel through `EventBus`
+(`tokio::sync::broadcast` channels inside `gilb-events`).
 
-### База данных
+### Database
 
-`gilb-db::open_db` открывает SQLite с фиксированным набором PRAGMA
-(WAL, `synchronous=NORMAL`, `cache_size=-65536`, `mmap_size=256MB`,
-`busy_timeout=5s`, `wal_autocheckpoint=4000`) и применяет миграции из
-`crates/gilb-db/migrations/`. v0 схема — `sessions`, `actions`,
-`tree_snapshots`, `app_budgets`, `health_events` (см. `0001_init.sql` и
-`spec.md §4`). Multimodal-таблицы (frames / elements / ocr_text /
-audio_*) добавляются миграциями в Phase 8+, **не** заводятся заранее.
+`gilb-db::open_db` opens SQLite with a fixed PRAGMA set (WAL,
+`synchronous=NORMAL`, `cache_size=-65536`, `mmap_size=256MB`,
+`busy_timeout=5s`, `wal_autocheckpoint=4000`) and applies migrations
+from `crates/gilb-db/migrations/`. The v0 schema is `sessions`,
+`actions`, `tree_snapshots`, `app_budgets`, `health_events` (see
+`0001_init.sql`). Multimodal tables (`frames` / `elements` /
+`ocr_text` / `audio_*`) are added by later migrations, **not**
+pre-created.
 
-**Второй потребитель схемы — `apps/gilb-mcp`.** Он читает ту же
-`~/.gilb/db.sqlite` и отдаёт `gilb_*` инструменты Claude Code'у с
-зафиксированным пользовательским контрактом в `apps/gilb-mcp/help.md`
-(имена/семантика колонок `actions`, `kind`, маскирование паролей,
-`range` форматы). Любая миграция, меняющая форму `actions`,
-`sessions` или `health_events`, должна пройтись и по `gilb-mcp`
-(SQL запросы + `help.md`).
+**Second consumer of the schema — `apps/gilb-mcp`.** It reads the
+same `~/.gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
+with a stable user-facing contract in `apps/gilb-mcp/help.md`
+(column names and semantics for `actions`, `kind` values, password
+masking, `range` formats). Any migration that changes the shape of
+`actions`, `sessions`, or `health_events` must also pass through
+`gilb-mcp` (SQL queries + `help.md`).
 
-## Структура репо
+## Repo layout
 
-- `Cargo.toml` — workspace root (members = `apps/gilb-app-tauri/src-tauri`
-  + `apps/gilb-mcp` + `crates/*`). Общие версии зависимостей — в
-  `[workspace.dependencies]`, каждый crate подтягивает их через
-  `workspace = true`.
-- `plan.md` — старый план разбора prior-art (см. также `research/`).
-- `tauri-plan.md` — текущий пофазовый план имплементации.
-- `spec.md` — целевая архитектура Tauri-проекта.
-- `research/` — research-документы (архитектурные обзоры, рекомендации,
-  разбор reference-проектов).
-- `reference/` — сторонние проекты, которые мы изучаем и из которых
-  копируем подходы. **Не наш код**, **не коммитится**
-  (см. `.gitignore`). Каждая подпапка обычно сама по себе git-репозиторий
-  (клон upstream'а).
-- `.gilb/` — runtime state Trello-workflow (`session-log.md`, etc.); не
-  коммитится. Подробности — в `trello-workflow.md`.
-- `.claude/` — конфиг и slash-команды для Claude Code (Trello-workflow):
-  `trello.json` плюс `commands/{trello-check,trello-run,trello-normalize,trello-questions}.md`
-  (последняя — интерактивный Q&A meta-agent для карточек в `Human
-  Questions`; `trello-normalize` проставляет `[<prefix>-<idShort>]`
-  префиксы). Коммитится (board IDs публичные).
+- `Cargo.toml` — workspace root (members =
+  `apps/gilb-app-tauri/src-tauri` + `apps/gilb-mcp` + `crates/*`).
+  Shared dependency versions live in `[workspace.dependencies]`;
+  each crate references them via `workspace = true`.
+- `apps/` — runnable binaries (Tauri shell, MCP server).
+- `crates/` — library crates.
+- `reference/` — third-party projects we study for ideas. **Not our
+  code**, **not committed** (see `.gitignore`). Each subdir is
+  typically its own git repo (an upstream clone).
 
-## Работа с `reference/`
+## Working with `reference/`
 
-- `reference/` исключён из git. Обновление выполняется как обычный pull
-  в соответствующем клоне: `cd reference/<project> && git pull`.
-- Документы в `research/` могут ссылаться на пути внутри
-  `reference/<project>/...` — это допустимо и ожидаемо.
-- Если нужно скопировать кусок кода из reference в gilb — копируй явно
-  в исходники gilb с указанием источника в commit message.
+- `reference/` is gitignored. Updating is a normal `git pull` inside
+  each clone: `cd reference/<project> && git pull`.
+- If you need to bring code from a reference project into Gilb, copy
+  it explicitly into our sources and cite the origin in the commit
+  message.
 
-Текущие reference-проекты:
+Active reference projects:
 
-- `reference/prior-art` — Rust workspace + Tauri desktop app, источник
-  подходов к захвату a11y / экрана / событий. Разбор см. в `research/`.
+- `reference/prior-art` — Rust workspace + Tauri desktop app; a
+  source of ideas for a11y / screen / event capture.
 
 ## macOS specifics
 
 - Bundle ID: `app.farol.gilb`. Apple Developer Team ID: `83856566PM`.
-  `signingIdentity` уже прописан в `apps/gilb-app-tauri/src-tauri/tauri.conf.json`.
-- `Info.plist`: `LSUIElement=1` (без иконки в Dock),
-  `NSAccessibilityUsageDescription` + `NSInputMonitoringUsageDescription`
-  + `NSAppleEventsUsageDescription`.
-- `entitlements.plist`: hardened runtime, `automation.apple-events`,
-  `disable-library-validation` (нужно для AX-FFI). JIT / unsigned-exec
-  выключены — не включай без необходимости.
-- AX/Input Monitoring permission даются пользователем в System Settings;
-  команда `open_privacy_pane` в `lib.rs` открывает соответствующий pane
-  через `x-apple.systempreferences:` URL.
-- macOS-only crates подключаются через
-  `[target.'cfg(target_os = "macos")'.dependencies]` в `gilb-a11y`
-  (`core-graphics`, `core-foundation`, `accessibility-sys`, `objc2*`).
+  The signing identity is set in
+  `apps/gilb-app-tauri/src-tauri/tauri.conf.json`.
+- `Info.plist`: `LSUIElement=1` (no Dock icon),
+  `NSAccessibilityUsageDescription` +
+  `NSInputMonitoringUsageDescription` +
+  `NSAppleEventsUsageDescription`.
+- `entitlements.plist`: hardened runtime,
+  `automation.apple-events`, `disable-library-validation` (required
+  for the AX FFI). JIT / unsigned-exec are off — do not enable them
+  without a clear reason.
+- AX / Input Monitoring permissions are granted by the user in
+  System Settings; the `open_privacy_pane` command in `lib.rs` opens
+  the relevant pane via an `x-apple.systempreferences:` URL.
+- macOS-only crates are wired through
+  `[target.'cfg(target_os = "macos")'.dependencies]` in `gilb-a11y`
+  (`core-graphics`, `core-foundation`, `accessibility-sys`,
+  `objc2*`).

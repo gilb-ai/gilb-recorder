@@ -1,5 +1,4 @@
 reference/
-.zenflow/
 
 # Rust
 target/
@@ -24,8 +23,6 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Local DB
-~/.gilb/
-
-# Trello-workflow runtime state (session-log, worker logs, worktrees)
+# Local runner state (worktrees, session logs, worker output).
+# Used by external workflow tooling; safe to leave alone.
 .gilb/
