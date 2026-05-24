@@ -77,8 +77,18 @@ impl Snapshotter {
         let Some((hash, root_json)) = captured else {
             return;
         };
+        let json_bytes = root_json.len();
+        let app_name = app.name.clone().unwrap_or_else(|| "-".to_string());
+        let window = app.window_title.clone().unwrap_or_else(|| "-".to_string());
 
         let Some(snap) = self.decide(app, hash, root_json) else {
+            debug!(
+                app = %app_name,
+                window = %window,
+                simhash = hash,
+                json_bytes,
+                "snapshot worker: skipped (dedup)"
+            );
             return;
         };
 
@@ -90,6 +100,19 @@ impl Snapshotter {
                 reason: "writer_tx_full_snapshot".into(),
                 count: 1,
             });
+            debug!(
+                app = %app_name,
+                window = %window,
+                "snapshot worker: dropped (writer channel full)"
+            );
+        } else {
+            debug!(
+                app = %app_name,
+                window = %window,
+                simhash = hash,
+                json_bytes,
+                "snapshot worker: emit tree_snapshot"
+            );
         }
     }
 
