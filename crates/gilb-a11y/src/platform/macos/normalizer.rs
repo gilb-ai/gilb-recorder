@@ -32,7 +32,7 @@ use crate::text_buffer::{FlushReason, FlushedText, TextBuffer};
 
 use super::ax_worker::{AxJob, AxWorker};
 use super::event_tap::{MouseButton, RawEvent};
-use super::focus::{frontmost_app, FocusSnapshot, FocusState};
+use super::focus::{frontmost_app, frontmost_app_with_window, FocusSnapshot, FocusState};
 use super::keyboard::SpecialKey;
 use super::pasteboard::ClipboardChange;
 
@@ -79,9 +79,15 @@ impl Normalizer {
                     break;
                 }
                 _ = focus_tick.tick() => {
-                    let app = frontmost_app();
+                    // Read app + focused-window title together so a window
+                    // change inside the same app still emits a focus_change.
+                    // Bounded by AX_TITLE_TIMEOUT inside `frontmost_app_with_window`.
+                    let app = frontmost_app_with_window();
                     let prev = self.focus.current();
-                    if prev.app.bundle_id != app.bundle_id || prev.app.pid != app.pid {
+                    let app_changed = prev.app.bundle_id != app.bundle_id
+                        || prev.app.pid != app.pid;
+                    let window_changed = prev.app.window_title != app.window_title;
+                    if app_changed || window_changed {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
                         self.emit_focus_change(app).await;
