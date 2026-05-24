@@ -19,6 +19,13 @@ The main table is `actions`. One row per atomic user action:
   - `clipboard` — `text_content` is the clipboard string.
   - `focus_change` — frontmost app changed; useful as an activity boundary.
 - `app_name`, `app_bundle_id`, `window_title` — foreground app context.
+- `browser_url` — URL of the focused tab when the foreground app is a
+  known browser (Chrome / Safari / Firefox / Edge / Brave / Arc /
+  Chromium / Vivaldi / Opera / Zen / Comet). `NULL` for non-browser
+  apps. Sourced from `AXDocument` first, then a shallow walk for an
+  address-bar-shaped `AXTextField` / `AXComboBox`. Useful for
+  disambiguating browser activity (`crunchbase.com/organization/<slug>`
+  vs `crunchbase.com/home`) without OCR.
 - `text_content`, `element_value` — **already replaced with `'[masked]'`**
   when `password_flag = true`. Do not try to recover masked content.
 

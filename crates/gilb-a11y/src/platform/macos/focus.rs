@@ -10,10 +10,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use accessibility_sys::{
-    kAXErrorSuccess, kAXFocusedWindowAttribute, kAXTitleAttribute, AXError,
+    kAXChildrenAttribute, kAXDocumentAttribute, kAXErrorSuccess, kAXFocusedWindowAttribute,
+    kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, AXError,
     AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementRef,
     AXUIElementSetMessagingTimeout,
 };
+use core_foundation::array::{CFArray, CFArrayRef};
 use arc_swap::ArcSwap;
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
@@ -27,6 +29,30 @@ use gilb_core::AppInfo;
 /// because this runs in the normalizer's focus-poll tick — a hung AX
 /// call here delays the whole tick.
 const AX_TITLE_TIMEOUT: Duration = Duration::from_millis(100);
+
+/// Max depth for the URL-bar walk fallback. Browsers expose the address
+/// bar within 3-5 levels in practice; bounding it keeps the worst-case
+/// cost predictable on pages with large DOMs.
+const URL_WALK_MAX_DEPTH: usize = 5;
+
+/// Lowercase substrings of `localizedName` we treat as browsers for the
+/// purpose of URL extraction. Order is just for readability.
+const BROWSER_NAMES: &[&str] = &[
+    "chrome",
+    "google chrome",
+    "safari",
+    "firefox",
+    "edge",
+    "microsoft edge",
+    "brave",
+    "brave browser",
+    "arc",
+    "chromium",
+    "vivaldi",
+    "opera",
+    "zen",
+    "comet",
+];
 
 #[derive(Debug, Default, Clone)]
 pub struct FocusSnapshot {
@@ -94,34 +120,42 @@ pub fn frontmost_app() -> AppInfo {
 }
 
 /// Same as [`frontmost_app`] but additionally queries the focused window
-/// title via AX. Used by the focus-poll tick so that a window change inside
-/// the same app still surfaces as a `focus_change` event.
+/// title via AX, and — when the foreground app is a browser — the URL of
+/// the active tab. Used by the focus-poll tick so that a window change
+/// inside the same app still surfaces as a `focus_change` event, and so
+/// every event we emit while a browser is foreground carries the URL.
 ///
-/// Bounded by `AX_TITLE_TIMEOUT` per call. Returns `window_title: None` if
-/// the AX call times out, the process is unresponsive, or the focused
-/// element doesn't expose a title.
+/// Bounded by `AX_TITLE_TIMEOUT` per AX call. Returns `None` for
+/// `window_title` / `browser_url` on timeout or when the attribute isn't
+/// exposed.
 pub fn frontmost_app_with_window() -> AppInfo {
     let workspace = NSWorkspace::sharedWorkspace();
     let Some(app) = workspace.frontmostApplication() else {
         return AppInfo::default();
     };
     let pid = app.processIdentifier();
+    let name = ns_string_to_rust(app.localizedName().as_deref());
+    let bundle_id = ns_string_to_rust(app.bundleIdentifier().as_deref());
+
+    let (window_title, browser_url) = focused_window_and_url(pid, name.as_deref());
+
     AppInfo {
-        bundle_id: ns_string_to_rust(app.bundleIdentifier().as_deref()),
-        name: ns_string_to_rust(app.localizedName().as_deref()),
+        bundle_id,
+        name,
         pid: Some(pid),
-        window_title: focused_window_title(pid),
+        window_title,
+        browser_url,
     }
 }
 
-/// Read AXFocusedWindow → AXTitle for the given pid. Single bounded AX call,
-/// no shared state — safe to call from the normalizer tick.
-fn focused_window_title(pid: i32) -> Option<String> {
-    // SAFETY: AX functions are documented thread-safe; we own the AXUIElementRef
-    // we create here and release it before returning.
+/// Read AXFocusedWindow once, then extract title and (for browsers) URL
+/// from the same handle so we don't pay the AX-create cost twice.
+fn focused_window_and_url(pid: i32, app_name: Option<&str>) -> (Option<String>, Option<String>) {
+    // SAFETY: AX functions are documented thread-safe; we own the
+    // AXUIElementRefs created here and release them before returning.
     let app_elem: AXUIElementRef = unsafe { AXUIElementCreateApplication(pid) };
     if app_elem.is_null() {
-        return None;
+        return (None, None);
     }
     unsafe {
         let _ = AXUIElementSetMessagingTimeout(app_elem, AX_TITLE_TIMEOUT.as_secs_f32());
@@ -130,15 +164,107 @@ fn focused_window_title(pid: i32) -> Option<String> {
     let window = copy_attr_ref(app_elem, kAXFocusedWindowAttribute);
     // SAFETY: AXUIElementCreateApplication returns +1 retain; release now.
     unsafe { CFRelease(app_elem as CFTypeRef) };
-    let window = window?;
+
+    let Some(window) = window else { return (None, None) };
 
     unsafe {
         let _ = AXUIElementSetMessagingTimeout(window, AX_TITLE_TIMEOUT.as_secs_f32());
     }
     let title = read_string_attr(window, kAXTitleAttribute);
+    let url = if is_browser_app(app_name) {
+        extract_browser_url(window)
+    } else {
+        None
+    };
+
     // SAFETY: copy_attr_ref returned +1; release it.
     unsafe { CFRelease(window as CFTypeRef) };
-    title
+    (title, url)
+}
+
+fn is_browser_app(name: Option<&str>) -> bool {
+    let Some(name) = name else { return false };
+    let lower = name.to_lowercase();
+    BROWSER_NAMES.iter().any(|b| lower.contains(b))
+}
+
+/// Three-tier URL extraction from a focused browser window.
+///
+/// Mirrors prior-art/src/tree/macos.rs `extract_browser_url`:
+///
+/// 1. `AXDocument` on the window — works for Safari, Chrome (the value
+///    is the active tab's URL when not navigated to a local file).
+/// 2. (TODO) Arc — needs `osascript`; deferred until we have a Therblig
+///    that depends on it.
+/// 3. Shallow walk for an `AXTextField` / `AXComboBox` whose value
+///    `looks_like_url`. Catches Firefox / Brave / Edge / Vivaldi /
+///    most chromium-derivatives.
+fn extract_browser_url(window: AXUIElementRef) -> Option<String> {
+    // Tier 1: AXDocument
+    if let Some(doc) = read_string_attr(window, kAXDocumentAttribute) {
+        if looks_like_url(&doc) {
+            return Some(doc);
+        }
+    }
+
+    // Tier 3: shallow recursive walk for an address-bar-looking element
+    find_url_in_walk(window, 0)
+}
+
+fn find_url_in_walk(elem: AXUIElementRef, depth: usize) -> Option<String> {
+    if depth >= URL_WALK_MAX_DEPTH {
+        return None;
+    }
+
+    // Inspect this element itself if it's an AXTextField / AXComboBox.
+    if let Some(role) = read_string_attr(elem, kAXRoleAttribute) {
+        if role == "AXTextField" || role == "AXComboBox" {
+            if let Some(value) = read_string_attr(elem, kAXValueAttribute) {
+                if looks_like_url(&value) {
+                    return Some(value);
+                }
+            }
+        }
+    }
+
+    // Recurse into children.
+    let children = copy_children(elem)?;
+    for i in 0..children.len() {
+        let child = unsafe { *children.get(i)? };
+        // SAFETY: items returned by CFArray are +0 (owned by the array).
+        // We only borrow; do NOT release `child` here.
+        unsafe {
+            let _ = AXUIElementSetMessagingTimeout(
+                child as AXUIElementRef,
+                AX_TITLE_TIMEOUT.as_secs_f32(),
+            );
+        }
+        if let Some(url) = find_url_in_walk(child as AXUIElementRef, depth + 1) {
+            return Some(url);
+        }
+    }
+    None
+}
+
+/// Read `kAXChildrenAttribute` as a CFArray of AXUIElementRefs.
+/// The returned CFArray owns the references; callers must NOT release the
+/// individual children, only the array (via `wrap_under_create_rule`).
+fn copy_children(elem: AXUIElementRef) -> Option<CFArray<*const c_void>> {
+    let attr = CFString::new(kAXChildrenAttribute);
+    let mut value: CFTypeRef = ptr::null_mut() as *const c_void;
+    let res = unsafe {
+        AXUIElementCopyAttributeValue(elem, attr.as_concrete_TypeRef(), &mut value)
+    };
+    if res != kAXErrorSuccess as AXError || value.is_null() {
+        return None;
+    }
+    // SAFETY: AXChildren returns a CFArray when present; we own +1.
+    Some(unsafe { CFArray::<*const c_void>::wrap_under_create_rule(value as CFArrayRef) })
+}
+
+fn looks_like_url(s: &str) -> bool {
+    let t = s.trim();
+    t.starts_with("http://") || t.starts_with("https://")
 }
 
 /// Copy an attribute that returns an AXUIElement (e.g. AXFocusedWindow).

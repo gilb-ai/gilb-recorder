@@ -22,10 +22,10 @@ pub async fn insert_action(db: &Db, action: &Action) -> Result<ActionId> {
         r#"
         INSERT INTO actions (
             session_id, captured_at, kind,
-            app_bundle_id, app_name, app_pid, window_title,
+            app_bundle_id, app_name, app_pid, window_title, browser_url,
             element_role, element_name, element_value, element_help, element_id, element_frame,
             text_content, password_flag, tree_snapshot_id, extra_json
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         "#,
     )
     .bind(action.session_id)
@@ -35,6 +35,7 @@ pub async fn insert_action(db: &Db, action: &Action) -> Result<ActionId> {
     .bind(&action.app.name)
     .bind(action.app.pid)
     .bind(&action.app.window_title)
+    .bind(&action.app.browser_url)
     .bind(&action.element.role)
     .bind(&action.element.name)
     .bind(&action.element.value)

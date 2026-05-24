@@ -212,6 +212,8 @@ pub struct ActionRow {
     pub app_name: Option<String>,
     pub app_bundle_id: Option<String>,
     pub window_title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub browser_url: Option<String>,
     pub element_role: Option<String>,
     pub element_name: Option<String>,
     pub element_value: Option<String>,
@@ -231,6 +233,7 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
         app_name: r.try_get("app_name").ok(),
         app_bundle_id: r.try_get("app_bundle_id").ok(),
         window_title: r.try_get("window_title").ok(),
+        browser_url: r.try_get("browser_url").ok(),
         element_role: r.try_get("element_role").ok(),
         element_name: r.try_get("element_name").ok(),
         element_value: r.try_get("element_value").ok(),
@@ -244,7 +247,7 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
 /// `password_flag = 1`. The masking happens column-side, so even ill-behaved
 /// callers can't read the underlying text.
 const ACTION_COLUMNS: &str = r#"
-    id, captured_at, kind, app_bundle_id, app_name, window_title,
+    id, captured_at, kind, app_bundle_id, app_name, window_title, browser_url,
     element_role, element_name,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE element_value END AS element_value,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE text_content  END AS text_content,

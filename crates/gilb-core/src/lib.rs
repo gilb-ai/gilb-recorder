@@ -49,6 +49,10 @@ pub struct AppInfo {
     pub name: Option<String>,
     pub pid: Option<i32>,
     pub window_title: Option<String>,
+    /// Active URL of the focused tab when the app is a known browser
+    /// (Chrome / Safari / Firefox / Edge / Brave / Arc / Vivaldi / Opera /
+    /// Zen / Comet / Chromium). `None` for non-browser apps.
+    pub browser_url: Option<String>,
 }
 
 /// Accessibility element context for the focused / clicked element.
