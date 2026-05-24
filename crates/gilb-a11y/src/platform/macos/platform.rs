@@ -17,6 +17,7 @@ use super::focus::FocusState;
 use super::normalizer::Normalizer;
 use super::pasteboard::{self, ClipboardChange};
 use super::permissions;
+use crate::tree::snapshotter;
 
 /// Bound on the in-process channel from the event-tap thread to the
 /// normalizer. Small to keep latency low; overflow drops events (and the
@@ -83,6 +84,20 @@ impl CapturePlatform for MacosPlatform {
 
         ctx.event_bus.publish_health(HealthEvent::Started);
 
+        // Snapshot worker lives on its own task — heavy AX walk + JSON
+        // serialize happen on tokio's blocking pool so the normalizer
+        // task is never parked on AX. Only spawned when enabled.
+        let (snapshot_tx, snapshot_handle) = if ctx.settings.capture_tree_snapshots {
+            let (tx, h) = snapshotter::spawn_worker(
+                ctx.session_id,
+                ctx.writer_tx.clone(),
+                ctx.event_bus.clone(),
+            );
+            (Some(tx), Some(h))
+        } else {
+            (None, None)
+        };
+
         let normalizer = Normalizer {
             session_id: ctx.session_id,
             writer_tx: ctx.writer_tx,
@@ -90,19 +105,27 @@ impl CapturePlatform for MacosPlatform {
             settings: ctx.settings,
             focus: self.focus.clone(),
             ax_worker,
+            snapshot_tx,
         };
 
         // Shutdown choreography:
-        //  1. Stop the event-tap thread (no more raw events).
-        //  2. Signal the clipboard poller to exit.
-        //  3. Tell the normalizer to drain and stop.
-        //  4. Drop the ax-worker handle (joins its thread).
+        //  1. normalizer.run returns → its snapshot_tx is dropped, snapshot
+        //     worker sees the channel close and exits.
+        //  2. Stop the event-tap thread (no more raw events).
+        //  3. Signal the clipboard poller to exit.
+        //  4. Await the snapshot worker (any in-flight walk completes).
+        //  5. Drop the ax-worker handle (joins its thread).
         let supervisor = tokio::spawn(async move {
             normalizer.run(raw_rx, clip_rx, shutdown_rx).await;
             drop(event_tap);
             let _ = clip_shutdown_tx.send(());
             if let Err(err) = tokio::time::timeout(Duration::from_secs(2), clipboard_handle).await {
                 warn!(?err, "clipboard poller did not stop in time");
+            }
+            if let Some(handle) = snapshot_handle {
+                if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
+                    warn!(?err, "snapshot worker did not stop in time");
+                }
             }
             drop(ax_handle);
             info!("macos platform: shut down cleanly");

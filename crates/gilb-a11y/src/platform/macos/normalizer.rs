@@ -29,7 +29,6 @@ use gilb_events::{EventBus, HealthEvent};
 
 use crate::password_masking::{is_excluded_app, is_password_field, is_secure_role, redact_pii};
 use crate::text_buffer::{FlushReason, FlushedText, TextBuffer};
-use crate::tree::snapshotter::Snapshotter;
 
 use super::ax_worker::{AxJob, AxWorker};
 use super::event_tap::{MouseButton, RawEvent};
@@ -47,6 +46,11 @@ pub struct Normalizer {
     pub settings: RecordingSettings,
     pub focus: FocusState,
     pub ax_worker: AxWorker,
+    /// `Some` when `settings.capture_tree_snapshots` is enabled — the
+    /// platform wires this to the snapshot worker's focus-event channel.
+    /// We `try_send` on focus change (lossy: a backed-up worker drops
+    /// the hop rather than parking the normalizer task).
+    pub snapshot_tx: Option<mpsc::Sender<AppInfo>>,
 }
 
 impl Normalizer {
@@ -57,7 +61,6 @@ impl Normalizer {
         mut shutdown: tokio::sync::oneshot::Receiver<()>,
     ) {
         let mut buffer = TextBuffer::default();
-        let mut snapshotter = Snapshotter::new(self.session_id);
 
         // Prime focus once so the first event already carries app context.
         self.focus.update_app(frontmost_app());
@@ -97,9 +100,15 @@ impl Normalizer {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
                         self.emit_focus_change(app.clone()).await;
-                        if self.settings.capture_tree_snapshots {
-                            if let Some(snap) = snapshotter.capture_on_focus(&app) {
-                                self.emit_snapshot(snap).await;
+                        if let Some(tx) = &self.snapshot_tx {
+                            // Lossy: if the snapshot worker is still busy on
+                            // the previous focus, we'd rather skip this hop
+                            // than let the normalizer task stall on send.
+                            if tx.try_send(app).is_err() {
+                                self.event_bus.publish_health(HealthEvent::DroppedEvent {
+                                    reason: "snapshot_tx_full".into(),
+                                    count: 1,
+                                });
                             }
                         }
                     } else {
@@ -377,19 +386,6 @@ impl Normalizer {
             .is_err()
         {
             *drops += 1;
-        }
-    }
-
-    async fn emit_snapshot(&self, snap: gilb_core::TreeSnapshot) {
-        debug!(
-            app = snap.app.name.as_deref().unwrap_or("-"),
-            window = snap.app.window_title.as_deref().unwrap_or("-"),
-            simhash = snap.simhash,
-            json_bytes = snap.root_json.len(),
-            "normalizer: emit tree_snapshot"
-        );
-        if let Err(err) = self.writer_tx.send(WriterMessage::TreeSnapshot(snap)).await {
-            warn!(?err, "normalizer: writer channel closed (snapshot)");
         }
     }
 }
