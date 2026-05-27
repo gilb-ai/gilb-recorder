@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-a11y"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -1581,7 +1581,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-app-tauri"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1607,7 +1607,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-config"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "directories",
@@ -1616,7 +1616,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1626,7 +1626,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-db"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1661,7 +1661,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-events"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "chrono",
  "parking_lot",
@@ -1671,7 +1671,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-helper"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "gilb-config",
@@ -1685,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-mcp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-meeting"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
