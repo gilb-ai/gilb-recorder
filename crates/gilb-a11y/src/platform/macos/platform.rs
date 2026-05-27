@@ -128,7 +128,7 @@ impl CapturePlatform for MacosPlatform {
                 }
             }
             drop(ax_handle);
-            info!("macos platform: shut down cleanly");
+            info!("shut down cleanly");
         });
 
         Ok(RunningCapture::new(shutdown_tx, supervisor))

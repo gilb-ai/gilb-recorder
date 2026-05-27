@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "gilb",
-        "width": 560,
-        "height": 520,
+        "width": 380,
+        "height": 220,
         "resizable": true,
         "fullscreen": false
       }

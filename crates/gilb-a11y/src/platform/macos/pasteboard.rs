@@ -26,11 +26,11 @@ pub fn spawn_poller(
         let mut last = i64::MIN;
         let mut tick = tokio::time::interval(DEFAULT_POLL_INTERVAL);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        info!("clipboard-poller: started ({:?})", DEFAULT_POLL_INTERVAL);
+        info!(interval = ?DEFAULT_POLL_INTERVAL, "started");
         loop {
             tokio::select! {
                 _ = &mut shutdown => {
-                    debug!("clipboard-poller: shutting down");
+                    debug!("shutting down");
                     break;
                 }
                 _ = tick.tick() => {
@@ -39,7 +39,7 @@ pub fn spawn_poller(
                         if snap.change_count != last {
                             last = snap.change_count;
                             if tx.send(snap).await.is_err() {
-                                debug!("clipboard-poller: receiver dropped");
+                                debug!("receiver dropped");
                                 break;
                             }
                         }

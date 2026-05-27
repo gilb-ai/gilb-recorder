@@ -76,7 +76,7 @@ impl AxWorker {
     /// Best-effort enqueue. Drops the request if the channel is full.
     pub fn submit(&self, job: AxJob) {
         if let Err(err) = self.tx.try_send(job) {
-            debug!(?err, "ax-worker: queue full, dropping job");
+            debug!(?err, "queue full, dropping job");
         }
     }
 }
@@ -100,7 +100,7 @@ fn run_loop(rx: cc::Receiver<AxJob>, shutdown: cc::Receiver<()>, focus: FocusSta
         let _ = AXUIElementSetMessagingTimeout(system, QUERY_TIMEOUT.as_secs_f32());
     }
 
-    debug!("ax-worker: ready");
+    debug!("ready");
     loop {
         cc::select! {
             recv(shutdown) -> _ => break,
@@ -109,7 +109,7 @@ fn run_loop(rx: cc::Receiver<AxJob>, shutdown: cc::Receiver<()>, focus: FocusSta
                 let ctx = match AX_QUERY_LOCK.try_lock() {
                     Some(_guard) => element_at(system, job.x, job.y, &focus),
                     None => {
-                        debug!("ax-worker: query lock busy, dropping job");
+                        debug!("query lock busy, dropping job");
                         None
                     }
                 };
@@ -120,7 +120,7 @@ fn run_loop(rx: cc::Receiver<AxJob>, shutdown: cc::Receiver<()>, focus: FocusSta
 
     // SAFETY: We created the system-wide ref; release it on shutdown.
     unsafe { CFRelease(system as CFTypeRef) };
-    debug!("ax-worker: shut down");
+    debug!("shut down");
 }
 
 fn element_at(

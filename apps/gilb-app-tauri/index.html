@@ -47,10 +47,10 @@
 
     <main class="container">
       <header>
-        <h1>gilb</h1>
-        <p class="subtitle">Layer 1 — accessibility capture</p>
+        <h1>Gilb.ai</h1>
       </header>
 
+      <!--
       <section class="card">
         <h2>Status</h2>
         <ul id="status-list" class="status-list">
@@ -62,35 +62,15 @@
           <li><strong>Actions today:</strong> <span id="status-actions">0</span></li>
         </ul>
       </section>
+      -->
 
       <section class="card">
         <div class="row">
           <button id="btn-start" type="button">Start</button>
           <button id="btn-stop" type="button" disabled>Stop</button>
-          <button id="btn-connect-mcp" type="button" class="btn-secondary">
-            Connect to MCP&nbsp;client
-          </button>
         </div>
         <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
     </main>
-
-    <div id="mcp-modal" class="modal" hidden>
-      <div class="modal-card">
-        <header class="modal-head">
-          <h2>Connect gilb-mcp</h2>
-          <button type="button" id="mcp-modal-close" class="modal-close" aria-label="Close">×</button>
-        </header>
-        <p class="modal-lead">Register gilb with your MCP client.</p>
-        <ul id="mcp-clients" class="mcp-clients"></ul>
-        <details class="mcp-other">
-          <summary>Other client (manual)</summary>
-          <p class="modal-hint">Paste this snippet into your client's MCP config.</p>
-          <pre id="mcp-other-json" class="mcp-other-json"></pre>
-          <button type="button" id="mcp-other-copy">Copy</button>
-        </details>
-        <p id="mcp-result" class="message" role="status" aria-live="polite"></p>
-      </div>
-    </div>
   </body>
 </html>

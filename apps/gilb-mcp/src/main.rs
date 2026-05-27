@@ -18,11 +18,11 @@ use crate::service::GilbService;
 async fn main() -> Result<()> {
     init_tracing();
     let db_path = resolve_db_path()?;
-    tracing::info!(?db_path, "gilb-mcp: opening db");
+    tracing::info!(?db_path, "opening db");
     let db = gilb_db::open_db_read_only(&db_path).await?;
     let service = GilbService::new(db);
 
-    tracing::info!("gilb-mcp: serving stdio");
+    tracing::info!("serving stdio");
     let conn = service.serve(stdio()).await?;
     conn.waiting().await?;
     Ok(())

@@ -232,7 +232,7 @@ fn find_url_in_walk(elem: AXUIElementRef, depth: usize) -> Option<String> {
     // Recurse into children.
     let children = copy_children(elem)?;
     for i in 0..children.len() {
-        let child = unsafe { *children.get(i)? };
+        let child = *children.get(i)?;
         // SAFETY: items returned by CFArray are +0 (owned by the array).
         // We only borrow; do NOT release `child` here.
         unsafe {

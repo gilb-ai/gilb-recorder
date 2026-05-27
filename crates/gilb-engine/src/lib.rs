@@ -103,7 +103,7 @@ impl Engine {
         let session_id = sessions::start_session(&self.inner.db)
             .await
             .context("failed to insert session row")?;
-        info!(%session_id, "engine: session started");
+        info!(%session_id, "session started");
 
         let (writer_tx, writer_rx) = mpsc::channel(ACTION_CHANNEL_CAPACITY);
         let (writer_shutdown_tx, writer_shutdown_rx) = tokio::sync::oneshot::channel();
@@ -147,7 +147,7 @@ impl Engine {
         }
 
         sessions::stop_session(&self.inner.db, active.session_id, reason.into()).await?;
-        info!(session_id = %active.session_id, "engine: session stopped");
+        info!(session_id = %active.session_id, "session stopped");
         Ok(())
     }
 }

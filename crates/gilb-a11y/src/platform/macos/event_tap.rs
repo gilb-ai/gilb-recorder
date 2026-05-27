@@ -135,7 +135,7 @@ fn run_thread(
                     if matches!(err, mpsc::error::TrySendError::Full(_)) {
                         // Drop silently — normalizer publishes drop health.
                     } else {
-                        warn!(?err, "event-tap: tx closed, dropping event");
+                        warn!(?err, "tx closed, dropping event");
                     }
                 }
             }
@@ -170,12 +170,12 @@ fn run_thread(
     tap.enable();
 
     if ready_tx.send(Ok(current_run_loop.clone())).is_err() {
-        error!("event-tap: parent dropped the ready channel; exiting");
+        error!("parent dropped the ready channel; exiting");
         return;
     }
-    info!("event-tap: runloop starting");
+    info!("runloop starting");
     CFRunLoop::run_current();
-    debug!("event-tap: runloop exited");
+    debug!("runloop exited");
 }
 
 fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Option<RawEvent> {

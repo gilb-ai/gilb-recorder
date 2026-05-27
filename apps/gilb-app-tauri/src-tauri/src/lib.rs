@@ -33,8 +33,6 @@ pub fn run() {
             commands::capture::stop_capture,
             commands::capture::status,
             commands::privacy::open_privacy_pane,
-            commands::mcp_connect::mcp_server_info,
-            commands::mcp_connect::mcp_connect,
         ])
         .run(tauri::generate_context!());
 

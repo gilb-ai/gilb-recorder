@@ -367,7 +367,6 @@ impl Normalizer {
             app = action.app.name.as_deref().unwrap_or("-"),
             role = action.element.role.as_deref().unwrap_or("-"),
             masked = action.password_flag,
-            "normalizer: emit"
         );
     }
 

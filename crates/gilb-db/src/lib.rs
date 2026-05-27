@@ -71,7 +71,7 @@ pub async fn open_db(path: impl AsRef<Path>) -> Result<Db> {
         .with_context(|| format!("failed to open sqlite db at {}", path.display()))?;
 
     migrate(&pool).await?;
-    info!(?path, "gilb-db open");
+    info!(?path, "opened");
     Ok(pool)
 }
 
@@ -109,6 +109,6 @@ pub async fn open_db_read_only(path: impl AsRef<Path>) -> Result<Db> {
         .await
         .with_context(|| format!("failed to open sqlite db read-only at {}", path.display()))?;
 
-    info!(?path, "gilb-db open (read-only)");
+    info!(?path, "opened (read-only)");
     Ok(pool)
 }

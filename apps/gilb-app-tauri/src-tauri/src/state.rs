@@ -22,7 +22,7 @@ pub struct AppState {
 pub fn build_app_state() -> Result<AppState> {
     ensure_data_dir().context("ensure_data_dir")?;
     let path = db_path().context("db_path")?;
-    info!(?path, "gilb-app: opening engine");
+    info!(?path, "opening engine");
     let engine = tauri::async_runtime::block_on(Engine::open(path))?;
     Ok(AppState {
         engine: Arc::new(engine),

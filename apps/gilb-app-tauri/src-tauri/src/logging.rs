@@ -1,16 +1,33 @@
-//! Tracing setup: stdout + daily-rotating file in `~/.gilb/logs/`.
+//! Tracing setup for the Tauri shell.
+//!
+//! Only initialised in dev builds (`cfg(dev)`, set by `tauri-build` during
+//! `tauri dev`). In release builds (`tauri build`) we deliberately skip
+//! tracing init entirely — no stdout, no file in `~/.gilb/logs/`.
 
-use gilb_config::ensure_logs_dir;
-use tracing::info;
 use tracing_appender::non_blocking::WorkerGuard;
+
+#[cfg(dev)]
+use gilb_config::ensure_logs_dir;
+#[cfg(dev)]
+use tracing::info;
+#[cfg(dev)]
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-/// Set up `tracing` to write to both stdout and a daily-rotated file in
-/// `$HOME/.gilb/logs/`. Returns a [`WorkerGuard`] that **must be held** for
-/// the lifetime of the process — dropping it flushes the file writer.
+/// Initialise `tracing` for the Tauri shell.
 ///
-/// If the logs directory cannot be created we fall back to stdout-only, log
-/// a warning, and return `None`. Capture continues to work in that case.
+/// Dev builds (`cfg(dev)`): writes to both stdout and a daily-rotated file
+/// in `$HOME/.gilb/logs/`. The returned [`WorkerGuard`] **must be held** for
+/// the lifetime of the process — dropping it flushes the file writer. If the
+/// logs directory cannot be created we fall back to stdout-only and return
+/// `None`.
+///
+/// Release builds: no subscriber is installed and `None` is returned.
+#[cfg(not(dev))]
+pub fn init_tracing() -> Option<WorkerGuard> {
+    None
+}
+
+#[cfg(dev)]
 pub fn init_tracing() -> Option<WorkerGuard> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,gilb=debug"));
@@ -32,7 +49,7 @@ pub fn init_tracing() -> Option<WorkerGuard> {
                 .with(stdout_layer)
                 .with(file_layer)
                 .try_init();
-            info!(logs_dir = %dir.display(), "tracing: file appender attached");
+            info!(logs_dir = %dir.display(), "file appender attached");
             Some(guard)
         }
         Err(err) => {
