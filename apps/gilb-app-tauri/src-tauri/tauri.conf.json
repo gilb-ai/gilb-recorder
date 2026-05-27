@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "gilb",
+  "productName": "Gilb",
   "version": "1.0.0",
   "identifier": "app.farol.gilb",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "gilb",
+        "title": "Gilb",
         "width": 480,
         "height": 500,
         "resizable": true,

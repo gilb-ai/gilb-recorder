@@ -5,10 +5,10 @@
     <key>LSUIElement</key>
     <true/>
     <key>NSAccessibilityUsageDescription</key>
-    <string>gilb records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
+    <string>Gilb records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
     <key>NSInputMonitoringUsageDescription</key>
-    <string>gilb listens to keyboard and mouse events to align actions with the app's interface.</string>
+    <string>Gilb listens to keyboard and mouse events to align actions with the app's interface.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>gilb queries the active application and window for context.</string>
+    <string>Gilb queries the active application and window for context.</string>
 </dict>
 </plist>
