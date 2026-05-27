@@ -12,9 +12,16 @@ changes — through the macOS Accessibility API. Each event is written
 to a local SQLite database at `~/.gilb/db.sqlite`.
 
 Everything stays on your machine. gilb makes no network calls, sends
-no telemetry, and uploads nothing. Querying the recorded activity
-later happens separately — your AI tooling reads the SQLite database
-directly when you configure it to.
+no telemetry, and uploads nothing. The `.app` also ships a
+read-only MCP server (`gilb-mcp`) bundled inside it — see the
+"Querying recorded activity" section below for how to point an LLM
+client at it.
+
+After the first launch, gilb registers itself as a macOS Login Item
+and starts at every login. When both permissions are granted it
+begins recording automatically — you do not need to keep clicking
+the start button each session. Disabling either behaviour is one
+toggle away (see below).
 
 Password fields are detected and masked at the database layer; events
 from known password managers (1Password, Bitwarden, KeePassXC,
@@ -43,36 +50,88 @@ it for malicious software"), right-click `gilb.app` → **Open** →
 ## Grant permissions
 
 gilb needs two permissions before it can record anything. On first
-launch you'll see a splash screen listing them — both must be on.
-
-Open **System Settings → Privacy & Security**, then for each item
-below, toggle `gilb` to on:
+launch you'll see a splash screen listing them — both must be on:
 
 - **Accessibility** — required to read the focused window, control
   IDs, and element text under the cursor.
 - **Input Monitoring** — required to observe mouse and keyboard
   events.
 
-The buttons on the splash screen open the right pane directly. The
-splash auto-dismisses once both toggles are on; if not, quit and
+The buttons on the splash open the matching System Settings pane
+*and* register `gilb` with macOS so it appears in the list with its
+own toggle — you do not need to drag the app into the list manually
+or click the `+` button. Flip the toggle to on, return to gilb, and
+the splash will dismiss itself once both permissions are granted.
+
+If a toggle was already on but the splash still complains, quit and
 relaunch `gilb`.
 
 If macOS later asks for **Automation** permission (to control other
 apps), allow it — gilb uses it to read titles and identifiers from
 the frontmost app.
 
-## Start and stop recording
+## Recording
 
-The main window is minimal: a **Start** button and a **Stop** button.
-Click **Start** to begin recording — the **Stop** button becomes
-enabled and a status line appears below the buttons. Click **Stop**
-to end the session. Quitting the app also ends the current session
-cleanly.
+Once both permissions are granted, gilb starts recording on its own
+the moment it launches — including at login. The main window shows
+two buttons:
+
+- **Record screen** — start a new recording session manually.
+- **Stop record** — end the current session.
+
+A status line under the buttons reports the current session id and
+any errors. Quitting the app also ends the current session cleanly.
+
+If you press **Stop record**, gilb will *not* auto-resume in the same
+session — press **Record screen** again, or relaunch the app, to
+start recording again.
 
 There is no Dock icon — gilb runs as a menu-bar-less utility (the
 window is the only entry point). Closing the window keeps the app
 running; quit it from **gilb → Quit gilb** in the menu bar, or with
 ⌘Q while the window is focused.
+
+### Disabling autostart at login
+
+gilb registers itself as a Login Item on first launch (it writes
+`~/Library/LaunchAgents/app.farol.gilb.plist`). To stop it from
+launching automatically:
+
+- **From the UI:** System Settings → General → Login Items → uncheck
+  `gilb`.
+- **From the terminal:**
+  ```sh
+  launchctl unload ~/Library/LaunchAgents/app.farol.gilb.plist
+  rm ~/Library/LaunchAgents/app.farol.gilb.plist
+  ```
+
+Note that the next time you launch `gilb` manually it will re-enable
+itself; if you want autostart off permanently, leave the app closed.
+
+## Querying recorded activity
+
+The `.app` bundle ships a read-only MCP server, `gilb-mcp`, at:
+
+```
+/Applications/gilb.app/Contents/MacOS/gilb-mcp
+```
+
+It reads `~/.gilb/db.sqlite` directly over stdio MCP transport. It
+does not need `gilb.app` itself to be running. To wire it into
+Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "gilb": {
+      "command": "/Applications/gilb.app/Contents/MacOS/gilb-mcp"
+    }
+  }
+}
+```
+
+For Claude Code or other MCP clients, point the same command at the
+binary. Restart the client after editing the config.
 
 ## Where your data lives
 
@@ -100,9 +159,15 @@ before upgrading.
 ## Uninstall
 
 1. Quit gilb.
-2. Drag `gilb.app` from `/Applications` to the Trash.
-3. Optionally, remove `~/.gilb/` to delete all recorded data.
-4. Optionally, revoke Accessibility / Input Monitoring permissions
+2. Remove the Login Item so the app does not relaunch at next login:
+   ```sh
+   launchctl unload ~/Library/LaunchAgents/app.farol.gilb.plist 2>/dev/null
+   rm -f ~/Library/LaunchAgents/app.farol.gilb.plist
+   ```
+   (Or System Settings → General → Login Items → uncheck `gilb`.)
+3. Drag `gilb.app` from `/Applications` to the Trash.
+4. Optionally, remove `~/.gilb/` to delete all recorded data.
+5. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
    removed).
 

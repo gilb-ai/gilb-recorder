@@ -114,14 +114,19 @@ npm run tauri build
 
 Tauri 2 will:
 
-1. Run `cargo build --release` for the workspace.
-2. Run `npm run build` (tsc + vite) and embed the frontend.
-3. Bundle `.app`, `.dmg`, and `.app.tar.gz`.
-4. Codesign with `APPLE_SIGNING_IDENTITY` + hardened runtime +
-   `entitlements.plist`.
-5. Submit the bundle to Apple via `notarytool submit --wait` using
+1. Run `bash scripts/build-sidecars.sh` (wired in via
+   `beforeBuildCommand`). The script builds `gilb-mcp` in release
+   mode and stages it as `binaries/gilb-mcp-<host-triple>` so Tauri
+   can pick it up as an `externalBin` sidecar.
+2. Run `cargo build --release` for the workspace.
+3. Run `npm run build` (tsc + vite) and embed the frontend.
+4. Bundle `.app`, `.dmg`, and `.app.tar.gz`. The sidecar is copied
+   into `gilb.app/Contents/MacOS/gilb-mcp`.
+5. Codesign the main binary *and* the sidecar with
+   `APPLE_SIGNING_IDENTITY` + hardened runtime + `entitlements.plist`.
+6. Submit the bundle to Apple via `notarytool submit --wait` using
    `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`.
-6. Staple the notarization ticket to the `.dmg` and `.app`.
+7. Staple the notarization ticket to the `.dmg` and `.app`.
 
 Artifacts land in:
 
@@ -129,6 +134,9 @@ Artifacts land in:
 apps/gilb-app-tauri/src-tauri/target/release/bundle/
   ├── dmg/gilb_<version>_<arch>.dmg
   ├── macos/gilb.app
+  │   └── Contents/MacOS/
+  │       ├── gilb            ← main binary
+  │       └── gilb-mcp        ← sidecar, signed + notarized with the .app
   └── macos/gilb.app.tar.gz
 ```
 
@@ -151,8 +159,13 @@ stapler validate "$DMG"
 # Inside the .app: signature chains to Apple, team ID is correct.
 APP=apps/gilb-app-tauri/src-tauri/target/release/bundle/macos/gilb.app
 codesign -dv --verbose=4 "$APP"
-# Expect: TeamIdentifier=83856566PM, Authority chain ending at
-# "Apple Root CA".
+codesign -dv --verbose=4 "$APP/Contents/MacOS/gilb-mcp"
+# Expect for both: TeamIdentifier=83856566PM, Authority chain ending
+# at "Apple Root CA".
+
+# Sidecar is a real Mach-O binary for this arch (gilb-mcp has no
+# --help; it goes straight to stdio MCP, so don't run it bare here).
+file "$APP/Contents/MacOS/gilb-mcp" | grep -q "Mach-O"
 ```
 
 If any check fails, the DMG is not safe to send. Fix the cause; do
@@ -194,3 +207,8 @@ For each recipient, send:
 - **Build fails on a fresh checkout with linker errors against
   `core-graphics` / `accessibility-sys`.** macOS SDK headers are
   missing. Re-run `xcode-select --install` and reboot if needed.
+- **`tauri build` errors `resource path 'binaries/gilb-mcp-<triple>'
+  doesn't exist`.** The `beforeBuildCommand` did not run, or
+  `build-sidecars.sh` failed. Run it manually
+  (`bash apps/gilb-app-tauri/scripts/build-sidecars.sh`) and inspect
+  its output — typically a `cargo build -p gilb-mcp` failure.
