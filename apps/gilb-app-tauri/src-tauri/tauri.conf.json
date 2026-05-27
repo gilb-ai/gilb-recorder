@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "bash scripts/build-sidecars.sh && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -14,8 +14,8 @@
     "windows": [
       {
         "title": "gilb",
-        "width": 380,
-        "height": 220,
+        "width": 480,
+        "height": 500,
         "resizable": true,
         "fullscreen": false
       }
@@ -28,6 +28,7 @@
   "bundle": {
     "active": true,
     "targets": ["dmg", "app", "msi"],
+    "externalBin": ["binaries/gilb-mcp"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

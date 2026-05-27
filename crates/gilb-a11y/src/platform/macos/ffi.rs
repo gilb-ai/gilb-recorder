@@ -4,19 +4,15 @@
 
 use std::ffi::c_void;
 
-pub type IOHIDRequestType = u32;
-pub type IOHIDAccessType = u32;
-
-pub const kIOHIDRequestTypePostEvent: IOHIDRequestType = 0;
-pub const kIOHIDRequestTypeListenEvent: IOHIDRequestType = 1;
-
-pub const kIOHIDAccessTypeGranted: IOHIDAccessType = 0;
-pub const kIOHIDAccessTypeDenied: IOHIDAccessType = 1;
-pub const kIOHIDAccessTypeUnknown: IOHIDAccessType = 2;
-
-#[link(name = "IOKit", kind = "framework")]
+// CoreGraphics Input Monitoring access. The `*ListenEvent*` family is the
+// recommended modern API for keyboard/mouse capture permission (matches
+// what prior-art + Apple's current docs use). Equivalent to the older
+// IOKit `IOHID{Check,Request}Access(kIOHIDRequestTypeListenEvent)` calls
+// — same TCC entry, just a cleaner surface.
+#[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
-    pub fn IOHIDCheckAccess(request: IOHIDRequestType) -> IOHIDAccessType;
+    pub fn CGPreflightListenEventAccess() -> bool;
+    pub fn CGRequestListenEventAccess() -> bool;
 }
 
 // ---- CGEvent keyboard text extraction -----------------------------------
