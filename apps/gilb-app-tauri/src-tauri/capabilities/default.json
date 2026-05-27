@@ -1,11 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. App-defined commands (start_capture, stop_capture, status, open_privacy_pane) are auto-allowed for local origins because no app ACL manifest is declared (see tauri-2 webview/mod.rs gate). Frontend IPC needs are limited to listen/unlisten for the 'permission' and 'health' events bridged from EventBus, plus the opener plugin used by open_privacy_pane.",
+  "description": "Capability for the main window. App-defined commands (start_capture, stop_capture, status, open_privacy_pane) are auto-allowed for local origins because no app ACL manifest is declared (see tauri-2 webview/mod.rs gate). Frontend IPC needs are limited to listen/unlisten for the 'permission' and 'health' events bridged from EventBus, the opener plugin used by open_privacy_pane, and the autostart plugin used to register gilb as a LaunchAgent at login.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "opener:default"
+    "opener:default",
+    "autostart:default"
   ]
 }

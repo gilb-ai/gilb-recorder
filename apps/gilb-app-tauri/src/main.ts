@@ -1,5 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
+
+// Set once per launch after the first successful `start_capture` (manual or
+// auto). Prevents the refresh loop from re-arming a recording the user
+// explicitly stopped.
+let hasAutoStarted = false;
 
 type Permissions = {
   accessibility: boolean;
@@ -111,6 +117,18 @@ async function refresh() {
   if (stopBtn) stopBtn.disabled = !s.recording;
 
   updateSplash(s.permissions, s.platform);
+
+  if (
+    !hasAutoStarted &&
+    !s.recording &&
+    s.permissions.accessibility &&
+    s.permissions.input_monitoring
+  ) {
+    hasAutoStarted = true;
+    startCapture();
+  } else if (s.recording) {
+    hasAutoStarted = true;
+  }
 }
 
 async function openPrivacyPane(pane: "accessibility" | "input_monitoring") {
@@ -160,6 +178,18 @@ window.addEventListener("DOMContentLoaded", () => {
   // actions_today counter and as a fallback for a missed broadcast.
   listen("permission", () => refresh());
   listen("health", () => refresh());
+
+  // Register gilb as a LaunchAgent on first run so it starts at login.
+  // Idempotent — `enable()` is a no-op once the agent plist is in place.
+  (async () => {
+    try {
+      if (!(await isAutostartEnabled())) {
+        await enableAutostart();
+      }
+    } catch (err) {
+      console.warn("autostart enable failed", err);
+    }
+  })();
 
   refresh();
   setInterval(refresh, 5000);
