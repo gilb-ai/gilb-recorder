@@ -514,7 +514,7 @@ pub async fn get_tree_snapshot(db: &SqlitePool, id: i64) -> Result<Option<TreeSn
 
     let root_text: String = row.get("root_json");
     let root: serde_json::Value =
-        serde_json::from_str(&root_text).unwrap_or_else(|_| serde_json::Value::String(root_text));
+        serde_json::from_str(&root_text).unwrap_or(serde_json::Value::String(root_text));
     Ok(Some(TreeSnapshotFull {
         meta: row_to_snapshot_meta(row),
         root,

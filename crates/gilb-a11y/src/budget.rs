@@ -3,12 +3,13 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BudgetTier {
     /// Few walks/min — text editors, terminals, simple apps.
     Light,
     /// Default, moderately active app.
+    #[default]
     Moderate,
     /// Heavy AX tree (Office, IDEs).
     Heavy,
@@ -24,11 +25,5 @@ impl BudgetTier {
             BudgetTier::Heavy => 20,
             BudgetTier::Critical => 5,
         }
-    }
-}
-
-impl Default for BudgetTier {
-    fn default() -> Self {
-        BudgetTier::Moderate
     }
 }

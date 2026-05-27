@@ -45,5 +45,5 @@ fn resolve_db_path() -> Result<std::path::PathBuf> {
     if let Ok(p) = std::env::var("GILB_DB") {
         return Ok(std::path::PathBuf::from(p));
     }
-    Ok(gilb_config::db_path()?)
+    gilb_config::db_path()
 }

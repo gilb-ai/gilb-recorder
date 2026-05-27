@@ -60,7 +60,7 @@ pub fn walk_focused_window(pid: i32) -> Option<Vec<Node>> {
     // SAFETY: AXUIElementCreateApplication returns +1; release.
     unsafe { CFRelease(app as CFTypeRef) };
 
-    let Some(window) = window else { return None };
+    let window = window?;
     unsafe {
         let _ = AXUIElementSetMessagingTimeout(window, PER_ELEMENT_TIMEOUT.as_secs_f32());
     }
