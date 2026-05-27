@@ -13,8 +13,8 @@ to a local SQLite database at `~/.gilb/db.sqlite`.
 
 Everything stays on your machine. gilb makes no network calls, sends
 no telemetry, and uploads nothing. Querying the recorded activity
-later happens through a separate read-only MCP server (`gilb-mcp`)
-that you start explicitly from your LLM tooling.
+later happens separately — your AI tooling reads the SQLite database
+directly when you configure it to.
 
 Password fields are detected and masked at the database layer; events
 from known password managers (1Password, Bitwarden, KeePassXC,
@@ -63,17 +63,9 @@ the frontmost app.
 
 ## Start and stop recording
 
-The main window has:
-
-- A **Status** panel showing whether permissions are granted, whether
-  a session is running, and how many actions were captured today.
-- **Start** / **Stop** buttons.
-- **Connect to MCP client** — opens a dialog that helps you register
-  `gilb-mcp` with Claude Code or another MCP client, so an LLM can
-  read the recorded activity.
-
-Click **Start** to begin recording. The status row will switch to
-"Recording" and the action counter will start climbing. Click **Stop**
+The main window is minimal: a **Start** button and a **Stop** button.
+Click **Start** to begin recording — the **Stop** button becomes
+enabled and a status line appears below the buttons. Click **Stop**
 to end the session. Quitting the app also ends the current session
 cleanly.
 
@@ -84,14 +76,15 @@ running; quit it from **gilb → Quit gilb** in the menu bar, or with
 
 ## Where your data lives
 
-| Path                          | What it is                                    |
-|-------------------------------|-----------------------------------------------|
-| `~/.gilb/db.sqlite`           | All recorded actions and sessions (SQLite).   |
+| Path                            | What it is                                  |
+|---------------------------------|---------------------------------------------|
+| `~/.gilb/db.sqlite`             | All recorded actions and sessions (SQLite). |
 | `~/.gilb/db.sqlite-wal`, `-shm` | SQLite write-ahead-log companion files.     |
-| `~/.gilb/logs/gilb.log.*`     | Daily-rotated app logs (text).                |
 
 Nothing is written outside `~/.gilb/` and nothing leaves your machine
-unless you explicitly export it.
+unless you explicitly export it. Release builds intentionally do not
+write a log file; if you need verbose diagnostics, the build can be
+re-cut from source as a dev build.
 
 To wipe the recording history, quit `gilb` and delete `~/.gilb/`.
 A new database is created on next launch.
@@ -108,7 +101,7 @@ before upgrading.
 
 1. Quit gilb.
 2. Drag `gilb.app` from `/Applications` to the Trash.
-3. Optionally, remove `~/.gilb/` to delete all recorded data and logs.
+3. Optionally, remove `~/.gilb/` to delete all recorded data.
 4. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
    removed).
@@ -117,8 +110,8 @@ before upgrading.
 
 Please include:
 
-- The version (visible in **gilb → About gilb** or in the bottom of
-  the window).
 - macOS version and architecture (Apple menu → About This Mac).
-- The relevant tail of `~/.gilb/logs/gilb.log.YYYY-MM-DD`.
-- A description of what you were doing when the problem occurred.
+- A description of what you were doing when the problem occurred,
+  ideally step by step.
+- If the bug is reproducible, the action kind and the foreground
+  app where it happens.
