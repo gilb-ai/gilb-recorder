@@ -37,13 +37,6 @@ If your change touches the database schema or any column read by
 `apps/gilb-mcp`, update `apps/gilb-mcp/help.md` in the same PR — that
 file is the user-facing contract for LLM clients.
 
-If your change touches macOS accessibility / permissions code, smoke
-the headless capture for a few seconds against a temp database:
-
-```sh
-cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5 --db /tmp/gilb-smoke.sqlite
-```
-
 ## Commit style
 
 Match the existing log:

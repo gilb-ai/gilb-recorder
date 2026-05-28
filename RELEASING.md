@@ -71,17 +71,6 @@ npm run build      # tsc + vite, writes apps/gilb-app-tauri/dist/
 cd ../..
 ```
 
-Headless capture smoke (requires Accessibility + Input Monitoring
-granted to your terminal — Terminal.app, iTerm, etc.):
-
-```sh
-cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5 --db /tmp/gilb-smoke.sqlite
-sqlite3 /tmp/gilb-smoke.sqlite 'SELECT count(*), kind FROM actions GROUP BY kind'
-rm /tmp/gilb-smoke.sqlite
-```
-
-You should see at least a few rows of `focus_change`, `click`, etc.
-
 ## Build
 
 Bump the version first if needed. The version lives in **three**

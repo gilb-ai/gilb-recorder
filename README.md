@@ -41,10 +41,6 @@ while a password field had focus are masked at the SQL layer
 ## Build and run
 
 ```sh
-# Headless capture smoke test (no UI). Records for 5 seconds into
-# ~/.gilb/db.sqlite by default; pass --db to redirect.
-cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5
-
 # Tauri shell with the recorder UI.
 cd apps/gilb-app-tauri
 npm install

@@ -39,10 +39,6 @@ cargo test -p gilb-a11y text_buffer        # name-filtered tests
 cargo clippy --workspace --all-targets     # lint
 cargo fmt --all                            # format
 
-# Headless capture smoke test (no Tauri UI).
-cargo run -p gilb-a11y --bin gilb-a11y-cli -- --seconds 5
-cargo run -p gilb-a11y --bin gilb-a11y-cli -- --db /tmp/gilb.sqlite --seconds 10
-
 # MCP server over the recorded DB (stdio). Spawned by Claude Code,
 # but handy to run manually:
 cargo run -p gilb-mcp
@@ -59,9 +55,7 @@ Capture defaults are controlled by env vars consumed by
 `CAPTURE_CLIPBOARD`, `CAPTURE_TREE_SNAPSHOTS`. Logging: `RUST_LOG=...`
 (defaults: `info,gilb=debug` in the Tauri shell, `info` in the CLI).
 
-The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`); both
-the Tauri app and the CLI smoke share that path unless `--db` is
-passed.
+The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`).
 
 ## Architecture
 
