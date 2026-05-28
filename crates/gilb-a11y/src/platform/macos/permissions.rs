@@ -51,7 +51,17 @@ pub fn request_accessibility() -> bool {
 /// native consent prompt on first call. Returns the resulting grant
 /// status. Subsequent calls return the current status without re-prompting
 /// — once the user denies, the only way back is via System Settings.
+///
+/// Calls both `IOHIDRequestAccess` (IOKit) and `CGRequestListenEventAccess`
+/// (CoreGraphics). They target the same TCC entry, but in packaged builds
+/// the CG call alone sometimes leaves the System Settings list empty — the
+/// IOKit call has historically been the reliable way to get the process
+/// listed. See the comment in `ffi.rs`.
 pub fn request_input_monitoring() -> bool {
-    // SAFETY: CoreGraphics access-request call, thread-safe.
-    unsafe { ffi::CGRequestListenEventAccess() }
+    // SAFETY: both calls take a single primitive argument and are
+    // documented as thread-safe.
+    unsafe {
+        let _io = ffi::IOHIDRequestAccess(ffi::kIOHIDRequestTypeListenEvent);
+        ffi::CGRequestListenEventAccess()
+    }
 }

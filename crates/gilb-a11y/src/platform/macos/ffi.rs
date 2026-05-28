@@ -4,15 +4,34 @@
 
 use std::ffi::c_void;
 
-// CoreGraphics Input Monitoring access. The `*ListenEvent*` family is the
-// recommended modern API for keyboard/mouse capture permission, as
-// documented by Apple. Equivalent to the older IOKit
-// `IOHID{Check,Request}Access(kIOHIDRequestTypeListenEvent)` calls
-// — same TCC entry, just a cleaner surface.
+// Input Monitoring access — two parallel API families that target the same
+// TCC entry. We call **both** from `request_input_monitoring`:
+//
+// * `CGRequestListenEventAccess` is the modern documented call, but in
+//   practice it does not always add the app to System Settings → Privacy &
+//   Security → Input Monitoring on first invocation in a packaged build.
+// * `IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)` is the older IOKit
+//   path; it registers the process with TCC reliably (this is what
+//   long-standing utilities like Karabiner-Elements use).
+//
+// Calling both is harmless — TCC dedupes the registration — and the IOKit
+// call closes the "empty list" failure mode where the user has no toggle
+// to flip.
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     pub fn CGPreflightListenEventAccess() -> bool;
     pub fn CGRequestListenEventAccess() -> bool;
+}
+
+/// `IOHIDRequestType` is a `uint32_t`. `kIOHIDRequestTypeListenEvent = 1`
+/// (the Input Monitoring TCC entry); `kIOHIDRequestTypePostEvent = 0` is
+/// the separate "post events" entry we don't need.
+pub const kIOHIDRequestTypeListenEvent: u32 = 1;
+
+#[link(name = "IOKit", kind = "framework")]
+extern "C" {
+    pub fn IOHIDRequestAccess(requestType: u32) -> bool;
+    pub fn IOHIDCheckAccess(requestType: u32) -> u32;
 }
 
 // ---- CGEvent keyboard text extraction -----------------------------------
