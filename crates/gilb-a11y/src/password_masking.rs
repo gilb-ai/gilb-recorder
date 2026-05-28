@@ -61,6 +61,10 @@ pub fn is_password_field(name: Option<&str>, identifier: Option<&str>) -> bool {
     })
 }
 
+// SAFETY: every pattern below is a fixed literal; `Regex::new` cannot fail
+// on these inputs. The `.unwrap()`s would surface a programmer error during
+// initialization rather than at runtime, and are the standard
+// `lazy_static` shape.
 static PII_REGEXES: Lazy<Vec<Regex>> = Lazy::new(|| {
     vec![
         // 13–19 digit credit-card like sequences (Luhn check left to consumers).

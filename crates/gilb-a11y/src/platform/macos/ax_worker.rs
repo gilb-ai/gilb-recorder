@@ -59,6 +59,9 @@ impl AxWorker {
         let (tx, rx) = cc::bounded::<AxJob>(QUEUE_CAPACITY);
         let (shutdown_tx, shutdown_rx) = cc::bounded::<()>(1);
 
+        // If the OS refuses to spawn this thread the capture pipeline
+        // cannot function — there is no useful degraded mode. Panic at
+        // init rather than carry a None handle through the engine.
         let join = std::thread::Builder::new()
             .name("gilb-ax-worker".into())
             .spawn(move || run_loop(rx, shutdown_rx, focus))
