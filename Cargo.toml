@@ -18,6 +18,13 @@ version = "1.0.0"
 edition = "2021"
 license = "MIT"
 publish = false
+authors = ["Leonid Dinershtein <leonid@dinershtein.com>"]
+description = "macOS desktop app that records user activity via accessibility APIs into a local SQLite database."
+homepage = "https://github.com/gilb-ai/gilb-recorder"
+repository = "https://github.com/gilb-ai/gilb-recorder"
+keywords = ["accessibility", "activity", "recorder", "macos", "tauri"]
+categories = ["accessibility", "os::macos-apis"]
+readme = "README.md"
 
 [workspace.dependencies]
 # async / runtime
