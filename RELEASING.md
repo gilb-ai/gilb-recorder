@@ -121,7 +121,7 @@ Tauri 2 will:
 2. Run `cargo build --release` for the workspace.
 3. Run `npm run build` (tsc + vite) and embed the frontend.
 4. Bundle `.app`, `.dmg`, and `.app.tar.gz`. The sidecar is copied
-   into `gilb.app/Contents/MacOS/gilb-mcp`.
+   into `Gilb.app/Contents/MacOS/gilb-mcp`.
 5. Codesign the main binary *and* the sidecar with
    `APPLE_SIGNING_IDENTITY` + hardened runtime + `entitlements.plist`.
 6. Submit the bundle to Apple via `notarytool submit --wait` using
@@ -132,12 +132,12 @@ Artifacts land in:
 
 ```
 apps/gilb-app-tauri/src-tauri/target/release/bundle/
-  ├── dmg/gilb_<version>_<arch>.dmg
-  ├── macos/gilb.app
+  ├── dmg/Gilb_<version>_<arch>.dmg
+  ├── macos/Gilb.app
   │   └── Contents/MacOS/
   │       ├── gilb            ← main binary
   │       └── gilb-mcp        ← sidecar, signed + notarized with the .app
-  └── macos/gilb.app.tar.gz
+  └── macos/Gilb.app.tar.gz
 ```
 
 `<arch>` is `aarch64` on Apple Silicon, `x64` on Intel. We only ship
@@ -148,7 +148,7 @@ the arch we built on; cross-arch builds are not configured.
 The DMG must pass all three checks before it leaves the machine:
 
 ```sh
-DMG=apps/gilb-app-tauri/src-tauri/target/release/bundle/dmg/gilb_*.dmg
+DMG=apps/gilb-app-tauri/src-tauri/target/release/bundle/dmg/Gilb_*.dmg
 
 # Gatekeeper acceptance — must say "Notarized Developer ID".
 spctl -a -vvv -t install "$DMG"
@@ -157,7 +157,7 @@ spctl -a -vvv -t install "$DMG"
 stapler validate "$DMG"
 
 # Inside the .app: signature chains to Apple, team ID is correct.
-APP=apps/gilb-app-tauri/src-tauri/target/release/bundle/macos/gilb.app
+APP=apps/gilb-app-tauri/src-tauri/target/release/bundle/macos/Gilb.app
 codesign -dv --verbose=4 "$APP"
 codesign -dv --verbose=4 "$APP/Contents/MacOS/gilb-mcp"
 # Expect for both: TeamIdentifier=83856566PM, Authority chain ending
