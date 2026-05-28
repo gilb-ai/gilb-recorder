@@ -34,6 +34,46 @@ extern "C" {
     pub fn IOHIDCheckAccess(requestType: u32) -> u32;
 }
 
+// ---- CGEventTap probe (TCC registration fallback) -----------------------
+//
+// When IOKit + CG `RequestAccess` calls still leave the Input Monitoring
+// list empty, the **only** thing TCC reliably reacts to is an actual
+// attempt to create an event tap. Even a tap with an empty mask and a
+// no-op callback triggers the OS to register the app with TCC; the call
+// returns NULL when permission is not yet granted, which is fine — we
+// just release whatever (if anything) came back.
+
+pub type CGEventTapProxy = *mut c_void;
+pub type CGEventTapCallBack = unsafe extern "C" fn(
+    proxy: CGEventTapProxy,
+    event_type: u32,
+    event: CGEventRef,
+    user_info: *mut c_void,
+) -> CGEventRef;
+pub type CFMachPortRef = *mut c_void;
+pub type CFTypeRef = *const c_void;
+
+pub const kCGHIDEventTap: u32 = 0;
+pub const kCGHeadInsertEventTap: u32 = 0;
+pub const kCGEventTapOptionListenOnly: u32 = 1;
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    pub fn CGEventTapCreate(
+        tap: u32,
+        place: u32,
+        options: u32,
+        events_of_interest: u64,
+        callback: CGEventTapCallBack,
+        user_info: *mut c_void,
+    ) -> CFMachPortRef;
+}
+
+#[link(name = "CoreFoundation", kind = "framework")]
+extern "C" {
+    pub fn CFRelease(cf: CFTypeRef);
+}
+
 // ---- CGEvent keyboard text extraction -----------------------------------
 //
 // Used to be `TISCopyCurrentKeyboardLayoutInputSource` + `UCKeyTranslate`,
