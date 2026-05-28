@@ -5,9 +5,9 @@
 use std::ffi::c_void;
 
 // CoreGraphics Input Monitoring access. The `*ListenEvent*` family is the
-// recommended modern API for keyboard/mouse capture permission (matches
-// what prior-art + Apple's current docs use). Equivalent to the older
-// IOKit `IOHID{Check,Request}Access(kIOHIDRequestTypeListenEvent)` calls
+// recommended modern API for keyboard/mouse capture permission, as
+// documented by Apple. Equivalent to the older IOKit
+// `IOHID{Check,Request}Access(kIOHIDRequestTypeListenEvent)` calls
 // — same TCC entry, just a cleaner surface.
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {

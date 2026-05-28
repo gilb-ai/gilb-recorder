@@ -192,8 +192,6 @@ fn is_browser_app(name: Option<&str>) -> bool {
 
 /// Three-tier URL extraction from a focused browser window.
 ///
-/// Mirrors prior-art/src/tree/macos.rs `extract_browser_url`:
-///
 /// 1. `AXDocument` on the window — works for Safari, Chrome (the value
 ///    is the active tab's URL when not navigated to a local file).
 /// 2. (TODO) Arc — needs `osascript`; deferred until we have a Therblig

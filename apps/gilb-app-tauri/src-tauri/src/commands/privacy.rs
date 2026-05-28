@@ -4,7 +4,8 @@
 //! permission — this registers gilb in System Settings so it shows up in
 //! the list and the user has a toggle to flip — and (b) open the pane
 //! itself. The native consent prompt (if any) layers on top of the
-//! settings UI, matching prior-art's pattern.
+//! settings UI; this is the documented `request_*` + URL-scheme pairing
+//! for the modern TCC APIs.
 
 #[tauri::command]
 pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<(), String> {

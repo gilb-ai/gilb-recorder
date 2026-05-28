@@ -163,11 +163,6 @@ masking, `range` formats). Any migration that changes the shape of
   it explicitly into our sources and cite the origin in the commit
   message.
 
-Active reference projects:
-
-- `reference/prior-art` — Rust workspace + Tauri desktop app; a
-  source of ideas for a11y / screen / event capture.
-
 ## macOS specifics
 
 - Bundle ID: `app.farol.gilb`. Apple Developer Team ID: `83856566PM`.

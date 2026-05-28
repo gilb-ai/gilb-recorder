@@ -1,13 +1,13 @@
 //! Walk the AX tree of the focused window of a process.
 //!
-//! Adapted from prior-art/src/tree/macos.rs `walk_element`. Hard
-//! caps on depth / node count / per-element timeout so a runaway tree
-//! can never freeze the snapshotter for more than the worst-case budget.
+//! Hard caps on depth / node count / per-element timeout so a runaway
+//! tree can never freeze the snapshotter for more than the worst-case
+//! budget.
 //!
 //! Output is a single JSON blob (Vec<Node>) — the analyzer parses on
-//! demand. We deliberately do NOT normalise one-row-per-element like
-//! prior-art; the trust-architecture comparison shows the blob form
-//! gives the same useful signal at a fraction of the row count.
+//! demand. We deliberately do NOT normalise one-row-per-element: the
+//! blob form gives the same useful signal at a fraction of the row
+//! count.
 
 use std::ffi::c_void;
 use std::ptr;
@@ -102,7 +102,10 @@ fn walk(elem: AXUIElementRef, depth: usize, state: &mut WalkState) {
         None => return, // not a real element — skip silently
     };
 
-    // Cheap skip-list. Mirrors prior-art's should_skip_role minimum.
+    // Cheap skip-list — roles that carry no signal and can blow up the
+    // walk: containers we already traverse via their children, decorative
+    // elements, and the `AXBrowser` tab-strip whose nodes duplicate the
+    // active window's contents.
     if matches!(
         role.as_str(),
         "AXUnknown" | "AXImage" | "AXSeparator" | "AXBrowser"
