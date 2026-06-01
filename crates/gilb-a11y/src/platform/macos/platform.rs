@@ -64,11 +64,6 @@ impl CapturePlatform for MacosPlatform {
                 "Accessibility permission is not granted (System Settings → Privacy & Security → Accessibility)"
             ));
         }
-        if !permissions::input_monitoring_granted() {
-            return Err(anyhow!(
-                "Input Monitoring permission is not granted (System Settings → Privacy & Security → Input Monitoring)"
-            ));
-        }
 
         let (raw_tx, raw_rx) = mpsc::channel(RAW_EVENT_CAPACITY);
         let (clip_tx, clip_rx) = mpsc::channel::<ClipboardChange>(CLIPBOARD_CAPACITY);

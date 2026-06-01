@@ -1,11 +1,13 @@
 //! macOS Privacy & Security pane shortcuts.
 //!
-//! For each requested pane we (a) ask macOS for the corresponding TCC
-//! permission — this registers gilb in System Settings so it shows up in
-//! the list and the user has a toggle to flip — and (b) open the pane
-//! itself. The native consent prompt (if any) layers on top of the
-//! settings UI; this is the documented `request_*` + URL-scheme pairing
-//! for the modern TCC APIs.
+//! Asks macOS for the Accessibility TCC permission (registering Gilb in
+//! System Settings so it shows up with a toggle) and opens the pane so
+//! the user can flip it. The native consent prompt, if shown, layers on
+//! top of the settings UI.
+//!
+//! Input Monitoring is intentionally not exposed: CGEventTap honours the
+//! Accessibility grant, so we don't ask for two permissions when one
+//! covers the recorder's needs.
 
 #[tauri::command]
 pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<(), String> {
@@ -18,10 +20,6 @@ pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<()
             "accessibility" => {
                 let _ = permissions::request_accessibility();
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
-            }
-            "input_monitoring" => {
-                let _ = permissions::request_input_monitoring();
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
             }
             other => return Err(format!("unknown privacy pane: {other}")),
         };

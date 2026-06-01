@@ -4,6 +4,13 @@
 //! system prompts. `request_*` functions register the process with TCC
 //! (so it appears in System Settings → Privacy & Security) and, on
 //! macOS's discretion, show the native consent prompt.
+//!
+//! Note on Input Monitoring: Apple documents `CGPreflightListenEventAccess`
+//! as returning `true` when the process is approved for **Accessibility OR
+//! Input Monitoring** — and `CGEventTapCreate` actually works through the
+//! AX-granted channel on modern macOS. We embrace that: once the user
+//! grants Accessibility, the recorder has everything it needs. We never
+//! ask for Input Monitoring separately.
 
 use core_foundation::base::TCFType;
 use core_foundation::boolean::CFBoolean;
@@ -21,9 +28,14 @@ pub fn accessibility_granted() -> bool {
     unsafe { accessibility_sys::AXIsProcessTrusted() }
 }
 
-/// Returns `true` when System Settings → Privacy → Input Monitoring is checked
-/// for this app. Without it, CGEventTap silently delivers no events.
-/// Polling-safe — `CGPreflightListenEventAccess` does not trigger a prompt.
+/// Returns `true` when the process is approved to listen for input events.
+/// Polling-safe — does not trigger the system prompt.
+///
+/// Apple's `CGPreflightListenEventAccess` returns `true` if the process has
+/// been granted **either** Accessibility or Input Monitoring, and the
+/// underlying `CGEventTap` honours both. So in our model "input monitoring
+/// granted" really means "we can listen for events at all" — which the AX
+/// grant alone already satisfies.
 pub fn input_monitoring_granted() -> bool {
     // SAFETY: CoreGraphics access-check call, thread-safe.
     unsafe { ffi::CGPreflightListenEventAccess() }
@@ -44,62 +56,4 @@ pub fn request_accessibility() -> bool {
         let dict = CFDictionary::from_CFType_pairs(&[(key, value)]);
         accessibility_sys::AXIsProcessTrustedWithOptions(dict.as_concrete_TypeRef())
     }
-}
-
-/// Trigger the macOS Input Monitoring permission flow. Registers the
-/// process with TCC (so it appears in System Settings) and shows the
-/// native consent prompt on first call. Returns the resulting grant
-/// status. Subsequent calls return the current status without re-prompting
-/// — once the user denies, the only way back is via System Settings.
-///
-/// Three layered nudges:
-///   1. `IOHIDRequestAccess` (IOKit) — the long-standing reliable path.
-///   2. `CGRequestListenEventAccess` (CoreGraphics) — Apple's modern,
-///      documented call; still emits the native consent prompt for users
-///      who already have the toggle exposed.
-///   3. A throwaway `CGEventTapCreate` with an empty event mask — the
-///      single operation TCC *always* reacts to. Even when 1+2 silently
-///      no-op (most painful in packaged builds where the System Settings
-///      list comes up empty), step 3 forces TCC to add the app. The tap
-///      returns NULL when permission isn't granted yet, in which case
-///      nothing needs releasing.
-pub fn request_input_monitoring() -> bool {
-    unsafe {
-        // SAFETY: primitive arg, thread-safe per Apple docs.
-        let _io = ffi::IOHIDRequestAccess(ffi::kIOHIDRequestTypeListenEvent);
-        // SAFETY: no args, thread-safe per Apple docs.
-        let cg = ffi::CGRequestListenEventAccess();
-
-        // SAFETY: empty event mask (no events of interest) + a no-op
-        // callback that returns the event unmodified. Creating the tap
-        // either fails (returns NULL — no resource leak) or succeeds and
-        // we immediately release the returned CFMachPortRef. Either way
-        // TCC registers the process.
-        let port = ffi::CGEventTapCreate(
-            ffi::kCGHIDEventTap,
-            ffi::kCGHeadInsertEventTap,
-            ffi::kCGEventTapOptionListenOnly,
-            0, // no events of interest — we never want callbacks
-            tap_probe_noop,
-            std::ptr::null_mut(),
-        );
-        if !port.is_null() {
-            ffi::CFRelease(port as ffi::CFTypeRef);
-        }
-
-        cg
-    }
-}
-
-/// No-op tap callback used only by the `CGEventTapCreate` probe in
-/// [`request_input_monitoring`]. Apple requires a non-null callback even
-/// when the event mask is empty; this one returns the event unchanged
-/// and is never actually invoked because no events match.
-unsafe extern "C" fn tap_probe_noop(
-    _proxy: ffi::CGEventTapProxy,
-    _event_type: u32,
-    event: ffi::CGEventRef,
-    _user_info: *mut std::ffi::c_void,
-) -> ffi::CGEventRef {
-    event
 }
