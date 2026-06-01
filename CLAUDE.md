@@ -109,9 +109,10 @@ is selected via `cfg(target_os = ...)`. `macos/` is broken into sub-modules
    event_bus, settings })`.
 3. The platform capture (on macOS — CGEventTap + AX) pushes
    `gilb_core::Action`s into `action_tx`.
-4. The writer task in `gilb-engine` calls
-   `gilb_db::actions::insert_action` per row (a batched write queue is
-   a planned follow-up).
+4. The writer task in `gilb-engine` buffers messages and commits them in
+   one transaction via `gilb_db::write_batch` once the buffer fills
+   (`WRITER_BATCH_MAX`) or a flush tick elapses (`WRITER_FLUSH_INTERVAL`);
+   it falls back to per-row `insert_action` if a batch transaction fails.
 5. `Engine::stop_capture` stops the worker → sends shutdown to the
    writer → closes the `sessions` row with `stop_reason`.
 

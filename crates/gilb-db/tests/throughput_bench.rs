@@ -15,12 +15,16 @@ use std::env;
 use std::path::PathBuf;
 
 use chrono::Utc;
-use gilb_core::{Action, ActionKind, AppInfo, ElementContext, Frame};
-use gilb_db::{actions, open_db, sessions};
+use gilb_core::{Action, ActionKind, AppInfo, ElementContext, Frame, WriterMessage};
+use gilb_db::{actions, open_db, sessions, write_batch};
 use uuid::Uuid;
 
 const N: usize = 10_000;
 const MIN_RATE: f64 = 1_000.0;
+
+/// Batch size used by the batched-path bench. Matches `WRITER_BATCH_MAX` in
+/// `gilb-engine` so the number is representative of the real writer.
+const BENCH_BATCH: usize = 256;
 
 fn temp_db_path() -> PathBuf {
     let mut p = env::temp_dir();
@@ -108,6 +112,54 @@ async fn throughput_bench() {
     assert!(
         rate > MIN_RATE,
         "insert rate {:.0}/s below smoke threshold {:.0}/s",
+        rate,
+        MIN_RATE
+    );
+}
+
+/// Same N rows as [`throughput_bench`], but committed through the batched
+/// `write_batch` path in chunks of `BENCH_BATCH`. Printed side-by-side with the
+/// per-row number, this is the concrete win the batched writer buys.
+#[tokio::test]
+async fn throughput_bench_batched() {
+    let path = temp_db_path();
+    let db = open_db(&path).await.expect("open_db");
+    let session_id = sessions::start_session(&db).await.expect("start_session");
+
+    let start = std::time::Instant::now();
+    let mut buf: Vec<WriterMessage> = Vec::with_capacity(BENCH_BATCH);
+    for i in 0..N {
+        buf.push(WriterMessage::Action(synthetic_action(session_id, i)));
+        if buf.len() >= BENCH_BATCH {
+            write_batch(&db, &buf).await.expect("write_batch");
+            buf.clear();
+        }
+    }
+    write_batch(&db, &buf).await.expect("write_batch tail");
+    let elapsed = start.elapsed();
+
+    let rate = N as f64 / elapsed.as_secs_f64();
+    println!(
+        "throughput_bench_batched: inserted {} actions in {:.2?} = {:.0} inserts/sec (batch={})",
+        N, elapsed, rate, BENCH_BATCH
+    );
+
+    let count = actions::count_in_session(&db, session_id)
+        .await
+        .expect("count_in_session");
+    assert_eq!(count, N as i64, "all rows must be persisted");
+
+    sessions::stop_session(&db, session_id, "bench-done")
+        .await
+        .expect("stop_session");
+    db.close().await;
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+    let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+
+    assert!(
+        rate > MIN_RATE,
+        "batched insert rate {:.0}/s below smoke threshold {:.0}/s",
         rate,
         MIN_RATE
     );

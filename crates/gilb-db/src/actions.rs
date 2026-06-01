@@ -7,6 +7,17 @@ use gilb_core::{Action, ActionId, SessionId};
 
 /// Insert one [`Action`]. Returns the new rowid.
 pub async fn insert_action(db: &Db, action: &Action) -> Result<ActionId> {
+    insert_action_with(db, action).await
+}
+
+/// Insert one [`Action`] against any executor — a pooled connection (`&Db`)
+/// or a transaction (`&mut Transaction`). [`insert_action`] is the
+/// single-row convenience wrapper; the batched writer in `gilb-db::write_batch`
+/// passes a transaction so a whole batch commits with one fsync.
+pub(crate) async fn insert_action_with<'e, E>(executor: E, action: &Action) -> Result<ActionId>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let captured_at = action.captured_at.to_rfc3339();
     let element_frame = action
         .element
@@ -46,7 +57,7 @@ pub async fn insert_action(db: &Db, action: &Action) -> Result<ActionId> {
     .bind(if action.password_flag { 1_i64 } else { 0_i64 })
     .bind(action.tree_snapshot_id)
     .bind(&extra_json)
-    .execute(db)
+    .execute(executor)
     .await?;
 
     Ok(res.last_insert_rowid())

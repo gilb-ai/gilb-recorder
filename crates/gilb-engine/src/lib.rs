@@ -6,10 +6,14 @@
 //!   capture worker + a DB writer.
 //! - [`Engine::stop_capture`] tears the worker down and closes the row.
 //!
-//! Phase 3 will replace the direct `insert_action` writer with a batched
-//! write queue.
+//! The DB writer batches: it buffers incoming [`WriterMessage`]s and commits
+//! them in one transaction once the buffer fills ([`WRITER_BATCH_MAX`]) or a
+//! flush tick elapses ([`WRITER_FLUSH_INTERVAL`]), collapsing N per-row commits
+//! into one fsync. If a batch transaction fails it falls back to per-row
+//! inserts so one malformed message can't drop the rest of the batch.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
@@ -19,10 +23,20 @@ use tracing::{info, warn};
 use gilb_a11y::{current_platform, CapturePlatform, Permissions, RunningCapture, StartContext};
 use gilb_config::RecordingSettings;
 use gilb_core::{SessionId, WriterMessage};
-use gilb_db::{actions, open_db, sessions, tree_snapshots, Db};
+use gilb_db::{actions, open_db, sessions, tree_snapshots, write_batch, Db};
 use gilb_events::EventBus;
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
+
+/// Flush the writer buffer once it holds this many messages. Bounds the size
+/// (and memory) of a single transaction; well under SQLite's per-statement
+/// limits since each message is its own `INSERT` inside the batch.
+const WRITER_BATCH_MAX: usize = 256;
+
+/// Flush a non-empty writer buffer at least this often even if it hasn't
+/// filled, so the latency from capture to a queryable row stays bounded during
+/// light activity (e.g. the UI's `actions_today` counter).
+const WRITER_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
 pub struct Engine {
@@ -158,23 +172,65 @@ fn spawn_writer(
     mut shutdown: tokio::sync::oneshot::Receiver<()>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
+        let mut buf: Vec<WriterMessage> = Vec::with_capacity(WRITER_BATCH_MAX);
+        let mut flush_tick = tokio::time::interval(WRITER_FLUSH_INTERVAL);
+        flush_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 _ = &mut shutdown => {
+                    // The platform capture is already stopped before shutdown is
+                    // signalled, so drain whatever is still queued and flush it.
                     while let Ok(msg) = rx.try_recv() {
-                        write_one(&db, msg).await;
+                        buf.push(msg);
+                        if buf.len() >= WRITER_BATCH_MAX {
+                            flush_batch(&db, &mut buf).await;
+                        }
                     }
+                    flush_batch(&db, &mut buf).await;
                     break;
+                }
+                _ = flush_tick.tick() => {
+                    flush_batch(&db, &mut buf).await;
                 }
                 maybe_msg = rx.recv() => {
                     match maybe_msg {
-                        Some(msg) => write_one(&db, msg).await,
-                        None => break,
+                        Some(msg) => {
+                            buf.push(msg);
+                            if buf.len() >= WRITER_BATCH_MAX {
+                                flush_batch(&db, &mut buf).await;
+                            }
+                        }
+                        None => {
+                            flush_batch(&db, &mut buf).await;
+                            break;
+                        }
                     }
                 }
             }
         }
     })
+}
+
+/// Commit `buf` in one transaction, clearing it. On transaction failure, fall
+/// back to per-row inserts so one bad message doesn't drop the whole batch.
+async fn flush_batch(db: &Db, buf: &mut Vec<WriterMessage>) {
+    if buf.is_empty() {
+        return;
+    }
+    match write_batch(db, buf).await {
+        Ok(()) => buf.clear(),
+        Err(err) => {
+            warn!(
+                ?err,
+                count = buf.len(),
+                "batch write failed; falling back to per-row inserts"
+            );
+            for msg in buf.drain(..) {
+                write_one(db, msg).await;
+            }
+        }
+    }
 }
 
 async fn write_one(db: &Db, msg: WriterMessage) {

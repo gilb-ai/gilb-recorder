@@ -4,15 +4,17 @@
 //! - [`open_db`] / [`migrate`] — open + apply migrations + PRAGMA tuning.
 //! - [`sessions`] — start/stop a recording session.
 //! - [`actions`] — insert a captured action.
+//! - [`write_batch`] — commit a batch of [`WriterMessage`]s in one transaction
+//!   (the engine writer's hot path).
 //!
-//! Batched write-queue (Phase 3) and FTS5 search (Phase 5) live in
-//! separate modules added by later phases.
+//! FTS5 search (Phase 5) lives in a separate module added by a later phase.
 
 pub mod actions;
 pub mod sessions;
 pub mod tree_snapshots;
 
 use anyhow::{Context, Result};
+use gilb_core::WriterMessage;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
 use std::path::Path;
@@ -81,6 +83,39 @@ pub async fn migrate(db: &Db) -> Result<()> {
         .run(db)
         .await
         .context("running gilb-db migrations")?;
+    Ok(())
+}
+
+/// Insert a batch of [`WriterMessage`]s in a single transaction.
+///
+/// One `BEGIN … COMMIT` per batch collapses what used to be N independent
+/// commits (each taking the WAL write-lock and fsync'ing at the next
+/// checkpoint) into one, which is the whole point of the engine's batched
+/// writer. Messages are inserted in arrival order so any future
+/// `actions.tree_snapshot_id` correlation stays valid.
+///
+/// The batch is atomic: if any insert fails the transaction rolls back and the
+/// error is returned without persisting any row. The caller (the engine
+/// writer) handles that by falling back to per-row inserts, so a single
+/// malformed message can't sink the whole batch.
+pub async fn write_batch(db: &Db, batch: &[WriterMessage]) -> Result<()> {
+    if batch.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db.begin().await.context("begin write-batch transaction")?;
+    for msg in batch {
+        match msg {
+            WriterMessage::Action(action) => {
+                actions::insert_action_with(&mut *tx, action).await?;
+            }
+            WriterMessage::TreeSnapshot(snap) => {
+                tree_snapshots::insert_tree_snapshot_with(&mut *tx, snap).await?;
+            }
+        }
+    }
+    tx.commit()
+        .await
+        .context("commit write-batch transaction")?;
     Ok(())
 }
 

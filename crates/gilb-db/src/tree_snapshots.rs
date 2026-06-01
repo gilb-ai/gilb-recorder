@@ -11,6 +11,19 @@ use gilb_core::{TreeSnapshot, TreeSnapshotId};
 
 /// Insert one [`TreeSnapshot`]. Returns the new rowid.
 pub async fn insert_tree_snapshot(db: &Db, snap: &TreeSnapshot) -> Result<TreeSnapshotId> {
+    insert_tree_snapshot_with(db, snap).await
+}
+
+/// Insert one [`TreeSnapshot`] against any executor — see
+/// [`crate::actions::insert_action_with`] for why the batched writer needs the
+/// transaction-friendly variant.
+pub(crate) async fn insert_tree_snapshot_with<'e, E>(
+    executor: E,
+    snap: &TreeSnapshot,
+) -> Result<TreeSnapshotId>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     let captured_at = snap.captured_at.to_rfc3339();
     let res = sqlx::query(
         r#"
@@ -28,7 +41,7 @@ pub async fn insert_tree_snapshot(db: &Db, snap: &TreeSnapshot) -> Result<TreeSn
     .bind(&snap.app.browser_url)
     .bind(snap.simhash)
     .bind(&snap.root_json)
-    .execute(db)
+    .execute(executor)
     .await?;
 
     Ok(res.last_insert_rowid())
