@@ -19,49 +19,17 @@ use parking_lot::Mutex;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
+use crate::events::{MouseButton, RawEvent};
+
 /// Bit-mask of all event types we are interested in.
 fn events_of_interest() -> Vec<CGEventType> {
     vec![
         CGEventType::KeyDown,
-        CGEventType::FlagsChanged,
         CGEventType::LeftMouseDown,
         CGEventType::RightMouseDown,
         CGEventType::OtherMouseDown,
         CGEventType::ScrollWheel,
     ]
-}
-
-/// Minimal representation handed to the normalizer. `KeyDown.text` is
-/// extracted in the event-tap callback via `CGEventKeyboardGetUnicodeString`
-/// — see [`super::ffi`] for the rationale.
-#[derive(Debug, Clone)]
-pub enum RawEvent {
-    KeyDown {
-        keycode: u16,
-        flags: u64,
-        text: Option<String>,
-    },
-    FlagsChanged {
-        keycode: u16,
-        flags: u64,
-    },
-    MouseDown {
-        button: MouseButton,
-        x: f64,
-        y: f64,
-        flags: u64,
-    },
-    Scroll {
-        delta_y: i64,
-        delta_x: i64,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Other,
 }
 
 /// Owns the event-tap thread + its CFRunLoop.
@@ -179,20 +147,14 @@ fn run_thread(
 }
 
 fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Option<RawEvent> {
-    let flags = event.get_flags().bits();
     let raw = match etype {
         CGEventType::KeyDown => {
             let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
             let text = extract_unicode(event);
             RawEvent::KeyDown {
-                keycode,
-                flags,
+                special: super::keyboard::special_key_from_macos_keycode(keycode),
                 text,
             }
-        }
-        CGEventType::FlagsChanged => {
-            let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
-            RawEvent::FlagsChanged { keycode, flags }
         }
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
             let p = event.location();
@@ -205,7 +167,6 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
                 button,
                 x: p.x,
                 y: p.y,
-                flags,
             }
         }
         CGEventType::ScrollWheel => {

@@ -29,7 +29,8 @@ use tracing::debug;
 
 use gilb_core::ElementContext;
 
-use super::focus::FocusState;
+use crate::focus::FocusState;
+use crate::ElementResolver;
 
 pub const QUEUE_CAPACITY: usize = 4;
 pub const QUERY_TIMEOUT: Duration = Duration::from_millis(150);
@@ -77,10 +78,16 @@ impl AxWorker {
     }
 
     /// Best-effort enqueue. Drops the request if the channel is full.
-    pub fn submit(&self, job: AxJob) {
+    pub fn enqueue(&self, job: AxJob) {
         if let Err(err) = self.tx.try_send(job) {
             debug!(?err, "queue full, dropping job");
         }
+    }
+}
+
+impl ElementResolver for AxWorker {
+    fn submit(&self, x: f64, y: f64, reply: tokio::sync::oneshot::Sender<Option<ElementContext>>) {
+        self.enqueue(AxJob { x, y, reply });
     }
 }
 

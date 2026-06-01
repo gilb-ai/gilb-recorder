@@ -9,15 +9,17 @@ use tracing::{info, warn};
 
 use gilb_events::HealthEvent;
 
+use crate::events::ClipboardChange;
+use crate::focus::FocusState;
+use crate::normalizer::Normalizer;
+use crate::tree::snapshotter;
 use crate::{CapturePlatform, Permissions, RunningCapture, StartContext};
 
 use super::ax_worker::AxWorker;
 use super::event_tap::EventTap;
-use super::focus::FocusState;
-use super::normalizer::Normalizer;
-use super::pasteboard::{self, ClipboardChange};
+use super::focus::MacFocus;
+use super::pasteboard;
 use super::permissions;
-use crate::tree::snapshotter;
 
 /// Bound on the in-process channel from the event-tap thread to the
 /// normalizer. Small to keep latency low; overflow drops events (and the
@@ -99,7 +101,8 @@ impl CapturePlatform for MacosPlatform {
             event_bus: ctx.event_bus.clone(),
             settings: ctx.settings,
             focus: self.focus.clone(),
-            ax_worker,
+            focus_provider: Box::new(MacFocus),
+            element_resolver: Box::new(ax_worker),
             snapshot_tx,
         };
 

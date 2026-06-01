@@ -6,7 +6,6 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Arc;
 use std::time::Duration;
 
 use accessibility_sys::{
@@ -14,7 +13,6 @@ use accessibility_sys::{
     kAXRoleAttribute, kAXTitleAttribute, kAXValueAttribute, AXError, AXUIElementCopyAttributeValue,
     AXUIElementCreateApplication, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
-use arc_swap::ArcSwap;
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
@@ -53,51 +51,15 @@ const BROWSER_NAMES: &[&str] = &[
     "comet",
 ];
 
-#[derive(Debug, Default, Clone)]
-pub struct FocusSnapshot {
-    pub app: AppInfo,
-    /// AX role of the currently focused element, if it could be obtained.
-    pub focused_role: Option<String>,
-}
+/// macOS [`FocusProvider`] backed by `NSWorkspace` + AX.
+pub struct MacFocus;
 
-/// Cheap-clone holder of the latest focus snapshot, updated from the AX worker
-/// and read on every event by the normalizer.
-#[derive(Clone, Default)]
-pub struct FocusState {
-    inner: Arc<ArcSwap<FocusSnapshot>>,
-}
-
-impl FocusState {
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(ArcSwap::from_pointee(FocusSnapshot::default())),
-        }
+impl crate::FocusProvider for MacFocus {
+    fn frontmost(&self) -> AppInfo {
+        frontmost_app()
     }
-
-    pub fn current(&self) -> Arc<FocusSnapshot> {
-        self.inner.load_full()
-    }
-
-    pub fn set(&self, snap: FocusSnapshot) {
-        self.inner.store(Arc::new(snap));
-    }
-
-    pub fn update_app(&self, app: AppInfo) {
-        let prev = self.inner.load_full();
-        let next = FocusSnapshot {
-            app,
-            focused_role: prev.focused_role.clone(),
-        };
-        self.inner.store(Arc::new(next));
-    }
-
-    pub fn set_focused_role(&self, role: Option<String>) {
-        let prev = self.inner.load_full();
-        let next = FocusSnapshot {
-            app: prev.app.clone(),
-            focused_role: role,
-        };
-        self.inner.store(Arc::new(next));
+    fn frontmost_with_window(&self) -> AppInfo {
+        frontmost_app_with_window()
     }
 }
 
