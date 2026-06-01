@@ -9,6 +9,10 @@ let hasAutoStarted = false;
 
 type Permissions = {
   accessibility: boolean;
+  // Reported by the backend but no longer gated on — Apple's
+  // CGPreflightListenEventAccess (and the underlying CGEventTap) honour
+  // the Accessibility grant, so once AX is on the recorder has what it
+  // needs. We leave the field on the type for protocol compatibility.
   input_monitoring: boolean;
 };
 
@@ -48,31 +52,16 @@ function updateSplash(perms: Permissions, platform: string) {
 
   // Splash only makes sense on macOS; do nothing on other platforms.
   const macOnly = platform === "macos";
-  const needsAx = macOnly && !perms.accessibility;
-  const needsIm = macOnly && !perms.input_monitoring;
-  const visible = needsAx || needsIm;
+  const visible = macOnly && !perms.accessibility;
 
   splash.hidden = !visible;
   if (!visible) return;
 
   setDot("splash-ax-dot", perms.accessibility);
-  setDot("splash-im-dot", perms.input_monitoring);
-  setText(
-    "splash-ax-status",
-    perms.accessibility ? "granted" : "not granted",
-  );
-  setText(
-    "splash-im-status",
-    perms.input_monitoring ? "granted" : "not granted",
-  );
+  setText("splash-ax-status", perms.accessibility ? "granted" : "not granted");
 
-  for (const step of ["splash-step-ax", "splash-step-im"]) {
-    const el = $(step);
-    if (!el) continue;
-    const granted =
-      step === "splash-step-ax" ? perms.accessibility : perms.input_monitoring;
-    el.classList.toggle("granted", granted);
-  }
+  const step = $("splash-step-ax");
+  if (step) step.classList.toggle("granted", perms.accessibility);
 }
 
 // Sequence counter — refresh() calls can race in parallel (poll, explicit
@@ -93,24 +82,6 @@ async function refresh() {
   }
   if (mySeq !== refreshSeq) return;
 
-  setText("status-platform", s.platform);
-  setDot("status-platform-dot", true);
-
-  setText("status-ax", s.permissions.accessibility ? "granted" : "not granted");
-  setDot("status-ax-dot", s.permissions.accessibility);
-
-  setText(
-    "status-im",
-    s.permissions.input_monitoring ? "granted" : "not granted",
-  );
-  setDot("status-im-dot", s.permissions.input_monitoring);
-
-  setText("status-rec", s.recording ? "recording" : "stopped");
-  setDot("status-rec-dot", s.recording);
-
-  setText("status-session", s.session_id ? String(s.session_id) : "—");
-  setText("status-actions", String(s.actions_today));
-
   const startBtn = $<HTMLButtonElement>("btn-start");
   const stopBtn = $<HTMLButtonElement>("btn-stop");
   if (startBtn) startBtn.disabled = s.recording;
@@ -118,12 +89,7 @@ async function refresh() {
 
   updateSplash(s.permissions, s.platform);
 
-  if (
-    !hasAutoStarted &&
-    !s.recording &&
-    s.permissions.accessibility &&
-    s.permissions.input_monitoring
-  ) {
+  if (!hasAutoStarted && !s.recording && s.permissions.accessibility) {
     hasAutoStarted = true;
     startCapture();
   } else if (s.recording) {
@@ -131,7 +97,7 @@ async function refresh() {
   }
 }
 
-async function openPrivacyPane(pane: "accessibility" | "input_monitoring") {
+async function openPrivacyPane(pane: "accessibility") {
   try {
     await invoke("open_privacy_pane", { pane });
   } catch (err) {
@@ -165,9 +131,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {
-      const pane = btn.dataset.pane;
-      if (pane === "accessibility" || pane === "input_monitoring") {
-        openPrivacyPane(pane);
+      if (btn.dataset.pane === "accessibility") {
+        openPrivacyPane("accessibility");
       }
     });
   }
@@ -179,7 +144,7 @@ window.addEventListener("DOMContentLoaded", () => {
   listen("permission", () => refresh());
   listen("health", () => refresh());
 
-  // Register gilb as a LaunchAgent on first run so it starts at login.
+  // Register Gilb as a LaunchAgent on first run so it starts at login.
   // Idempotent — `enable()` is a no-op once the agent plist is in place.
   (async () => {
     try {

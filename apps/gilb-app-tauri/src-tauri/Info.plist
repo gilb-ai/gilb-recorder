@@ -2,12 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>LSUIElement</key>
-    <true/>
     <key>NSAccessibilityUsageDescription</key>
     <string>Gilb records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
-    <key>NSInputMonitoringUsageDescription</key>
-    <string>Gilb listens to keyboard and mouse events to align actions with the app's interface.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Gilb queries the active application and window for context.</string>
 </dict>
