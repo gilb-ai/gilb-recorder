@@ -21,10 +21,14 @@ use gilb_events::{EventBus, HealthEvent};
 
 use super::cache::SnapshotCache;
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use super::cache::simhash;
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+use super::node::tokens_for_simhash;
 #[cfg(target_os = "macos")]
-use super::walker_macos::{tokens_for_simhash, walk_focused_window};
+use super::walker_macos::walk_focused_window;
+#[cfg(target_os = "windows")]
+use super::walker_windows::walk_focused_window;
 
 /// Bound on the focus→snapshotter channel. Focus changes are rare
 /// (~once per second peak); a small buffer is enough, and when the
@@ -158,7 +162,7 @@ pub fn spawn_worker(
     (tx, handle)
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn walk_and_serialize(pid: i32) -> Option<(u64, String)> {
     let nodes = walk_focused_window(pid)?;
     let tokens = tokens_for_simhash(&nodes);
@@ -167,7 +171,7 @@ fn walk_and_serialize(pid: i32) -> Option<(u64, String)> {
     Some((hash, root_json))
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 fn walk_and_serialize(_pid: i32) -> Option<(u64, String)> {
     None
 }

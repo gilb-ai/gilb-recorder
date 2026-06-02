@@ -9,7 +9,11 @@
 //! independent and lives in this crate's `cache` module.
 
 pub mod cache;
+pub mod node;
 pub mod snapshotter;
 
 #[cfg(target_os = "macos")]
 pub mod walker_macos;
+
+#[cfg(target_os = "windows")]
+pub mod walker_windows;

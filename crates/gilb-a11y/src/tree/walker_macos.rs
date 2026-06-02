@@ -21,25 +21,13 @@ use accessibility_sys::{
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
-use serde::{Deserialize, Serialize};
+
+use super::node::Node;
 
 const MAX_DEPTH: usize = 12;
 const MAX_NODES: usize = 800;
 const PER_ELEMENT_TIMEOUT: Duration = Duration::from_millis(100);
 const TOTAL_BUDGET: Duration = Duration::from_millis(800);
-
-/// One node in the serialised tree.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Node {
-    pub role: String,
-    /// AXTitle. Absent for elements with no title.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    /// AXValue, only when it's a non-empty CFString (TextField contents etc).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<String>,
-    pub depth: u8,
-}
 
 /// Walk the focused window of `pid` and return its tree. Returns
 /// `None` if the AX session is unavailable, the focused window can't
@@ -141,17 +129,6 @@ fn walk(elem: AXUIElementRef, depth: usize, state: &mut WalkState) {
         }
         // children goes out of scope here, releasing the CFArray (+1).
     }
-}
-
-/// Token stream for [`super::cache::simhash`] over a Node list.
-pub fn tokens_for_simhash(nodes: &[Node]) -> Vec<String> {
-    nodes
-        .iter()
-        .map(|n| {
-            let text = n.name.as_deref().or(n.value.as_deref()).unwrap_or("");
-            format!("{}:{}", n.role, text)
-        })
-        .collect()
 }
 
 fn copy_attr_ref(elem: AXUIElementRef, attr: &str) -> Option<AXUIElementRef> {
