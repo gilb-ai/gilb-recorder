@@ -8,13 +8,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, info};
 
-pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(750);
+use crate::events::ClipboardChange;
 
-#[derive(Debug, Clone)]
-pub struct ClipboardChange {
-    pub change_count: i64,
-    pub text: Option<String>,
-}
+pub const DEFAULT_POLL_INTERVAL: Duration = Duration::from_millis(750);
 
 /// Spawn a poller that emits a [`ClipboardChange`] every time
 /// `NSPasteboard.changeCount` increments. Stops when `shutdown` resolves.

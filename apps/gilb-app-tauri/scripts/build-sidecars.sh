@@ -27,6 +27,13 @@ TARGET="${TAURI_ENV_TARGET_TRIPLE:-$(rustc -vV | sed -n 's|host: ||p')}"
 BINARIES_DIR="$APP_DIR/src-tauri/binaries"
 mkdir -p "$BINARIES_DIR"
 
+# Windows cargo artifacts — and the name Tauri expects for externalBin —
+# carry a `.exe` suffix; other platforms don't.
+case "$TARGET" in
+  *windows*) EXE=".exe" ;;
+  *) EXE="" ;;
+esac
+
 build_one() {
   cd "$WORKSPACE_ROOT"
   cargo build --release --target "$1" -p gilb-mcp
@@ -46,7 +53,7 @@ case "$TARGET" in
     ;;
   *)
     build_one "$TARGET"
-    cp "$WORKSPACE_ROOT/target/$TARGET/release/gilb-mcp" \
-       "$BINARIES_DIR/gilb-mcp-$TARGET"
+    cp "$WORKSPACE_ROOT/target/$TARGET/release/gilb-mcp$EXE" \
+       "$BINARIES_DIR/gilb-mcp-$TARGET$EXE"
     ;;
 esac

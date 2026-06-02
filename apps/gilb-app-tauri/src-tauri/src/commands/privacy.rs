@@ -27,9 +27,17 @@ pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<()
             .open_url(url, None::<&str>)
             .map_err(|e| format!("failed to open privacy pane: {e}"))
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        // Windows does not gate low-level hooks or UI Automation behind a
+        // user-granted permission, so there is no pane to open — capture is
+        // always available. Treat this as a no-op success.
+        let _ = (app, pane);
+        Ok(())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (app, pane);
-        Err("open_privacy_pane is only supported on macOS".to_string())
+        Err("open_privacy_pane is not supported on this platform".to_string())
     }
 }

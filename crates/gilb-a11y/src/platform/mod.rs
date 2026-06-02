@@ -7,7 +7,6 @@ pub mod macos {
     pub mod ffi;
     pub mod focus;
     pub mod keyboard;
-    pub mod normalizer;
     pub mod pasteboard;
     pub mod permissions;
     mod platform;

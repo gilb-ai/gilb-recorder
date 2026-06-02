@@ -12,6 +12,10 @@
 
 pub mod activity_feed;
 pub mod budget;
+pub mod events;
+pub mod focus;
+pub mod keyboard;
+pub mod normalizer;
 pub mod password_masking;
 pub mod platform;
 pub mod text_buffer;
@@ -19,10 +23,10 @@ pub mod tree;
 
 use anyhow::Result;
 use async_trait::async_trait;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use gilb_config::RecordingSettings;
-use gilb_core::{SessionId, WriterMessage};
+use gilb_core::{AppInfo, ElementContext, SessionId, WriterMessage};
 use gilb_events::EventBus;
 
 /// Runtime permission snapshot reported by the platform.
@@ -75,6 +79,25 @@ pub trait CapturePlatform: Send + Sync {
 
     /// Start capturing. Returns when the worker is up and running.
     async fn start(&self, ctx: StartContext) -> Result<RunningCapture>;
+}
+
+/// Looks up the foreground application. Implemented per-OS; consumed by the
+/// shared [`normalizer::Normalizer`] on its focus-poll tick.
+pub trait FocusProvider: Send + Sync {
+    /// App identity only (no window title). Cheap.
+    fn frontmost(&self) -> AppInfo;
+    /// App identity plus focused-window title and, for browsers, the active
+    /// tab URL. May be bounded by an internal timeout.
+    fn frontmost_with_window(&self) -> AppInfo;
+}
+
+/// Best-effort lookup of the accessibility element at a screen coordinate,
+/// used to enrich clicks. Implemented per-OS (macOS AX, Windows UIA).
+pub trait ElementResolver: Send + Sync {
+    /// Resolve the element at `(x, y)` and reply on the channel. The
+    /// implementation may drop the request (never replying) when busy —
+    /// callers time out and proceed without context.
+    fn submit(&self, x: f64, y: f64, reply: oneshot::Sender<Option<ElementContext>>);
 }
 
 /// Returns the platform implementation built into this binary.
