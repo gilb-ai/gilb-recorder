@@ -17,6 +17,27 @@ pub const EXCLUDED_BUNDLE_IDS: &[&str] = &[
     "com.apple.keychainaccess",
 ];
 
+/// Windows executable names we never record from. On Windows the platform
+/// reports the foreground process's exe name as the app id, so the same
+/// `is_excluded_app` check covers password managers plus the system surfaces
+/// where credentials are entered (sign-in screen, UAC, credential dialogs).
+/// Matched case-insensitively.
+pub const EXCLUDED_WINDOWS_EXES: &[&str] = &[
+    "1password.exe",
+    "bitwarden.exe",
+    "keepass.exe",
+    "keepassxc.exe",
+    "dashlane.exe",
+    "enpass.exe",
+    "nordpass.exe",
+    "lastpass.exe",
+    "protonpass.exe",
+    // Sensitive Windows system surfaces.
+    "logonui.exe",              // lock / sign-in screen
+    "consent.exe",              // UAC elevation prompt
+    "credentialuibroker.exe",   // Windows credential dialogs
+];
+
 /// Lowercase substrings that mark an element / field name as password-like.
 pub const PASSWORD_NAME_SUBSTRINGS: &[&str] = &[
     "password",
@@ -38,11 +59,14 @@ pub const PASSWORD_NAME_SUBSTRINGS: &[&str] = &[
 /// AX role identifying a secure (masked) text field.
 pub const AX_SECURE_TEXT_FIELD: &str = "AXSecureTextField";
 
-/// Returns `true` when the active app should not be recorded.
-pub fn is_excluded_app(bundle_id: &str) -> bool {
+/// Returns `true` when the active app should not be recorded. `app_id` is the
+/// macOS bundle id or the Windows exe name, depending on platform; both lists
+/// are checked (entries are disjoint, so this is safe cross-platform).
+pub fn is_excluded_app(app_id: &str) -> bool {
     EXCLUDED_BUNDLE_IDS
         .iter()
-        .any(|b| b.eq_ignore_ascii_case(bundle_id))
+        .chain(EXCLUDED_WINDOWS_EXES.iter())
+        .any(|b| b.eq_ignore_ascii_case(app_id))
 }
 
 /// Returns `true` when the AX role indicates a secure text field.
@@ -94,6 +118,15 @@ mod tests {
         assert!(is_excluded_app("com.1password.1password"));
         assert!(is_excluded_app("COM.BITWARDEN.DESKTOP"));
         assert!(!is_excluded_app("com.apple.Notes"));
+    }
+
+    #[test]
+    fn excluded_windows_exes_are_blocked() {
+        assert!(is_excluded_app("1Password.exe"));
+        assert!(is_excluded_app("keepassxc.exe"));
+        assert!(is_excluded_app("LogonUI.exe"));
+        assert!(is_excluded_app("consent.exe"));
+        assert!(!is_excluded_app("notepad.exe"));
     }
 
     #[test]

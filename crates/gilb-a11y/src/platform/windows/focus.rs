@@ -40,7 +40,9 @@ fn snapshot(with_window: bool) -> AppInfo {
         let name = get_process_name(pid);
         let window_title = if with_window { window_text(hwnd) } else { None };
         AppInfo {
-            bundle_id: None,
+            // The exe name doubles as the stable app id — it's what
+            // `password_masking::is_excluded_app` matches against on Windows.
+            bundle_id: name.clone(),
             name,
             pid: Some(pid as i32),
             window_title,
