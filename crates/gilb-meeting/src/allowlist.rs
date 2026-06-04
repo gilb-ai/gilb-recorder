@@ -37,6 +37,56 @@ const ALLOWLIST: &[(&str, &str)] = &[
     ("ai.perplexity.comet", "Perplexity"),
 ];
 
+/// `(process_exe, bundle_id)` pairs mapping a Windows process to the
+/// bundle ID of the same meeting app. Ported verbatim from rodnik's
+/// `WINDOWS_PROCESS_MAP`; the keys are lowercase exe basenames (the
+/// match is case-insensitive — see [`bundle_id_from_process_name`]).
+///
+/// WASAPI reports a session's process, not a bundle ID, so the Windows
+/// detector maps through here before reusing the shared allowlist.
+const WINDOWS_PROCESS_MAP: &[(&str, &str)] = &[
+    // Video conferencing
+    ("zoom.exe", "us.zoom.xos"),
+    ("teams.exe", "com.microsoft.teams2"),
+    ("ms-teams.exe", "com.microsoft.teams2"),
+    ("webex.exe", "com.cisco.webexmeetingsapp"),
+    ("voovmeetingapp.exe", "com.tencent.tencentmeeting"),
+    ("tuple.exe", "app.tuple.app"),
+    ("gather.exe", "com.gather.Gather"),
+    // Russian video conferencing
+    ("yandextelemost.exe", "ru.yandex.desktop.telemost"),
+    ("jazz.exe", "salutejazz.jazz-app"),
+    ("ktalk.exe", "kontur.talk"),
+    // Messaging
+    ("slack.exe", "com.tinyspeck.slackmacgap"),
+    ("discord.exe", "com.hnc.Discord"),
+    ("whatsapp.exe", "net.whatsapp.WhatsApp"),
+    ("skype.exe", "com.skype.skype"),
+    // Telephony
+    ("aircall.exe", "io.aircall.phone"),
+    ("aircall workspace.exe", "io.aircall.phone"),
+    ("dialpad.exe", "com.electron.dialpad"),
+    ("dialpadmeetings.exe", "com.electron.uberconference"),
+    // AI assistants
+    ("comet.exe", "ai.perplexity.comet"),
+];
+
+/// Bundle ID for a Windows process, or `None` if it is not a known
+/// meeting app. `process_name` may be a full path or a bare exe name;
+/// only the basename is matched, case-insensitively (port of rodnik
+/// `getBundleIdFromProcessName`).
+pub fn bundle_id_from_process_name(process_name: &str) -> Option<&'static str> {
+    let basename = process_name
+        .rsplit(['\\', '/'])
+        .next()
+        .unwrap_or(process_name)
+        .to_ascii_lowercase();
+    WINDOWS_PROCESS_MAP
+        .iter()
+        .find(|(exe, _)| *exe == basename)
+        .map(|(_, id)| *id)
+}
+
 /// True if `bundle_id` belongs to a known meeting app.
 pub fn is_allowlisted(bundle_id: &str) -> bool {
     ALLOWLIST.iter().any(|(id, _)| *id == bundle_id)
