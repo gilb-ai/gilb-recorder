@@ -47,6 +47,34 @@
         <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
 
+      <section class="card auth" id="auth-card">
+        <div id="auth-signed-out">
+          <p class="auth-lead">
+            Connect this recorder to your Gilb workspace to enable
+            Enterprise features.
+          </p>
+          <div class="row">
+            <input
+              id="auth-url"
+              type="url"
+              class="auth-input"
+              placeholder="https://your-workspace.gilb.app"
+              value="http://localhost:3000"
+            />
+            <button id="btn-connect" type="button">Connect</button>
+          </div>
+        </div>
+        <div id="auth-signed-in" hidden>
+          <p class="auth-signed-line">
+            Connected to your <strong>Gilb workspace</strong>
+          </p>
+          <p class="auth-url-display">
+            <span id="auth-employee"></span> · <span id="auth-ws-url"></span>
+          </p>
+          <button id="btn-signout" type="button">Sign out</button>
+        </div>
+      </section>
+
       <footer class="version" id="app-version"></footer>
     </main>
   </body>

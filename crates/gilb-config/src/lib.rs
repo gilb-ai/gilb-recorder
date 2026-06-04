@@ -156,3 +156,33 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(Some(creds))
 }
+
+/// Write `$HOME/.gilb/credentials.json` (creating `$HOME/.gilb/` if needed),
+/// flipping the recorder into Tier-2. The file holds a personal bearer token,
+/// so it is written `0600` on unix.
+pub fn save_credentials(creds: &Credentials) -> Result<()> {
+    ensure_data_dir()?;
+    let path = credentials_path()?;
+    let json =
+        serde_json::to_vec_pretty(creds).context("failed to serialize credentials")?;
+    std::fs::write(&path, &json)
+        .with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to chmod 600 {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Remove `$HOME/.gilb/credentials.json`, returning the recorder to Tier-1
+/// (local-only). A no-op (Ok) if the file is already absent — used by sign-out.
+pub fn clear_credentials() -> Result<()> {
+    let path = credentials_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}

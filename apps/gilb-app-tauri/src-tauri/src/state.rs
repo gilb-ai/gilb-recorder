@@ -9,12 +9,23 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use gilb_config::{db_path, ensure_data_dir, logs_dir};
 use gilb_engine::Engine;
+use parking_lot::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::info;
 
+/// In-flight recorder→gilb-web login. Set by `start_login`, consumed by the
+/// `gilb://auth/callback` deep-link handler, which checks `state` matches the
+/// callback before trusting it (the callback must belong to a login this
+/// instance started).
+pub struct PendingAuth {
+    pub state: String,
+    pub gilb_web_url: String,
+}
+
 pub struct AppState {
     pub engine: Arc<Engine>,
+    pub pending_auth: Mutex<Option<PendingAuth>>,
 }
 
 /// Open the SQLite database and build [`AppState`]. Pulled out of `setup()` so
@@ -26,6 +37,7 @@ pub fn build_app_state() -> Result<AppState> {
     let engine = tauri::async_runtime::block_on(Engine::open(path))?;
     Ok(AppState {
         engine: Arc::new(engine),
+        pending_auth: Mutex::new(None),
     })
 }
 
