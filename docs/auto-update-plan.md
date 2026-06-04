@@ -71,11 +71,28 @@ Manifest shape (`latest.json`):
    for first-install distribution if desired; the updater consumes the NSIS one.
 4. **macOS must be notarized**, not just signed — otherwise Gatekeeper blocks
    the app the updater swaps in. Wire notarization into the release build.
-5. **Silent auto-update.** Check on launch and periodically; download + stage
-   the update with no prompt. **Apply only when it's safe** — never call
-   `relaunch()` during an active capture session (that would kill recording).
-   Install on next app launch, or when idle / not recording. Also expose a
-   manual "Check for updates" action for on-demand use.
+5. **Silent + immediate.** Check on launch and periodically; download silently
+   and install + relaunch immediately, no prompt. **Clean handover:** if a
+   capture session is active, call `engine.stop_capture` first (flushes the
+   writer, closes the session row) so an in-progress recording ends cleanly
+   rather than being killed mid-write — then relaunch; the new build resumes
+   via the normal autostart flow. Also expose a manual "Check for updates".
+
+## Credentials & secrets
+
+All secrets live in **GitHub Actions Secrets** (encrypted, never committed, not
+exposed to fork PRs — a public repo does not leak them) and are mirrored in the
+team secret manager:
+
+- **Updater key:** generated locally; private key + password backed up in the
+  secret manager and set as `TAURI_SIGNING_PRIVATE_KEY` /
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Only the public key is committed
+  (`tauri.conf.json`).
+- **macOS notarization:** App Store Connect **API key** — `APPLE_API_KEY` (base64
+  `.p8`), `APPLE_API_ISSUER`, `APPLE_API_KEY_ID` — plus the Developer ID cert
+  (`APPLE_CERTIFICATE` base64 + `APPLE_CERTIFICATE_PASSWORD`) and
+  `APPLE_SIGNING_IDENTITY`.
+- **Windows:** existing `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD`.
 
 ## Work breakdown
 
@@ -93,16 +110,16 @@ Manifest shape (`latest.json`):
   - `plugins.updater`: `pubkey`, `endpoints` (the GitHub Releases `latest.json`
     URL), `windows.installMode: "passive"`.
 
-### Phase 2 — App-side update flow (silent)
+### Phase 2 — App-side update flow (silent + immediate)
 - On launch (and on a periodic timer) call `check()`. If an update exists,
-  `downloadAndInstall(onProgress)` silently — no prompt. Surface a small status
-  in `#message` (e.g. "Updating…", "Update ready").
-- **Recording guard:** never `relaunch()` while a capture session is active.
-  Track recording state (already in `EngineStatus.recording`); if recording,
-  stage the update and apply on next launch (or when capture stops / the app is
-  idle). Only auto-relaunch when not recording.
-- Keep a manual "Check for updates" action for on-demand use; reuse
-  `plugin-dialog` only for surfacing errors, not for gating installs.
+  `downloadAndInstall(onProgress)` silently, then `relaunch()` immediately — no
+  prompt. Surface a small status in `#message` (e.g. "Updating…").
+- **Clean handover:** before relaunch, if `EngineStatus.recording` is true call
+  `engine.stop_capture` so the writer flushes and the session row closes — the
+  recording ends cleanly instead of being killed mid-write. The relaunched build
+  resumes capture via the existing autostart flow.
+- Keep a manual "Check for updates" action; use `plugin-dialog` only for
+  surfacing errors, not for gating installs.
 
 ### Phase 3 — Release CI (the bulk of the work)
 Adopt the official **`tauri-apps/tauri-action`** for a unified, tag-driven
@@ -116,11 +133,11 @@ release, replacing the ad-hoc `windows-release.yml`:
   - `windows-latest` (x64) for `windows-x86_64` — builds NSIS,
     Authenticode-signs, emits `*-setup.exe` + `.sig`. (Native `windows-aarch64`
     deferred.)
-- Env/secrets passed to every job:
+- Env/secrets passed to every job (see "Credentials & secrets"):
   - `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (updater).
-  - macOS: `APPLE_CERTIFICATE` (+ password), `APPLE_SIGNING_IDENTITY`,
-    `APPLE_ID`, `APPLE_PASSWORD` (app-specific), `APPLE_TEAM_ID` (83856566PM) —
-    or an App Store Connect API key.
+  - macOS: `APPLE_CERTIFICATE` (+ password), `APPLE_SIGNING_IDENTITY`, and the
+    App Store Connect API key (`APPLE_API_KEY` / `APPLE_API_ISSUER` /
+    `APPLE_API_KEY_ID`) for notarization.
   - Windows: the existing `WINDOWS_CERT_PFX_BASE64` + `WINDOWS_CERT_PASSWORD`.
 - `tauri-action` with `includeUpdaterJson: true` builds, signs, creates the
   GitHub Release, uploads artifacts, and generates/attaches `latest.json`
