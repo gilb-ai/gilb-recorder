@@ -1,0 +1,30 @@
+{
+  "segments": [
+    {
+      "app": "Google Chrome",
+      "window_title": "Sign in · Acme — [redacted]",
+      "url_host": "app.acme.com",
+      "url_path_shape": "/login",
+      "started_at": "2026-06-04T10:00:00Z",
+      "duration_s": 20,
+      "steps": [
+        { "kind": "click", "role": "AXTextField", "name": "Email" },
+        { "kind": "text", "role": "AXTextField", "name": "Email", "len": 25 },
+        { "kind": "text", "role": "AXTextField", "len": 25 },
+        { "kind": "text", "role": "AXSecureTextField", "secure": true },
+        { "kind": "click", "role": "AXButton", "name": "Sign in" },
+        { "kind": "clipboard", "len": 19 }
+      ]
+    },
+    {
+      "app": "Terminal",
+      "window_title": "~/src/secret-project — vim",
+      "started_at": "2026-06-04T10:02:00Z",
+      "duration_s": 6,
+      "steps": [
+        { "kind": "key", "key": "Return" },
+        { "kind": "scroll", "dir": "down" }
+      ]
+    }
+  ]
+}
