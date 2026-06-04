@@ -39,7 +39,7 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["dmg", "app", "msi", "nsis"],
+    "targets": ["dmg", "app", "nsis"],
     "externalBin": ["binaries/gilb-mcp"],
     "icon": [
       "icons/32x32.png",
