@@ -36,11 +36,11 @@ segment {
 }
 // Step = one of:
 { kind:"click",     role, name? }
-{ kind:"text",      role, name?, len }      // NEVER the typed text; secure ⇒ {len, secure:true, no name}
+{ kind:"text",      role, name?, len, value_type? }  // NEVER the text; value_type = coarse local category (see below); secure ⇒ {len, secure:true}
 { kind:"key",       key }                    // only nav/edit keys: Enter/Tab/Esc/Arrows/Home/End/PageUp/Down
 { kind:"scroll",    dir:"up"|"down" }
 { kind:"nav",       url_host, url_path_shape? }
-{ kind:"clipboard", len? }                   // content dropped
+{ kind:"clipboard", len?, value_type? }      // content dropped; value_type kept
 { kind:"focus",     app, window_title? }     // app/window switch
 // Identical consecutive steps collapse to { …, repeat:k }.
 ```
@@ -60,7 +60,7 @@ segment {
 | `element_help` | **DROP** (free text, can carry content) |
 | `element_identifier` | **keep** (stable a11y id) unless it trips N3 |
 | `element_frame` (coords) | **DROP** |
-| `text_content` | **DROP value; keep `len` only** |
+| `text_content` | **DROP value; keep `len` + `value_type`** (see Content-type tags) |
 | `password_flag=true` | content already `[masked]`; emit `{kind:"text", role, len, secure:true}` with **no name** |
 | `extra_json` | keep nav `key`, scroll `dir`; **DROP** `x`/`y`/coords |
 | tree `root_json` | reduce to **role histogram**; DROP names/values |
@@ -79,6 +79,29 @@ segment {
   `:id`; drop query, fragment, userinfo entirely.
 - **Excluded apps** (`password_masking::is_excluded_app` — password managers,
   LogonUI, UAC, etc.): the **whole segment is dropped**.
+
+## Content-type tags (the intent lever)
+
+To recover **intent** without leaking content, the redactor classifies each
+typed value / clipboard payload into a **coarse, deterministic category** and
+emits only that label (`value_type`) — never the value. The LLM then sees
+"typed a **currency** into Amount" / "pasted a **card**" instead of the data.
+
+- Computed **locally** by ordered regex/heuristics on `text_content` (and, if
+  needed, `element_value`); **first match wins**; default `freeform`.
+- **Never emit the value** — only `value_type` + `len`. The classifier is part
+  of the public crate (auditable).
+- Taxonomy (coarse on purpose): `email`, `url`, `phone`, `card`, `ssn`,
+  `currency`, `number`, `date`, `uuid`, `token` (high-entropy), `path`,
+  `freeform`, `empty`. PII categories (`email`/`card`/`ssn`/…) still set the tag
+  and **drop the value** — consistent with the invariants.
+- If the recorder already redacted the value (`[masked]`/`[redacted]`), the type
+  is unknown → `value_type:"redacted"` (or omit); `len` from the placeholder.
+- Secure fields (`password_flag`): no `value_type` (already `secure:true`).
+
+This is the main dial for **intent fidelity vs privacy**: categories add a lot
+of "what kind of thing" signal at ~zero content risk. Layer-2 eval
+(`eval-slice`) measures whether it's enough.
 
 ## Budget / volume
 

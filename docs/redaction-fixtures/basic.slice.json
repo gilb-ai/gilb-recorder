@@ -9,11 +9,11 @@
       "duration_s": 20,
       "steps": [
         { "kind": "click", "role": "AXTextField", "name": "Email" },
-        { "kind": "text", "role": "AXTextField", "name": "Email", "len": 25 },
-        { "kind": "text", "role": "AXTextField", "len": 25 },
+        { "kind": "text", "role": "AXTextField", "name": "Email", "len": 25, "value_type": "email" },
+        { "kind": "text", "role": "AXTextField", "len": 25, "value_type": "email" },
         { "kind": "text", "role": "AXSecureTextField", "secure": true },
         { "kind": "click", "role": "AXButton", "name": "Sign in" },
-        { "kind": "clipboard", "len": 19 }
+        { "kind": "clipboard", "len": 19, "value_type": "card" }
       ]
     },
     {
