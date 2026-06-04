@@ -1,8 +1,9 @@
 name: Windows build
 
 # Builds the Tauri desktop app on a hosted Windows runner and uploads the
-# .msi installer as an artifact. Useful for validating the Windows capture
-# backend end-to-end without a local Windows toolchain.
+# NSIS installer as an artifact. Useful for validating the Windows capture
+# backend end-to-end without a local Windows toolchain. This is a smoke
+# build — signed/updater release builds live in windows-release.yml.
 
 on:
   workflow_dispatch:
@@ -33,15 +34,17 @@ jobs:
         run: npm install
 
       # `tauri build` runs the beforeBuildCommand (bash build-sidecars.sh +
-      # vite build); bash ships on GitHub's Windows runners. Tauri downloads
-      # the WiX toolset for the .msi automatically. No code signing.
+      # vite build); bash ships on GitHub's Windows runners. No code signing.
+      # Override createUpdaterArtifacts=false so the smoke build doesn't need
+      # the updater signing key (that's only for release in windows-release.yml).
       - name: Build Tauri app
         working-directory: apps/gilb-app-tauri
-        run: npm run tauri build
+        shell: bash
+        run: npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: gilb-windows-msi
-          path: target/release/bundle/msi/*.msi
+          name: gilb-windows-nsis
+          path: target/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
