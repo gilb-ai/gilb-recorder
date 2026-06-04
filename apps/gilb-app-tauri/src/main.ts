@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
 
 // How often to poll for updates while the app is running.
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
@@ -193,6 +194,11 @@ window.addEventListener("DOMContentLoaded", () => {
       console.warn("autostart enable failed", err);
     }
   })();
+
+  // Show the app version in the footer.
+  getVersion()
+    .then((v) => setText("app-version", `Gilb v${v}`))
+    .catch(() => {});
 
   refresh();
   setInterval(refresh, 5000);
