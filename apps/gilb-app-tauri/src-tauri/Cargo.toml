@@ -20,8 +20,11 @@ tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-process = "2"
+tauri-plugin-deep-link = "2"
 base64 = "0.22"
 directories = { workspace = true }
+uuid = { workspace = true }
+url = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
@@ -38,6 +41,9 @@ gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
 
-# The updater plugin only builds on desktop OSes.
+# Desktop-only plugins. The updater builds on desktop OSes; single-instance
+# (with the deep-link feature) routes a `gilb://` link to the running instance
+# on Windows/Linux — on macOS the OS delivers it to the deep-link handler.
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-updater = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }

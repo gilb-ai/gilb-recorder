@@ -26,6 +26,11 @@
     }
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["gilb"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCMDdGNURGNkMzRTQwNQpSV1FGNU1QMlhYK3dCc29MMGNZSmZualBZcWIrNHpRMUdqMFlUOFB0ZWRpQ3ZFMDNTSUFUb2d2Zwo=",
       "endpoints": [

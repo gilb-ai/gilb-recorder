@@ -30,6 +30,12 @@ type EngineStatus = {
   platform: string;
 };
 
+type AuthStatus = {
+  signed_in: boolean;
+  employee: string | null;
+  gilb_web_url: string | null;
+};
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
 
@@ -103,6 +109,49 @@ async function refresh() {
   }
 }
 
+async function refreshAuth() {
+  let s: AuthStatus;
+  try {
+    s = await invoke<AuthStatus>("auth_status");
+  } catch (err) {
+    console.warn("auth_status failed", err);
+    return;
+  }
+  const signedOut = $("auth-signed-out");
+  const signedIn = $("auth-signed-in");
+  if (signedOut) signedOut.hidden = s.signed_in;
+  if (signedIn) signedIn.hidden = !s.signed_in;
+  if (s.signed_in) {
+    setText("auth-employee", s.employee ?? "this device");
+    setText("auth-url-display", s.gilb_web_url ?? "");
+  }
+}
+
+async function connect() {
+  const input = $<HTMLInputElement>("auth-url");
+  const url = input?.value.trim();
+  if (!url) {
+    setMessage("Enter your gilb-web URL first", "error");
+    return;
+  }
+  try {
+    await invoke("start_login", { gilbWebUrl: url });
+    setMessage("Continue sign-in in your browser…");
+  } catch (err) {
+    setMessage(`sign-in error: ${String(err)}`, "error");
+  }
+}
+
+async function signOut() {
+  try {
+    await invoke("sign_out");
+    setMessage("Signed out");
+  } catch (err) {
+    setMessage(`sign-out error: ${String(err)}`, "error");
+  }
+  refreshAuth();
+}
+
 async function openPrivacyPane(pane: "accessibility") {
   try {
     await invoke("open_privacy_pane", { pane });
@@ -167,6 +216,8 @@ async function checkForUpdates() {
 window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", startCapture);
   $("btn-stop")?.addEventListener("click", stopCapture);
+  $("btn-connect")?.addEventListener("click", connect);
+  $("btn-signout")?.addEventListener("click", signOut);
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {
@@ -182,6 +233,8 @@ window.addEventListener("DOMContentLoaded", () => {
   // actions_today counter and as a fallback for a missed broadcast.
   listen("permission", () => refresh());
   listen("health", () => refresh());
+  // Backend emits `auth` after the gilb://auth/callback deep link is handled.
+  listen("auth", () => refreshAuth());
 
   // Register Gilb as a LaunchAgent on first run so it starts at login.
   // Idempotent — `enable()` is a no-op once the agent plist is in place.
@@ -201,6 +254,7 @@ window.addEventListener("DOMContentLoaded", () => {
     .catch(() => {});
 
   refresh();
+  refreshAuth();
   setInterval(refresh, 5000);
 
   // Check for updates on launch and periodically.
