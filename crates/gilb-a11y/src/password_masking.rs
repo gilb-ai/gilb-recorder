@@ -33,9 +33,9 @@ pub const EXCLUDED_WINDOWS_EXES: &[&str] = &[
     "lastpass.exe",
     "protonpass.exe",
     // Sensitive Windows system surfaces.
-    "logonui.exe",              // lock / sign-in screen
-    "consent.exe",              // UAC elevation prompt
-    "credentialuibroker.exe",   // Windows credential dialogs
+    "logonui.exe",            // lock / sign-in screen
+    "consent.exe",            // UAC elevation prompt
+    "credentialuibroker.exe", // Windows credential dialogs
 ];
 
 /// Lowercase substrings that mark an element / field name as password-like.

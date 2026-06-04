@@ -89,15 +89,14 @@ fn run_loop(rx: cc::Receiver<UiaJob>, shutdown: cc::Receiver<()>, focus: FocusSt
         // initialised) is fine; we still balance with CoUninitialize.
         let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
 
-        let automation: IUIAutomation =
-            match CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL) {
-                Ok(a) => a,
-                Err(e) => {
-                    error!(?e, "CoCreateInstance(CUIAutomation) failed");
-                    CoUninitialize();
-                    return;
-                }
-            };
+        let automation: IUIAutomation = match CoCreateInstance(&CUIAutomation, None, CLSCTX_ALL) {
+            Ok(a) => a,
+            Err(e) => {
+                error!(?e, "CoCreateInstance(CUIAutomation) failed");
+                CoUninitialize();
+                return;
+            }
+        };
 
         debug!("ready");
         loop {

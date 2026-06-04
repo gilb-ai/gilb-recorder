@@ -48,9 +48,9 @@ async fn main() -> Result<()> {
         .await
         .with_context(|| format!("open db at {}", db_path.display()))?;
 
-    let since = cli.since.unwrap_or_else(|| {
-        (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339()
-    });
+    let since = cli
+        .since
+        .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
 
     let rows = load_rows(&db, &since).await?;
     let slice = redact(&rows);
