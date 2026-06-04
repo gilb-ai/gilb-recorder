@@ -163,10 +163,8 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
 pub fn save_credentials(creds: &Credentials) -> Result<()> {
     ensure_data_dir()?;
     let path = credentials_path()?;
-    let json =
-        serde_json::to_vec_pretty(creds).context("failed to serialize credentials")?;
-    std::fs::write(&path, &json)
-        .with_context(|| format!("failed to write {}", path.display()))?;
+    let json = serde_json::to_vec_pretty(creds).context("failed to serialize credentials")?;
+    std::fs::write(&path, &json).with_context(|| format!("failed to write {}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

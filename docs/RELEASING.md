@@ -5,6 +5,19 @@ Releases are built, signed, and published by `.github/workflows/release.yml`
 (`tauri.conf.json` → `plugins.updater.endpoints`) points at the GitHub
 Release's `latest.json`, so cutting a release is what ships an auto-update.
 
+## Branching & releases
+
+Trunk-based: work lands on `main` via PRs, releases are cut by tagging. There
+is **no long-lived release branch** — the auto-updater always points clients at
+the latest stable release, so we maintain a single line. `main` is branch-
+protected and kept green by CI (`.github/workflows/ci.yml` runs the Rust
+checks on every PR), so any commit on `main` is in principle shippable.
+
+A release branch would only earn its keep once we need to hotfix an already-
+shipped version while `main` holds unreleasable work, or maintain multiple
+version lines — neither applies yet. If that day comes, cut a short-lived
+`release/x.y` for stabilization, tag from it, then delete it.
+
 ## When the release workflow runs
 
 It triggers on exactly two things — nothing else (regular commits, branch

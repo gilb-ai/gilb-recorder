@@ -130,7 +130,14 @@ pub fn handle_callback(app: &AppHandle, url: &url::Url) {
 
     if let Err(err) = save_credentials(&creds) {
         warn!(?err, "failed to save credentials from auth callback");
-        let _ = app.emit("auth", AuthStatus { signed_in: false, employee: None, gilb_web_url: None });
+        let _ = app.emit(
+            "auth",
+            AuthStatus {
+                signed_in: false,
+                employee: None,
+                gilb_web_url: None,
+            },
+        );
         return;
     }
 

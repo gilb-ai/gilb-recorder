@@ -17,7 +17,7 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Accessibility::{
     AutomationElementMode_None, CUIAutomation, IUIAutomation, IUIAutomationElement,
-    TreeScope_Subtree, UIA_CONTROLTYPE_ID, UIA_ControlTypePropertyId, UIA_NamePropertyId,
+    TreeScope_Subtree, UIA_ControlTypePropertyId, UIA_NamePropertyId, UIA_CONTROLTYPE_ID,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 

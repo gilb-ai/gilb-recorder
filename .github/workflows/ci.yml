@@ -1,0 +1,35 @@
+name: CI
+
+# Fast Linux checks for the Rust workspace. Runs on every PR (and on main) and
+# is the required status check for branch protection — main stays green and
+# shippable. The Tauri app crate (gilb-app-tauri) is excluded: it needs
+# GTK/WebKit system libs to compile on Linux and only ships on macOS/Windows,
+# where windows-build.yml (smoke) and release.yml validate it.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude gilb-app-tauri --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --exclude gilb-app-tauri

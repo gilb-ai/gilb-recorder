@@ -34,7 +34,10 @@ const EXCLUDED_EXES: &[&str] = &[
 
 fn is_excluded_app(bundle: Option<&str>, name: Option<&str>) -> bool {
     if let Some(b) = bundle {
-        if EXCLUDED_BUNDLE_IDS.iter().any(|x| x.eq_ignore_ascii_case(b)) {
+        if EXCLUDED_BUNDLE_IDS
+            .iter()
+            .any(|x| x.eq_ignore_ascii_case(b))
+        {
             return true;
         }
     }

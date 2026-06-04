@@ -14,11 +14,9 @@ static TOKEN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\b[A-Za-z0-9_-]{32,}\b").u
 static UUID: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b").unwrap()
 });
-static DATE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/.]\d{1,2}[/.]\d{2,4})").unwrap()
-});
-static CURRENCY: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"^\s*[$€£¥]\s?\d").unwrap());
+static DATE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[/.]\d{1,2}[/.]\d{2,4})").unwrap());
+static CURRENCY: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\s*[$€£¥]\s?\d").unwrap());
 static NUMBER: Lazy<Regex> = Lazy::new(|| Regex::new(r"^-?\d{1,12}([.,]\d+)?$").unwrap());
 
 /// Replace any PII match with `[redacted]`. Used on window titles / labels.
