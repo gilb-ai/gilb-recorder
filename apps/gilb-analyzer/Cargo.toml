@@ -1,0 +1,27 @@
+[package]
+name = "gilb-analyzer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shannon — local, auditable collector that reduces + redacts recorded activity into a de-identified slice (see docs/redaction-spec.md)."
+
+[[bin]]
+name = "gilb-analyzer"
+path = "src/main.rs"
+
+[dependencies]
+gilb-db = { workspace = true }
+gilb-config = { workspace = true }
+
+sqlx = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+regex = { workspace = true }
+once_cell = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+clap = { version = "4", features = ["derive"] }
