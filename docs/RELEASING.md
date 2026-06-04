@@ -5,11 +5,22 @@ Releases are built, signed, and published by `.github/workflows/release.yml`
 (`tauri.conf.json` → `plugins.updater.endpoints`) points at the GitHub
 Release's `latest.json`, so cutting a release is what ships an auto-update.
 
-## One-time setup (repo secrets)
+## When the release workflow runs
 
-Set these under **Settings → Secrets and variables → Actions** (they are not
-stored in the repo; a public repo does not expose them, and they are not given
-to fork PRs):
+It triggers on exactly two things — nothing else (regular commits, branch
+pushes, and PRs do **not** run it):
+
+- **Pushing a `v*` tag** (e.g. `git push origin v1.0.1`) — the normal path.
+- **Manual dispatch**: *Actions → Release → Run workflow*, with a tag input.
+
+The workflow file must exist in the tagged commit, so the tag has to point at a
+commit that already contains `.github/workflows/release.yml`.
+
+## One-time setup (repo secrets) — already configured
+
+These 12 secrets are set under **Settings → Secrets and variables → Actions**
+(they are not stored in the repo; a public repo does not expose them, and they
+are not given to fork PRs). Listed here for reference / rotation:
 
 | Secret | What |
 |---|---|
