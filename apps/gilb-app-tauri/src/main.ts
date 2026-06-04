@@ -234,7 +234,14 @@ window.addEventListener("DOMContentLoaded", () => {
   listen("permission", () => refresh());
   listen("health", () => refresh());
   // Backend emits `auth` after the gilb://auth/callback deep link is handled.
-  listen("auth", () => refreshAuth());
+  // Clear the "continue in your browser" message with the outcome.
+  listen<AuthStatus>("auth", (e) => {
+    setMessage(
+      e.payload?.signed_in ? "Connected to your Gilb workspace" : "Sign-in failed",
+      e.payload?.signed_in ? "info" : "error",
+    );
+    refreshAuth();
+  });
 
   // Register Gilb as a LaunchAgent on first run so it starts at login.
   // Idempotent — `enable()` is a no-op once the agent plist is in place.
