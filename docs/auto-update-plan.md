@@ -49,31 +49,33 @@ Manifest shape (`latest.json`):
   "notes": "…",
   "pub_date": "2026-06-04T00:00:00Z",
   "platforms": {
-    "darwin-aarch64": { "signature": "<minisign>", "url": "https://…/Gilb.app.tar.gz" },
-    "darwin-x86_64":  { "signature": "…", "url": "…" },
-    "windows-x86_64": { "signature": "…", "url": "https://…/Gilb_x64-setup.exe" },
-    "windows-aarch64":{ "signature": "…", "url": "https://…/Gilb_arm64-setup.exe" }
+    "darwin-aarch64": { "signature": "<minisign>", "url": "https://…/Gilb_aarch64.app.tar.gz" },
+    "darwin-x86_64":  { "signature": "…", "url": "https://…/Gilb_x64.app.tar.gz" },
+    "windows-x86_64": { "signature": "…", "url": "https://…/Gilb_x64-setup.exe" }
   }
 }
 ```
 
-## Decisions (proposed; flagged where input is wanted)
+## Decisions (locked)
 
 1. **Update host = GitHub Releases on `gilb-ai/gilb-recorder`.** The repo is
    public, so release assets and `latest.json` are anonymously downloadable —
    no server to run. Endpoint: the static updater JSON attached to the
-   `latest` release. *(Alternative: a tiny custom endpoint / S3 if we ever want
-   staged rollouts or channels. Decide later; GitHub Releases first.)*
-2. **Arch coverage:** `darwin-aarch64` + `darwin-x86_64` (or a universal mac
-   build) and `windows-x86_64` + `windows-aarch64`. The dev/test machine is
-   ARM64 Windows, so `windows-aarch64` matters.
+   `latest` release. *(A custom endpoint / channels can come later if we want
+   staged rollouts.)*
+2. **Arch coverage:** macOS ships **separate `darwin-aarch64` + `darwin-x86_64`**
+   builds (not a universal binary). Windows ships **`windows-x86_64` only** for
+   now — ARM64 Windows runs it via the OS's x64 emulation; a native
+   `windows-aarch64` build is deferred (see risks).
 3. **Windows installer for updates = NSIS** (add `nsis` to targets). Keep `msi`
    for first-install distribution if desired; the updater consumes the NSIS one.
 4. **macOS must be notarized**, not just signed — otherwise Gatekeeper blocks
    the app the updater swaps in. Wire notarization into the release build.
-5. **Update check UX:** check on launch (silently), and a manual "Check for
-   updates" action; prompt before downloading/installing. *(Confirm: silent
-   auto-install vs prompt. Default below = prompt.)*
+5. **Silent auto-update.** Check on launch and periodically; download + stage
+   the update with no prompt. **Apply only when it's safe** — never call
+   `relaunch()` during an active capture session (that would kill recording).
+   Install on next app launch, or when idle / not recording. Also expose a
+   manual "Check for updates" action for on-demand use.
 
 ## Work breakdown
 
@@ -91,14 +93,16 @@ Manifest shape (`latest.json`):
   - `plugins.updater`: `pubkey`, `endpoints` (the GitHub Releases `latest.json`
     URL), `windows.installMode: "passive"`.
 
-### Phase 2 — App-side update flow
-- Frontend (`src/main.ts`) or a small Rust command: on launch call
-  `check()`; if an update exists, show a dialog (reuse `plugin-dialog`), then
-  `downloadAndInstall(onProgress)` and `relaunch()` (process plugin).
-- Add a manual "Check for updates" entry (button/menu). Surface progress +
-  errors in the existing `#message` area.
-- Gate the launch check so it doesn't fight the existing autostart/recording
-  flow (don't interrupt an active capture session without consent).
+### Phase 2 — App-side update flow (silent)
+- On launch (and on a periodic timer) call `check()`. If an update exists,
+  `downloadAndInstall(onProgress)` silently — no prompt. Surface a small status
+  in `#message` (e.g. "Updating…", "Update ready").
+- **Recording guard:** never `relaunch()` while a capture session is active.
+  Track recording state (already in `EngineStatus.recording`); if recording,
+  stage the update and apply on next launch (or when capture stops / the app is
+  idle). Only auto-relaunch when not recording.
+- Keep a manual "Check for updates" action for on-demand use; reuse
+  `plugin-dialog` only for surfacing errors, not for gating installs.
 
 ### Phase 3 — Release CI (the bulk of the work)
 Adopt the official **`tauri-apps/tauri-action`** for a unified, tag-driven
@@ -106,12 +110,12 @@ release, replacing the ad-hoc `windows-release.yml`:
 - Trigger: pushing a `v*` tag (after bumping `version` in `tauri.conf.json` +
   `package.json` + workspace as needed).
 - Matrix of runners:
-  - `macos-latest` (Apple Silicon) — builds `aarch64` (+ optionally `x86_64` or
-    a `universal-apple-darwin` build), signs with Developer ID, **notarizes**,
-    emits `.app.tar.gz` + `.sig`.
-  - `windows-latest` (x64) for `windows-x86_64`; **`windows-11-arm`** (or cross)
-    for `windows-aarch64` — builds NSIS, Authenticode-signs, emits
-    `*-setup.exe` + `.sig`.
+  - `macos-latest` — two builds, `--target aarch64-apple-darwin` and
+    `--target x86_64-apple-darwin`, each signed with Developer ID, **notarized**,
+    emitting `*.app.tar.gz` + `.sig`.
+  - `windows-latest` (x64) for `windows-x86_64` — builds NSIS,
+    Authenticode-signs, emits `*-setup.exe` + `.sig`. (Native `windows-aarch64`
+    deferred.)
 - Env/secrets passed to every job:
   - `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` (updater).
   - macOS: `APPLE_CERTIFICATE` (+ password), `APPLE_SIGNING_IDENTITY`,
@@ -150,10 +154,10 @@ release, replacing the ad-hoc `windows-release.yml`:
   into every shipped binary and can't be rotated for existing installs).
 - **macOS notarization** adds Apple secrets + a notarization wait to CI; it's the
   most fiddly part. Must be solid or updates won't launch.
-- **`windows-aarch64` in CI.** Needs a `windows-11-arm` runner (availability /
-  billing) or cross-compile from x64 with the ARM64 MSVC toolchain. If neither,
-  ship `windows-x86_64` only initially (runs on ARM via emulation) and add
-  native ARM64 later.
+- **Native `windows-aarch64` deferred.** ARM64 Windows (incl. the dev VM) runs
+  the x64 build via OS emulation — fine functionally, but heavier for a
+  background recorder. Adding a native ARM64 artifact later needs a
+  `windows-11-arm` runner or x64→arm64 cross with the ARM64 MSVC toolchain.
 - **GitHub Releases as endpoint** is fine while the repo is public. If it ever
   goes private, asset downloads need auth → would require a proxy/custom host.
 - **Sidecar signing** (gilb-mcp.exe / the mac sidecar) should be covered by the
