@@ -21,8 +21,14 @@ to fork PRs):
 | `APPLE_API_ISSUER` | App Store Connect API issuer id |
 | `APPLE_API_KEY` | App Store Connect API key id |
 | `APPLE_API_KEY_BASE64` | base64 of the `AuthKey_*.p8` |
-| `WINDOWS_CERT_PFX_BASE64` | base64 of the code-signing `.pfx` |
-| `WINDOWS_CERT_PASSWORD` | `.pfx` password |
+| `ES_USERNAME` | SSL.com eSigner username |
+| `ES_PASSWORD` | SSL.com eSigner password |
+| `ES_CREDENTIAL_ID` | eSigner signing credential id |
+| `ES_TOTP_SECRET` | eSigner TOTP secret (base32) |
+
+Windows is Authenticode-signed via SSL.com CodeSignTool (cloud/eSigner) —
+there is no local PFX. The release workflow downloads CodeSignTool and signs
+each artifact through `scripts/sign-windows.ps1`.
 
 `gh secret set NAME < file` (or `--body "value"`) is the quickest way.
 
