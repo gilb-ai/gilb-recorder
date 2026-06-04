@@ -123,7 +123,7 @@ async function refreshAuth() {
   if (signedIn) signedIn.hidden = !s.signed_in;
   if (s.signed_in) {
     setText("auth-employee", s.employee ?? "this device");
-    setText("auth-url-display", s.gilb_web_url ?? "");
+    setText("auth-ws-url", s.gilb_web_url ?? "");
   }
 }
 

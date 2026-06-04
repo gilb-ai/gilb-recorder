@@ -50,15 +50,15 @@
       <section class="card auth" id="auth-card">
         <div id="auth-signed-out">
           <p class="auth-lead">
-            Connect this recorder to your gilb-web workspace to enable
-            analysis. Until you do, recording stays on this machine.
+            Connect this recorder to your Gilb workspace to enable
+            Enterprise features.
           </p>
           <div class="row">
             <input
               id="auth-url"
               type="url"
               class="auth-input"
-              placeholder="https://your-gilb-web"
+              placeholder="https://your-workspace.gilb.app"
               value="http://localhost:3000"
             />
             <button id="btn-connect" type="button">Connect</button>
@@ -66,9 +66,11 @@
         </div>
         <div id="auth-signed-in" hidden>
           <p class="auth-signed-line">
-            Signed in as <strong id="auth-employee"></strong>
+            Connected to your <strong>Gilb workspace</strong>
           </p>
-          <p class="auth-url-display" id="auth-url-display"></p>
+          <p class="auth-url-display">
+            <span id="auth-employee"></span> · <span id="auth-ws-url"></span>
+          </p>
           <button id="btn-signout" type="button">Sign out</button>
         </div>
       </section>
