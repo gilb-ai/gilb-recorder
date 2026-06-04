@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 const DEFAULT_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
+const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 
 /// Toggles controlled by `CAPTURE_*` env vars or the future config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -99,4 +100,42 @@ pub fn ensure_logs_dir() -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create gilb logs directory at {}", dir.display()))?;
     Ok(dir)
+}
+
+/// Enterprise credentials written by the recorder's auth flow and read by the
+/// analyzer ("Shannon") to know where to push and how to authenticate. Stored
+/// at `$HOME/.gilb/credentials.json`. Its presence is also the gate that
+/// activates the analyzer — absent means Tier-1 (local-only, nothing uploaded).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Credentials {
+    /// Base URL of the gilb-web instance to push to.
+    pub gilb_web_url: String,
+    /// Per-employee bearer token (identifies the employee server-side).
+    pub token: String,
+    /// Optional human-readable employee label (server-side identity is the
+    /// token; this is only for local display/logs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub employee: Option<String>,
+}
+
+/// Resolve `$HOME/.gilb/credentials.json`.
+pub fn credentials_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join(CREDENTIALS_FILE_NAME))
+}
+
+/// Load `$HOME/.gilb/credentials.json` if it exists. Returns `Ok(None)` when the
+/// file is absent (Tier-1 / not enterprise-configured), `Err` only on a present
+/// but unreadable/malformed file.
+pub fn load_credentials() -> Result<Option<Credentials>> {
+    let path = credentials_path()?;
+    let bytes = match std::fs::read(&path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => {
+            return Err(e).with_context(|| format!("failed to read {}", path.display()));
+        }
+    };
+    let creds: Credentials = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(Some(creds))
 }
