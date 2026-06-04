@@ -7,8 +7,8 @@
 //! shape are the contract referenced by `research/07-meeting-detection.md`
 //! §5 — keep them in sync with that document.
 //!
-//! Only the in-memory [`MockDetector`] lives here; native platform
-//! implementations land in follow-up cards.
+//! The in-memory [`MockDetector`] and the macOS [`MacosDetector`] live
+//! here; the Windows detector lands in a follow-up card.
 
 use std::time::Duration;
 
@@ -17,6 +17,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio::sync::{mpsc, Mutex};
+
+pub mod allowlist;
+mod macos;
+
+#[cfg(target_os = "macos")]
+pub use macos::MacosDetector;
+pub use macos::{parse_attribution_line, Tracker};
 
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
