@@ -122,7 +122,11 @@ jobs:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "Gilb __VERSION__"
           releaseDraft: true
-          prerelease: false
+          # Tags with a semver pre-release suffix (v1.1.0-beta.1, -rc.1, …) are
+          # marked pre-release, so `releases/latest` (the stable updater
+          # endpoint) skips them — stable users never auto-update to a beta.
+          # Testers install the pre-release build manually.
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           includeUpdaterJson: true
           args: >-
             --target ${{ matrix.target }}

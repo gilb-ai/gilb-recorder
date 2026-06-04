@@ -61,6 +61,14 @@ each artifact through `scripts/sign-windows.ps1`.
 (You can also trigger the workflow manually via *Actions → Release → Run
 workflow* with a tag input.)
 
+## Beta / pre-release builds
+
+Tag with a semver pre-release suffix (e.g. `v1.1.0-beta.1`, `v1.2.0-rc.1`).
+The workflow marks that GitHub Release as **pre-release**, so
+`releases/latest` — the stable updater endpoint — **skips it**: stable users
+never auto-update onto a beta. Testers install the pre-release build manually
+from its release page. (No separate beta auto-update channel yet.)
+
 ## Notes
 
 - macOS ships separate `aarch64` + `x86_64` builds; Windows ships `x64` only
