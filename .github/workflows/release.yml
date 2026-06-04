@@ -87,8 +87,14 @@ jobs:
           $tool = (Get-ChildItem "$env:RUNNER_TEMP\codesigntool" -Recurse -Filter CodeSignTool.bat | Select-Object -First 1).DirectoryName
           "CODE_SIGN_TOOL_PATH=$tool" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           $wrapper = (Resolve-Path "scripts\sign-windows.ps1").Path
-          $signCmd = "pwsh -NoProfile -File `"$wrapper`" `"%1`""
-          $overlay = [ordered]@{ bundle = [ordered]@{ windows = [ordered]@{ signCommand = $signCmd } } } | ConvertTo-Json -Depth 6
+          # Object form ({cmd,args}) avoids Tauri's shell-parsing of a string
+          # command, which mangles Windows backslashes/quotes. %1 = the file.
+          $overlay = [ordered]@{ bundle = [ordered]@{ windows = [ordered]@{
+            signCommand = [ordered]@{
+              cmd = "pwsh"
+              args = @("-NoProfile", "-File", $wrapper, "%1")
+            }
+          } } } | ConvertTo-Json -Depth 8
           Set-Content -Path "src-tauri\tauri.signing.json" -Value $overlay -Encoding utf8
 
       - name: Build + sign + release
