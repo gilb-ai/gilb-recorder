@@ -1,6 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { getVersion } from "@tauri-apps/api/app";
+
+// How often to poll for updates while the app is running.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
@@ -125,6 +131,39 @@ async function stopCapture() {
   refresh();
 }
 
+// Silent auto-update: check, install, and relaunch with no prompt. Before
+// relaunching we stop any active recording so the session is flushed and its
+// row closed cleanly (the installer / relaunch would otherwise kill the app
+// mid-write). The relaunched build resumes capture via the autostart flow.
+let updateInProgress = false;
+async function checkForUpdates() {
+  if (updateInProgress) return;
+  let update;
+  try {
+    update = await check();
+  } catch (err) {
+    console.warn("update check failed", err);
+    return;
+  }
+  if (!update) return;
+
+  updateInProgress = true;
+  try {
+    try {
+      const s = await invoke<EngineStatus>("status");
+      if (s.recording) await invoke("stop_capture");
+    } catch (err) {
+      console.warn("pre-update stop_capture failed", err);
+    }
+    setMessage(`Installing update ${update.version}…`);
+    await update.downloadAndInstall();
+    await relaunch();
+  } catch (err) {
+    updateInProgress = false;
+    console.warn("update install failed", err);
+  }
+}
+
 window.addEventListener("DOMContentLoaded", () => {
   $("btn-start")?.addEventListener("click", startCapture);
   $("btn-stop")?.addEventListener("click", stopCapture);
@@ -156,6 +195,15 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   })();
 
+  // Show the app version in the footer.
+  getVersion()
+    .then((v) => setText("app-version", `Gilb v${v}`))
+    .catch(() => {});
+
   refresh();
   setInterval(refresh, 5000);
+
+  // Check for updates on launch and periodically.
+  checkForUpdates();
+  setInterval(checkForUpdates, UPDATE_CHECK_INTERVAL_MS);
 });

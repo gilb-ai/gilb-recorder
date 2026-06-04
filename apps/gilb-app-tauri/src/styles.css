@@ -113,6 +113,13 @@ button:disabled {
 }
 .message[data-kind="error"] { color: #b91c1c; }
 
+.version {
+  margin-top: 4px;
+  text-align: center;
+  font-size: 11px;
+  color: #9ca3af;
+}
+
 .splash {
   position: fixed;
   inset: 0;

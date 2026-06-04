@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Gilb",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "identifier": "app.farol.gilb",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -25,9 +25,21 @@
       "devCsp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1421 http://localhost:1420; img-src 'self' data: asset: http://asset.localhost; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCMDdGNURGNkMzRTQwNQpSV1FGNU1QMlhYK3dCc29MMGNZSmZualBZcWIrNHpRMUdqMFlUOFB0ZWRpQ3ZFMDNTSUFUb2d2Zwo=",
+      "endpoints": [
+        "https://github.com/gilb-ai/gilb-recorder/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "app", "msi"],
+    "createUpdaterArtifacts": true,
+    "targets": ["dmg", "app", "nsis"],
     "externalBin": ["binaries/gilb-mcp"],
     "icon": [
       "icons/32x32.png",

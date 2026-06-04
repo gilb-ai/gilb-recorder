@@ -13,13 +13,23 @@ pub fn run() {
     // Held until run() returns; dropping flushes the non-blocking writer.
     let _log_guard = logging::init_tracing();
 
-    let result = tauri::Builder::default()
+    #[allow(unused_mut)]
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_process::init());
+
+    // Updater is desktop-only (matches the Cargo cfg gate).
+    #[cfg(desktop)]
+    {
+        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+    }
+
+    let result = builder
         .setup(|app| match state::build_app_state() {
             Ok(s) => {
                 events::spawn_proxies(app.handle().clone(), s.engine.clone());

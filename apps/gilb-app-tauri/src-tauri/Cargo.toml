@@ -19,6 +19,7 @@ tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
+tauri-plugin-process = "2"
 base64 = "0.22"
 directories = { workspace = true }
 serde = { workspace = true }
@@ -36,3 +37,7 @@ gilb-events = { workspace = true }
 gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
+
+# The updater plugin only builds on desktop OSes.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-updater = "2"
