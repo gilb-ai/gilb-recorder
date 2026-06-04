@@ -12,6 +12,7 @@ use gilb_events::HealthEvent;
 use crate::events::{ClipboardChange, RawEvent};
 use crate::focus::FocusState;
 use crate::normalizer::Normalizer;
+use crate::tree::snapshotter;
 use crate::{CapturePlatform, Permissions, RunningCapture, StartContext};
 
 use super::clipboard;
@@ -80,8 +81,19 @@ impl CapturePlatform for WindowsPlatform {
             None
         };
 
-        // Tree snapshots are macOS-only for now (no Windows UIA tree walker
-        // yet), so the normalizer runs without a snapshot hop.
+        // Tree snapshots via UIA (walker_windows) on focus change. Cloned
+        // writer_tx before the normalizer takes ownership below.
+        let (snapshot_tx, snapshot_handle) = if ctx.settings.capture_tree_snapshots {
+            let (tx, h) = snapshotter::spawn_worker(
+                ctx.session_id,
+                ctx.writer_tx.clone(),
+                ctx.event_bus.clone(),
+            );
+            (Some(tx), Some(h))
+        } else {
+            (None, None)
+        };
+
         let normalizer = Normalizer {
             session_id: ctx.session_id,
             writer_tx: ctx.writer_tx,
@@ -90,7 +102,7 @@ impl CapturePlatform for WindowsPlatform {
             focus: self.focus.clone(),
             focus_provider: Box::new(WindowsFocusProvider),
             element_resolver: Box::new(uia_worker),
-            snapshot_tx: None,
+            snapshot_tx,
         };
 
         // Shutdown choreography:
@@ -105,6 +117,13 @@ impl CapturePlatform for WindowsPlatform {
             if let Some(handle) = clipboard_handle {
                 if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
                     warn!(?err, "clipboard poller did not stop in time");
+                }
+            }
+            // The normalizer dropped its snapshot_tx on return, so the worker's
+            // focus channel is closed; await its in-flight walk.
+            if let Some(handle) = snapshot_handle {
+                if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
+                    warn!(?err, "snapshot worker did not stop in time");
                 }
             }
             drop(uia_handle);

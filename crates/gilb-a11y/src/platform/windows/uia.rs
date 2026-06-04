@@ -19,12 +19,13 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationValuePattern,
-    UIA_CONTROLTYPE_ID, UIA_ValuePatternId,
+    UIA_ValuePatternId,
 };
 
 use gilb_core::{ElementContext, Frame};
 
 use crate::focus::FocusState;
+use crate::tree::walker_windows::role_name;
 use crate::ElementResolver;
 
 pub const QUEUE_CAPACITY: usize = 4;
@@ -177,49 +178,4 @@ fn bstr_opt(b: Option<windows::core::BSTR>) -> Option<String> {
     } else {
         Some(s)
     }
-}
-
-/// Map a UIA control-type id to a short role string. Falls back to the raw id
-/// for the long tail we don't name explicitly.
-fn role_name(id: UIA_CONTROLTYPE_ID) -> String {
-    let name = match id.0 {
-        50000 => "button",
-        50001 => "calendar",
-        50002 => "checkbox",
-        50003 => "combobox",
-        50004 => "edit",
-        50005 => "hyperlink",
-        50006 => "image",
-        50007 => "listitem",
-        50008 => "list",
-        50009 => "menu",
-        50010 => "menubar",
-        50011 => "menuitem",
-        50012 => "progressbar",
-        50013 => "radiobutton",
-        50014 => "scrollbar",
-        50015 => "slider",
-        50016 => "spinner",
-        50017 => "statusbar",
-        50018 => "tab",
-        50019 => "tabitem",
-        50020 => "text",
-        50021 => "toolbar",
-        50022 => "tooltip",
-        50023 => "tree",
-        50024 => "treeitem",
-        50025 => "custom",
-        50026 => "group",
-        50028 => "datagrid",
-        50029 => "dataitem",
-        50030 => "document",
-        50031 => "splitbutton",
-        50032 => "window",
-        50033 => "pane",
-        50036 => "table",
-        50037 => "titlebar",
-        50038 => "separator",
-        other => return format!("control:{other}"),
-    };
-    name.to_string()
 }
