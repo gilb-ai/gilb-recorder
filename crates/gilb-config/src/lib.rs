@@ -13,6 +13,10 @@ const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 
+/// Default cadence for the analyzer's incremental upload when the server
+/// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
+pub const DEFAULT_ANALYZE_INTERVAL_SECS: u64 = 3600;
+
 /// Toggles controlled by `CAPTURE_*` env vars or the future config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingSettings {
@@ -116,6 +120,19 @@ pub struct Credentials {
     /// token; this is only for local display/logs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub employee: Option<String>,
+    /// Server-controlled cadence for the analyzer's incremental upload, in
+    /// seconds. Delivered with credentials so the cadence is tuned from
+    /// gilb-web; absent ⇒ [`DEFAULT_ANALYZE_INTERVAL_SECS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub analyze_interval_secs: Option<u64>,
+}
+
+impl Credentials {
+    /// Effective upload cadence: server value, or the hourly default.
+    pub fn interval_secs(&self) -> u64 {
+        self.analyze_interval_secs
+            .unwrap_or(DEFAULT_ANALYZE_INTERVAL_SECS)
+    }
 }
 
 /// Resolve `$HOME/.gilb/credentials.json`.
