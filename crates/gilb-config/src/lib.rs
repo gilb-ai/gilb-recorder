@@ -13,6 +13,7 @@ const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 const OPENAI_KEY_FILE_NAME: &str = "openai.json";
+const PREFERENCES_FILE_NAME: &str = "prefs.json";
 
 /// Default cadence for the analyzer's incremental upload when the server
 /// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
@@ -279,6 +280,68 @@ pub fn clear_openai_key() -> Result<()> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
     }
+}
+
+/// On-disk shape of `$HOME/.gilb/prefs.json` — persisted UI preferences that
+/// survive restarts. Not secret, so no `0600`. `#[serde(default)]` lets new
+/// fields land later without breaking older files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Preferences {
+    /// The user paused always-on activity tracking. When `true` the app does not
+    /// auto-resume capture on launch — a deliberate pause survives restarts.
+    pub tracking_paused: bool,
+    /// Master switch for meeting detection (subsystem B). When `false` the
+    /// detector is stopped and no meeting countdowns/recordings happen. Defaults
+    /// to `true` — meeting recording is on out of the box.
+    pub meeting_detection_enabled: bool,
+}
+
+impl Default for Preferences {
+    fn default() -> Self {
+        Self {
+            tracking_paused: false,
+            meeting_detection_enabled: true,
+        }
+    }
+}
+
+/// Resolve `$HOME/.gilb/prefs.json`.
+pub fn preferences_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join(PREFERENCES_FILE_NAME))
+}
+
+/// Load preferences from `path`. A missing or malformed file yields defaults —
+/// preferences are non-critical and must never block startup. Path-taking for
+/// testability.
+pub fn load_preferences_from(path: &Path) -> Preferences {
+    match std::fs::read(path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+        Err(_) => Preferences::default(),
+    }
+}
+
+/// Write preferences to `path`, creating the parent directory if needed.
+pub fn save_preferences_to(path: &Path, prefs: &Preferences) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let json = serde_json::to_vec_pretty(prefs).context("failed to serialize preferences")?;
+    std::fs::write(path, &json).with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// Load `$HOME/.gilb/prefs.json` (defaults if absent/unreadable).
+pub fn load_preferences() -> Preferences {
+    match preferences_path() {
+        Ok(p) => load_preferences_from(&p),
+        Err(_) => Preferences::default(),
+    }
+}
+
+/// Persist preferences to `$HOME/.gilb/prefs.json`.
+pub fn save_preferences(prefs: &Preferences) -> Result<()> {
+    save_preferences_to(&preferences_path()?, prefs)
 }
 
 /// Decide what `OPENAI_API_KEY` should hold, given the persisted key and whether

@@ -87,6 +87,19 @@ pub fn bundle_id_from_process_name(process_name: &str) -> Option<&'static str> {
         .map(|(_, id)| *id)
 }
 
+/// Windows process exe basenames (lowercase) that map to `bundle_id` — the
+/// inverse of [`bundle_id_from_process_name`]. The recorder uses it to resolve
+/// the call app's window: a bundle id can have several exes (Teams ships
+/// `teams.exe` and `ms-teams.exe`, Aircall two binaries), so all matches are
+/// returned. Empty when no Windows process maps to the id.
+pub fn process_names_for_bundle_id(bundle_id: &str) -> Vec<&'static str> {
+    WINDOWS_PROCESS_MAP
+        .iter()
+        .filter(|(_, id)| *id == bundle_id)
+        .map(|(exe, _)| *exe)
+        .collect()
+}
+
 /// True if `bundle_id` belongs to a known meeting app.
 pub fn is_allowlisted(bundle_id: &str) -> bool {
     ALLOWLIST.iter().any(|(id, _)| *id == bundle_id)
@@ -98,4 +111,35 @@ pub fn display_name(bundle_id: &str) -> Option<&'static str> {
         .iter()
         .find(|(id, _)| *id == bundle_id)
         .map(|(_, name)| *name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn process_names_round_trip_through_bundle_id() {
+        // Every exe in the map resolves to a bundle id that maps back to it.
+        for (exe, bundle_id) in WINDOWS_PROCESS_MAP {
+            assert_eq!(bundle_id_from_process_name(exe), Some(*bundle_id));
+            assert!(
+                process_names_for_bundle_id(bundle_id).contains(exe),
+                "{bundle_id} should map back to {exe}"
+            );
+        }
+    }
+
+    #[test]
+    fn process_names_returns_all_exes_for_one_bundle_id() {
+        // Teams ships two executables under one bundle id.
+        let teams = process_names_for_bundle_id("com.microsoft.teams2");
+        assert!(teams.contains(&"teams.exe"));
+        assert!(teams.contains(&"ms-teams.exe"));
+    }
+
+    #[test]
+    fn process_names_empty_for_unknown_bundle_id() {
+        assert!(process_names_for_bundle_id("com.apple.FaceTime").is_empty());
+        assert!(process_names_for_bundle_id("not.a.real.app").is_empty());
+    }
 }

@@ -1,35 +1,36 @@
-//! Settings window + its commands.
+//! Settings commands (the settings modal in the main window).
 //!
-//! `open_settings` spawns (or focuses) a standard decorated, screen-centered
-//! second OS window (label `settings`) that loads `settings.html`. The window
-//! hosts the meeting-detection toggle (presentational) plus the functional BYOK
-//! OpenAI API-key field: `get_openai_key` / `set_openai_key` / `test_openai_key`
-//! load, persist, and validate the key. Persistence lives in `gilb-config`
-//! (`$HOME/.gilb/openai.json`, 0600); `set_openai_key` also mirrors the key into
-//! the process env so the meeting transcription trigger
-//! (`RecordingSettings::from_env`) picks it up with no change to that module.
+//! - Meeting detection (subsystem B) master switch: `get_meeting_detection` /
+//!   `set_meeting_detection`. The setter persists the flag and signals the
+//!   detector supervisor over [`MeetingControlTx`] so it takes effect live.
+//! - BYOK OpenAI API-key store: `get_openai_key` / `set_openai_key` /
+//!   `test_openai_key`. Persistence lives in `gilb-config`
+//!   (`$HOME/.gilb/openai.json`, 0600); `set_openai_key` mirrors the key into the
+//!   process env so the meeting transcription trigger picks it up. (The key UI is
+//!   currently hidden; transcription still reads `OPENAI_API_KEY` from the env.)
 
 use gilb_transcribe::KeyValidity;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
-const SETTINGS_LABEL: &str = "settings";
+use crate::meeting::MeetingControlTx;
 
+/// Whether meeting detection is enabled (persisted). The settings UI reads this
+/// to render the toggle.
 #[tauri::command]
-pub async fn open_settings(app: AppHandle) -> Result<(), String> {
-    // Focus the existing window instead of stacking a second one.
-    if let Some(win) = app.get_webview_window(SETTINGS_LABEL) {
-        let _ = win.set_focus();
-        return Ok(());
-    }
+pub async fn get_meeting_detection() -> bool {
+    gilb_config::load_preferences().meeting_detection_enabled
+}
 
-    let url = WebviewUrl::App("settings.html".into());
-    WebviewWindowBuilder::new(&app, SETTINGS_LABEL, url)
-        .title("Gilb Settings")
-        .inner_size(420.0, 360.0)
-        .resizable(false)
-        .center()
-        .build()
-        .map_err(|e| format!("failed to open settings window: {e}"))?;
+/// Persist the meeting-detection master switch and apply it live: the detector
+/// supervisor starts or stops the platform detector — no restart needed.
+#[tauri::command]
+pub async fn set_meeting_detection(
+    ctl: tauri::State<'_, MeetingControlTx>,
+    enabled: bool,
+) -> Result<(), String> {
+    let mut prefs = gilb_config::load_preferences();
+    prefs.meeting_detection_enabled = enabled;
+    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())?;
+    let _ = ctl.0.send(enabled).await;
     Ok(())
 }
 
