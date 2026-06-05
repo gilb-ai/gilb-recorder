@@ -14,8 +14,12 @@ use gilb_transcribe::{Channel, LocalTranscriber, Transcriber};
 #[tokio::main]
 async fn main() {
     let mut args = std::env::args().skip(1);
-    let dir = args.next().expect("usage: local_poc <meeting_dir> <model> [lang]");
-    let model = args.next().expect("usage: local_poc <meeting_dir> <model> [lang]");
+    let dir = args
+        .next()
+        .expect("usage: local_poc <meeting_dir> <model> [lang]");
+    let model = args
+        .next()
+        .expect("usage: local_poc <meeting_dir> <model> [lang]");
     let lang = args.next().unwrap_or_else(|| "auto".to_string());
     let dir = Path::new(&dir);
 
@@ -40,7 +44,11 @@ async fn main() {
 
     eprintln!("\nmerged transcript:");
     for (t0, t1, channel, text) in &segs {
-        let speaker = if *channel == Channel::Mic { "Me" } else { "Others" };
+        let speaker = if *channel == Channel::Mic {
+            "Me"
+        } else {
+            "Others"
+        };
         println!("[{t0:6.2}-{t1:6.2}] ({speaker:<6}) {text}");
     }
 }

@@ -59,8 +59,14 @@ fn voiced_mask_splits_loud_from_quiet() {
 
     let secs = voiced_secs(&mask);
     assert!((0.3..0.7).contains(&secs), "≈0.5 s voiced, got {secs}");
-    assert!(voiced_fraction(&mask, 0.0, 0.4) > 0.8, "loud half is voiced");
-    assert!(voiced_fraction(&mask, 0.6, 1.0) < 0.2, "silent half is unvoiced");
+    assert!(
+        voiced_fraction(&mask, 0.0, 0.4) > 0.8,
+        "loud half is voiced"
+    );
+    assert!(
+        voiced_fraction(&mask, 0.6, 1.0) < 0.2,
+        "silent half is unvoiced"
+    );
 }
 
 // ----- mocks --------------------------------------------------------------
@@ -74,8 +80,16 @@ impl Transcriber for ChannelMock {
     async fn transcribe(&self, audio: &Path) -> anyhow::Result<Vec<Utterance>> {
         let name = audio.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let u = match name {
-            "mic.wav" => Utterance { t0: 0.0, t1: 2.0, text: "hello from mic".into() },
-            "system.wav" => Utterance { t0: 1.0, t1: 3.0, text: "reply from call".into() },
+            "mic.wav" => Utterance {
+                t0: 0.0,
+                t1: 2.0,
+                text: "hello from mic".into(),
+            },
+            "system.wav" => Utterance {
+                t0: 1.0,
+                t1: 3.0,
+                text: "reply from call".into(),
+            },
             _ => return Ok(vec![]),
         };
         Ok(vec![u])
@@ -141,7 +155,9 @@ async fn hard_failure_records_error() {
     let mid = insert_meeting(&db, 0, "us.zoom.xos").await.expect("insert");
     let (audio, dir) = temp_meeting_audio();
 
-    let mock = FailMock { calls: AtomicUsize::new(0) };
+    let mock = FailMock {
+        calls: AtomicUsize::new(0),
+    };
     transcribe_meeting(&db, mid, &audio, &mock)
         .await
         .expect("persists error, not Err");
@@ -150,7 +166,10 @@ async fn hard_failure_records_error() {
     assert_eq!(mock.calls.load(Ordering::SeqCst), 1);
     let t = get_transcript(&db, mid).await.expect("get").expect("row");
     let err = t.error.as_deref().expect("error recorded");
-    assert!(err.contains("simulated whisper failure"), "source in msg: {err}");
+    assert!(
+        err.contains("simulated whisper failure"),
+        "source in msg: {err}"
+    );
     assert!(err.contains("mic.wav"), "names channel: {err}");
     assert!(t.text.is_none());
 

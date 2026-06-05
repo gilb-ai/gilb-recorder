@@ -134,8 +134,12 @@ pub fn models_dir() -> Result<PathBuf> {
 /// Ensure `$HOME/.gilb/models/` exists; returns its absolute path.
 pub fn ensure_models_dir() -> Result<PathBuf> {
     let dir = models_dir()?;
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create gilb models directory at {}", dir.display()))?;
+    std::fs::create_dir_all(&dir).with_context(|| {
+        format!(
+            "failed to create gilb models directory at {}",
+            dir.display()
+        )
+    })?;
     Ok(dir)
 }
 

@@ -208,10 +208,7 @@ fn write_transcript_files(dir: &Path, segs: &[Segment]) {
 
 /// Transcribe both channels next to `audio_path` and return their merged,
 /// time-sorted segments. A channel file that doesn't exist is skipped.
-async fn transcribe_channels(
-    audio_path: &Path,
-    t: &dyn Transcriber,
-) -> Result<Vec<Segment>> {
+async fn transcribe_channels(audio_path: &Path, t: &dyn Transcriber) -> Result<Vec<Segment>> {
     let mut segs = Vec::new();
     for (name, channel) in [("mic.wav", Channel::Mic), ("system.wav", Channel::System)] {
         let Some(path) = sibling(audio_path, name) else {
@@ -289,7 +286,10 @@ mod local {
     use async_trait::async_trait;
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-    use crate::{voiced_fraction, voiced_mask, voiced_secs, Transcriber, Utterance, MIN_VOICED_SECS, SEG_VOICED_MIN};
+    use crate::{
+        voiced_fraction, voiced_mask, voiced_secs, Transcriber, Utterance, MIN_VOICED_SECS,
+        SEG_VOICED_MIN,
+    };
 
     /// On-device transcriber holding a loaded whisper.cpp model. The model is
     /// loaded once (it costs ~hundreds of MB + seconds) and reused across calls;
@@ -317,8 +317,8 @@ mod local {
 
     /// Read a 16 kHz mono i16 wav as f32 in [-1, 1].
     fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>> {
-        let mut reader = hound::WavReader::open(path)
-            .with_context(|| format!("open wav {}", path.display()))?;
+        let mut reader =
+            hound::WavReader::open(path).with_context(|| format!("open wav {}", path.display()))?;
         let spec = reader.spec();
         anyhow::ensure!(spec.sample_rate == 16_000, "expected 16 kHz wav");
         anyhow::ensure!(spec.channels == 1, "expected mono wav");
@@ -377,7 +377,9 @@ mod local {
 
             Ok(raw
                 .into_iter()
-                .filter(|u| !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN)
+                .filter(|u| {
+                    !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN
+                })
                 .collect())
         }
     }

@@ -699,8 +699,13 @@ pub async fn get_meeting_transcript(
         .map(|v| TranscriptSegment {
             start: v.get("t0").and_then(|x| x.as_f64()).unwrap_or(0.0),
             end: v.get("t1").and_then(|x| x.as_f64()).unwrap_or(0.0),
-            speaker: speaker_of(v.get("channel").and_then(|x| x.as_str()).unwrap_or("")).to_string(),
-            text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+            speaker: speaker_of(v.get("channel").and_then(|x| x.as_str()).unwrap_or(""))
+                .to_string(),
+            text: v
+                .get("text")
+                .and_then(|x| x.as_str())
+                .unwrap_or("")
+                .to_string(),
         })
         .collect();
 
