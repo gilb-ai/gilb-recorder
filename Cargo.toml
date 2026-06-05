@@ -12,6 +12,7 @@ members = [
     "crates/gilb-engine",
     "crates/gilb-helper",
     "crates/gilb-meeting",
+    "crates/gilb-record",
 ]
 
 [workspace.package]
