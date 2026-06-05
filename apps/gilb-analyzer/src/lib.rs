@@ -6,6 +6,8 @@
 pub mod pii;
 pub mod redact;
 pub mod slice;
+pub mod therblig;
 
 pub use redact::{redact, ActionRow};
 pub use slice::{Segment, Slice, Step};
+pub use therblig::{parse_therbligs, Delegation, Evidence, Therblig, TherbligStep};
