@@ -9,6 +9,7 @@ pub mod pii;
 pub mod redact;
 pub mod slice;
 pub mod therblig;
+pub mod web;
 
 pub use redact::{redact, ActionRow};
 pub use slice::{Segment, Slice, Step};
