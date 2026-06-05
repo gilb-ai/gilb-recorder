@@ -10,12 +10,39 @@
 
 use gilb_config::RecordingSettings;
 use gilb_events::RecordingEvent;
-use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
 use crate::state::AppState;
 
 const COUNTDOWN_LABEL: &str = "countdown";
+
+/// Open the borderless, centered, always-on-top countdown window for
+/// `meeting_id`. Shared by the `show_countdown` command (invoked from the UI)
+/// and the Rust-side meeting bridge, which can't `invoke` a command.
+pub(crate) fn open_countdown_window(
+    app: &AppHandle,
+    app_name: &str,
+    meeting_id: i64,
+) -> tauri::Result<()> {
+    let seconds = RecordingSettings::from_env().countdown_seconds;
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("app", app_name)
+        .append_pair("meeting_id", &meeting_id.to_string())
+        .append_pair("seconds", &seconds.to_string())
+        .finish();
+    let url = WebviewUrl::App(format!("countdown.html?{query}").into());
+
+    WebviewWindowBuilder::new(app, COUNTDOWN_LABEL, url)
+        .title("Gilb")
+        .inner_size(380.0, 220.0)
+        .resizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .center()
+        .build()?;
+    Ok(())
+}
 
 #[tauri::command]
 pub async fn show_countdown(
@@ -23,24 +50,8 @@ pub async fn show_countdown(
     app_name: String,
     meeting_id: i64,
 ) -> Result<(), String> {
-    let seconds = RecordingSettings::from_env().countdown_seconds;
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("app", &app_name)
-        .append_pair("meeting_id", &meeting_id.to_string())
-        .append_pair("seconds", &seconds.to_string())
-        .finish();
-    let url = WebviewUrl::App(format!("countdown.html?{query}").into());
-
-    WebviewWindowBuilder::new(&app, COUNTDOWN_LABEL, url)
-        .title("Gilb")
-        .inner_size(380.0, 220.0)
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        .center()
-        .build()
-        .map_err(|e| format!("failed to open countdown window: {e}"))?;
-    Ok(())
+    open_countdown_window(&app, &app_name, meeting_id)
+        .map_err(|e| format!("failed to open countdown window: {e}"))
 }
 
 #[tauri::command]
