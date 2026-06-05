@@ -54,6 +54,8 @@ pub fn run() {
                     let bus = s.engine.event_bus().clone();
                     let db = s.engine.db().clone();
                     app.manage(s);
+                    // Cancel flag shared between download_model / cancel_model_download.
+                    app.manage(commands::transcription::DownloadCancel::default());
                     match gilb_config::data_dir() {
                         Ok(data_dir) => {
                             meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)
@@ -97,6 +99,11 @@ pub fn run() {
             commands::countdown::stop_meeting_recording,
             commands::settings::get_meeting_detection,
             commands::settings::set_meeting_detection,
+            commands::transcription::get_transcription_status,
+            commands::transcription::set_transcription_language,
+            commands::transcription::download_model,
+            commands::transcription::cancel_model_download,
+            commands::transcription::delete_model,
             commands::auth::start_login,
             commands::auth::auth_status,
             commands::auth::sign_out,
