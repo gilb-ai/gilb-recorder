@@ -58,6 +58,30 @@ fn parse_response_rejects_garbage() {
     assert!(parse_response("not json").is_err());
 }
 
+#[test]
+fn key_validity_maps_status() {
+    use gilb_transcribe::{key_validity_from_status, KeyValidity};
+    use reqwest::StatusCode;
+
+    assert_eq!(key_validity_from_status(StatusCode::OK), KeyValidity::Valid);
+    assert_eq!(
+        key_validity_from_status(StatusCode::UNAUTHORIZED),
+        KeyValidity::Invalid
+    );
+    assert_eq!(
+        key_validity_from_status(StatusCode::FORBIDDEN),
+        KeyValidity::Invalid
+    );
+    assert_eq!(
+        key_validity_from_status(StatusCode::TOO_MANY_REQUESTS),
+        KeyValidity::Unknown
+    );
+    assert_eq!(
+        key_validity_from_status(StatusCode::INTERNAL_SERVER_ERROR),
+        KeyValidity::Unknown
+    );
+}
+
 // ----- mocks --------------------------------------------------------------
 
 /// Always succeeds with a fixed transcript.

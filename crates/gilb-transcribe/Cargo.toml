@@ -21,3 +21,7 @@ async-trait = "0.1"
 
 [dev-dependencies]
 uuid = { workspace = true }
+# `key_validity_from_status` takes a `reqwest::StatusCode`; the pure mapping
+# test constructs status codes directly (integration tests don't inherit the
+# crate's regular deps).
+reqwest = { workspace = true }
