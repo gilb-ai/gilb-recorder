@@ -26,6 +26,32 @@ objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
 core-foundation = "0.10"
 
+# Windows capture stack: Windows.Graphics.Capture screen -> Media Foundation
+# SinkWriter H.264 .mp4, WASAPI loopback (system) + WASAPI mic -> mixed WAV.
+# Compiled only on Windows; pins match gilb-meeting's WASAPI detector. The
+# non-Windows build uses the no-op capturer. (GILB-46)
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-core = "0.58"
+windows = { version = "0.58", features = [
+    "Foundation",
+    "Graphics",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Foundation",
+    "Win32_System_Com",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Win32_Media_Audio",
+    "Win32_Media_MediaFoundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Gdi",
+] }
+
 [dev-dependencies]
 uuid = { workspace = true }
 tokio = { workspace = true }
