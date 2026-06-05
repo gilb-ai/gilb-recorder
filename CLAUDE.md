@@ -134,6 +134,13 @@ from `crates/gilb-db/migrations/`. The v0 schema is `sessions`,
 `ocr_text` / `audio_*`) are added by later migrations, **not**
 pre-created.
 
+**Never edit a migration that has shipped or been applied anywhere** —
+not even a comment. sqlx checksums the whole file; changing it makes
+every DB that already ran it refuse to start ("migration N was
+previously applied but has been modified"). Any change is a **new**
+migration (`000N+1`); fix stale docs in code/`help.md`, never in the
+applied `.sql`.
+
 **Second consumer of the schema — `apps/gilb-mcp`.** It reads the
 same `~/.gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
 with a stable user-facing contract in `apps/gilb-mcp/help.md`

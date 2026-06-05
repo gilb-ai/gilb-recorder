@@ -296,6 +296,7 @@ async function openSettings() {
     }
   }
   settingsToggleSnapshot = toggle?.getAttribute("aria-checked") === "true";
+  await loadTranscription();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
@@ -303,6 +304,7 @@ async function openSettings() {
 async function closeSettings(save: boolean) {
   const overlay = $("settings-overlay");
   const toggle = $<HTMLButtonElement>("toggle-meeting");
+  const lang = $<HTMLSelectElement>("select-language");
   if (save) {
     const enabled = toggle?.getAttribute("aria-checked") === "true";
     try {
@@ -310,11 +312,123 @@ async function closeSettings(save: boolean) {
     } catch (e) {
       console.warn("set_meeting_detection failed", e);
     }
-  } else if (toggle) {
-    // Cancel: revert the toggle to its pre-open state (nothing persisted).
-    toggle.setAttribute("aria-checked", settingsToggleSnapshot ? "true" : "false");
+    // The model download/delete are immediate; only the language is part of
+    // Save/Cancel. Persist it only when it actually changed.
+    if (lang && lang.value !== settingsLangSnapshot) {
+      try {
+        await invoke("set_transcription_language", { language: lang.value });
+      } catch (e) {
+        console.warn("set_transcription_language failed", e);
+      }
+    }
+  } else {
+    if (toggle) {
+      // Cancel: revert the toggle to its pre-open state (nothing persisted).
+      toggle.setAttribute("aria-checked", settingsToggleSnapshot ? "true" : "false");
+    }
+    if (lang) lang.value = settingsLangSnapshot; // revert the language picker
   }
   if (overlay) overlay.hidden = true;
+}
+
+// ----- transcription model (settings) -------------------------------------
+
+interface TranscriptionStatus {
+  model_downloaded: boolean;
+  model_bytes: number;
+  language: string;
+}
+interface ModelProgress {
+  status: "progress" | "done" | "cancelled" | "error";
+  downloaded: number;
+  total: number;
+  error?: string;
+}
+
+let settingsLangSnapshot = "auto";
+// Tracks an in-flight download so reopening Settings keeps showing progress
+// (the backend exposes no "downloading" status — only presence of the model).
+let modelDownloading = false;
+
+function setModelStatus(text: string, kind?: "ok" | "warn" | "error") {
+  const el = $("model-status");
+  if (!el) return;
+  el.textContent = text;
+  if (kind) el.setAttribute("data-kind", kind);
+  else el.removeAttribute("data-kind");
+}
+
+// Reflect model state in the buttons + status. Downloading wins over presence.
+function renderModelState(downloaded: boolean) {
+  const dl = $("btn-model-download");
+  const cancel = $("btn-model-cancel");
+  const del = $("btn-model-delete");
+  const prog = $("model-progress");
+  if (modelDownloading) {
+    dl?.setAttribute("hidden", "");
+    del?.setAttribute("hidden", "");
+    cancel?.removeAttribute("hidden");
+    prog?.removeAttribute("hidden");
+    return;
+  }
+  prog?.setAttribute("hidden", "");
+  cancel?.setAttribute("hidden", "");
+  if (downloaded) {
+    dl?.setAttribute("hidden", "");
+    del?.removeAttribute("hidden");
+    setModelStatus("Ready", "ok");
+  } else {
+    del?.setAttribute("hidden", "");
+    dl?.removeAttribute("hidden");
+    if (dl) dl.textContent = "Download";
+    setModelStatus("Not downloaded");
+  }
+}
+
+async function loadTranscription() {
+  try {
+    const s = await invoke<TranscriptionStatus>("get_transcription_status");
+    settingsLangSnapshot = s.language;
+    const sel = $<HTMLSelectElement>("select-language");
+    if (sel) sel.value = s.language;
+    renderModelState(s.model_downloaded);
+  } catch (e) {
+    console.warn("get_transcription_status failed", e);
+  }
+}
+
+function setProgressBar(downloaded: number, total: number) {
+  const bar = $("model-progress-bar");
+  const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
+  if (bar) bar.style.width = `${pct}%`;
+  setModelStatus(total > 0 ? `Downloading… ${pct}%` : "Downloading…");
+}
+
+async function downloadModel() {
+  modelDownloading = true;
+  setProgressBar(0, 0);
+  renderModelState(false);
+  // Resolves only when the download finishes; progress + terminal state arrive
+  // via the `model-download` event, so we don't block the UI on the result.
+  invoke("download_model").catch((e) => console.warn("download_model failed", e));
+}
+
+async function cancelModelDownload() {
+  try {
+    await invoke("cancel_model_download");
+  } catch (e) {
+    console.warn("cancel_model_download failed", e);
+  }
+}
+
+async function deleteModel() {
+  try {
+    await invoke("delete_model");
+  } catch (e) {
+    console.warn("delete_model failed", e);
+  }
+  modelDownloading = false;
+  renderModelState(false);
 }
 
 // Flips the toggle's visual state; the value is persisted/applied on Save.
@@ -426,6 +540,9 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-settings")?.addEventListener("click", openSettings);
   $("btn-settings-save")?.addEventListener("click", () => closeSettings(true));
   $("btn-settings-cancel")?.addEventListener("click", () => closeSettings(false));
+  $("btn-model-download")?.addEventListener("click", downloadModel);
+  $("btn-model-cancel")?.addEventListener("click", cancelModelDownload);
+  $("btn-model-delete")?.addEventListener("click", deleteModel);
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
       const ov = $("settings-overlay");
@@ -453,6 +570,25 @@ window.addEventListener("DOMContentLoaded", () => {
   // actions_today counter and as a fallback for a missed broadcast.
   listen("permission", () => refresh());
   listen("health", () => refresh());
+  // Local model download progress + terminal state (driven by download_model).
+  listen<ModelProgress>("model-download", (e) => {
+    const p = e.payload;
+    if (p.status === "progress") {
+      setProgressBar(p.downloaded, p.total);
+      return;
+    }
+    modelDownloading = false;
+    if (p.status === "done") {
+      renderModelState(true);
+    } else if (p.status === "cancelled") {
+      renderModelState(false);
+    } else {
+      renderModelState(false);
+      const btn = $("btn-model-download");
+      if (btn) btn.textContent = "Retry";
+      setModelStatus(p.error ? `Download failed — ${p.error}` : "Download failed", "error");
+    }
+  });
   // Meeting capture arm/stop drives the in-app recording indicator.
   listen<MeetingRecording>("meeting-recording", (e) =>
     updateRecIndicator(e.payload),

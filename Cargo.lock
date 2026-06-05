@@ -391,6 +391,26 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bindgen"
+version = "0.71.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
+dependencies = [
+ "bitflags 2.11.1",
+ "cexpr",
+ "clang-sys",
+ "itertools",
+ "log",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash",
+ "shlex",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "993776b509cfb49c750f11b8f07a46fa23e0a1386ffc01fb1e7d343efc387895"
@@ -742,6 +762,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "cmake"
+version = "0.1.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0f78a02292a74a88ac736019ab962ece0bc380e3f977bf72e376c5d78ff0678"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -917,7 +946,7 @@ version = "0.2.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9b4739a805a62757a83e5654fa3faabec0442666b263bb2287d5a8185bfd953"
 dependencies = [
- "bindgen",
+ "bindgen 0.72.1",
 ]
 
 [[package]]
@@ -1628,6 +1657,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42da99970737c0150e3c5cd1cdc510735a2511739f5c3aa3c6bfc9f31441488d"
 
 [[package]]
+name = "fs_extra"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
+
+[[package]]
 name = "futures"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1973,6 +2008,7 @@ dependencies = [
  "gilb-record",
  "gilb-transcribe",
  "parking_lot",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -2140,14 +2176,13 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "gilb-config",
  "gilb-db",
- "reqwest 0.12.28",
- "serde",
+ "hound",
  "serde_json",
  "tokio",
  "tracing",
  "uuid",
+ "whisper-rs",
 ]
 
 [[package]]
@@ -3156,16 +3191,6 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
-
-[[package]]
-name = "mime_guess"
-version = "2.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
-dependencies = [
- "mime",
- "unicase",
-]
 
 [[package]]
 name = "minimal-lexical"
@@ -4441,7 +4466,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-core",
- "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -4450,7 +4474,6 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
- "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6586,12 +6609,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "unicase"
-version = "2.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dbc4bc3a9f746d862c45cb89d705aa10f187bb96c76001afab07a0d35ce60142"
-
-[[package]]
 name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7033,6 +7050,27 @@ name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
+
+[[package]]
+name = "whisper-rs"
+version = "0.14.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4d2eac0a371f8ae667a5ee15ae4130553ea3004e7572544d1ce546c81ea8874b"
+dependencies = [
+ "whisper-rs-sys",
+]
+
+[[package]]
+name = "whisper-rs-sys"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1c86f1b993f216594b1ad9a9bb00a26014fb7c512e12664a2d401c7897d2ef7d"
+dependencies = [
+ "bindgen 0.71.1",
+ "cfg-if",
+ "cmake",
+ "fs_extra",
+]
 
 [[package]]
 name = "whoami"

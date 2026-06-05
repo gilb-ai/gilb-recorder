@@ -46,6 +46,14 @@ Other tables:
   specific moment, not just what the user clicked. List metadata via
   `gilb_list_tree_snapshots`, fetch one tree by id via
   `gilb_get_tree_snapshot`.
+- `meetings` — one row per recorded call/meeting (screen video + audio).
+  Independent of `sessions`. Has `app`, `started_at`/`ended_at`, `status`.
+- `meeting_transcripts` — on-device Whisper transcript, 1:1 with a meeting.
+  The audio is captured as two channels (the local mic and the remote call
+  audio) and transcribed separately, so every segment is tagged with a
+  **speaker**: `"Me"` (local participant) or `"Others"` (remote). List
+  meetings via `gilb_list_meetings`, read one transcript via
+  `gilb_get_transcript`.
 
 ## How to query
 
@@ -61,6 +69,8 @@ Always start broad, then narrow:
    `range = {"last": "today"}`.
 5. **Why is the log empty around 14:00?** → `gilb_list_health_events`
    (likely sleep/wake or AX timeout).
+6. **What was said in my last meeting?** → `gilb_list_meetings` to find
+   the id, then `gilb_get_transcript` with that `meeting_id`.
 
 ## `range` parameter
 
@@ -93,6 +103,8 @@ Units: `s`/`m`/`h`/`d`/`w`. If unset, each tool picks a sensible default
 | `gilb_list_tree_snapshots` | a11y tree snapshots metadata (id, app, window, browser_url, simhash, json_bytes) |
 | `gilb_get_tree_snapshot` | full AX tree (parsed JSON) for one snapshot id |
 | `gilb_list_health_events` | diagnostic events (drops, sleep/wake) |
+| `gilb_list_meetings` | recorded meetings, newest first, with has_transcript flag |
+| `gilb_get_transcript` | one meeting's transcript: text + speaker-tagged (Me/Others) segments |
 
 ## Output format
 

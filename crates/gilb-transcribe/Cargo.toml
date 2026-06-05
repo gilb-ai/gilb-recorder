@@ -7,21 +7,27 @@ publish.workspace = true
 
 [dependencies]
 gilb-db = { workspace = true }
-gilb-config = { workspace = true }
 
-reqwest = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
-# Dyn-dispatched async trait (`&dyn Transcriber`) so the OpenAI HTTP path is
+# Dyn-dispatched async trait (`&dyn Transcriber`) so the real whisper.cpp path is
 # swappable for a mock in tests.
 async-trait = "0.1"
 
+# Local Whisper (whisper.cpp via whisper-rs), gated behind `local-whisper` so the
+# heavy C++/Metal build stays opt-in. `hound` reads the 16 kHz mono i16 wav.
+whisper-rs = { version = "0.14", optional = true, features = ["metal"] }
+hound = { version = "3", optional = true }
+
+[features]
+local-whisper = ["dep:whisper-rs", "dep:hound"]
+
+# PoC: measure local turbo quality/speed on a real meeting wav across languages.
+[[example]]
+name = "local_poc"
+required-features = ["local-whisper"]
+
 [dev-dependencies]
 uuid = { workspace = true }
-# `key_validity_from_status` takes a `reqwest::StatusCode`; the pure mapping
-# test constructs status codes directly (integration tests don't inherit the
-# crate's regular deps).
-reqwest = { workspace = true }

@@ -119,6 +119,19 @@ pub struct ListHealthEventsArgs {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct ListMeetingsArgs {
+    /// Maximum meetings to return, newest first (default 20, cap 200).
+    #[serde(default)]
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct GetTranscriptArgs {
+    /// `meetings.id` from a prior `gilb_list_meetings` call.
+    pub meeting_id: i64,
+}
+
 // ---------- service impl ------------------------------------------------
 
 fn clamp(v: Option<i64>, default: i64, max: i64) -> i64 {
@@ -314,6 +327,43 @@ impl GilbService {
             .await
             .map_err(db_err)?;
         json_result(&rows)
+    }
+
+    #[tool(description = "\
+        List recorded meetings (newest first): id, app, start/end, status, and \
+        whether an on-device transcript exists (has_transcript) plus any \
+        transcript_error. Use `gilb_get_transcript` with an id to read the text.")]
+    async fn gilb_list_meetings(
+        &self,
+        Parameters(args): Parameters<ListMeetingsArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        let limit = clamp(args.limit, 20, 200);
+        let rows = queries::list_meetings(&self.db, limit)
+            .await
+            .map_err(db_err)?;
+        json_result(&rows)
+    }
+
+    #[tool(description = "\
+        Fetch one meeting's transcript by meeting_id: the flat `text` plus \
+        `segments`, each tagged with a speaker — \"Me\" (the local participant's \
+        mic) or \"Others\" (remote call audio) — and start/end times in seconds. \
+        `segments` is empty if the meeting isn't transcribed yet; `error` holds \
+        the failure if transcription failed.")]
+    async fn gilb_get_transcript(
+        &self,
+        Parameters(args): Parameters<GetTranscriptArgs>,
+    ) -> Result<CallToolResult, McpError> {
+        match queries::get_meeting_transcript(&self.db, args.meeting_id)
+            .await
+            .map_err(db_err)?
+        {
+            Some(t) => json_result(&t),
+            None => Err(McpError::invalid_params(
+                format!("meeting {} not found", args.meeting_id),
+                None,
+            )),
+        }
     }
 }
 

@@ -33,11 +33,10 @@ readme = "README.md"
 # async / runtime
 tokio = { version = "1", features = ["full"] }
 
-# HTTP client for the OpenAI Whisper transcription upload (BYOK). rustls-tls
-# keeps us off OpenSSL; default features are dropped so the default native-tls
-# backend is never pulled in.
+# HTTP client for downloading the local transcription model from HuggingFace.
+# rustls-tls keeps us off OpenSSL; default features are dropped so the default
+# native-tls backend is never pulled in.
 reqwest = { version = "0.12", default-features = false, features = [
-    "multipart",
     "rustls-tls",
     "json",
 ] }

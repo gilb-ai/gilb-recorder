@@ -12,8 +12,13 @@ const DEFAULT_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
-const OPENAI_KEY_FILE_NAME: &str = "openai.json";
 const PREFERENCES_FILE_NAME: &str = "prefs.json";
+const MODELS_DIR_NAME: &str = "models";
+
+/// Filename of the local Whisper model (ggml large-v3-turbo, q5_0 quantized),
+/// downloaded on demand into [`models_dir`]. Its presence is the gate that
+/// enables on-device meeting transcription.
+pub const TRANSCRIBE_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
 /// Default cadence for the analyzer's incremental upload when the server
 /// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
@@ -33,10 +38,6 @@ pub struct RecordingSettings {
     /// Seconds the pre-record countdown popup fills before auto-arming.
     /// Default: 5.
     pub countdown_seconds: u32,
-    /// OpenAI API key for batch meeting transcription (BYOK). Read from
-    /// `OPENAI_API_KEY`; `None` disables transcription.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub openai_api_key: Option<String>,
 }
 
 /// Default fill duration for the pre-record countdown popup, in seconds.
@@ -50,7 +51,6 @@ impl Default for RecordingSettings {
             capture_clipboard: true,
             capture_tree_snapshots: true,
             countdown_seconds: DEFAULT_COUNTDOWN_SECONDS,
-            openai_api_key: None,
         }
     }
 }
@@ -76,12 +76,6 @@ impl RecordingSettings {
             .and_then(|raw| raw.parse::<u32>().ok())
         {
             s.countdown_seconds = v;
-        }
-        if let Some(v) = std::env::var("OPENAI_API_KEY")
-            .ok()
-            .filter(|raw| !raw.is_empty())
-        {
-            s.openai_api_key = Some(v);
         }
         s
     }
@@ -130,6 +124,29 @@ pub fn ensure_logs_dir() -> Result<PathBuf> {
     std::fs::create_dir_all(&dir)
         .with_context(|| format!("failed to create gilb logs directory at {}", dir.display()))?;
     Ok(dir)
+}
+
+/// `$HOME/.gilb/models/` — where downloaded local transcription models live.
+pub fn models_dir() -> Result<PathBuf> {
+    Ok(data_dir()?.join(MODELS_DIR_NAME))
+}
+
+/// Ensure `$HOME/.gilb/models/` exists; returns its absolute path.
+pub fn ensure_models_dir() -> Result<PathBuf> {
+    let dir = models_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| {
+        format!(
+            "failed to create gilb models directory at {}",
+            dir.display()
+        )
+    })?;
+    Ok(dir)
+}
+
+/// Absolute path to the local Whisper model file ([`TRANSCRIBE_MODEL_FILE`]).
+/// Its existence is the gate for on-device transcription.
+pub fn transcribe_model_path() -> Result<PathBuf> {
+    Ok(models_dir()?.join(TRANSCRIBE_MODEL_FILE))
 }
 
 /// Enterprise credentials written by the recorder's auth flow and read by the
@@ -211,77 +228,6 @@ pub fn clear_credentials() -> Result<()> {
     }
 }
 
-/// On-disk shape of `$HOME/.gilb/openai.json` — the persisted BYOK OpenAI key.
-/// Deliberately separate from [`Credentials`]; it holds only the key so the two
-/// stores stay independent.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct OpenAiKeyFile {
-    openai_api_key: String,
-}
-
-/// Resolve `$HOME/.gilb/openai.json` — the BYOK OpenAI key store.
-pub fn openai_key_path() -> Result<PathBuf> {
-    Ok(data_dir()?.join(OPENAI_KEY_FILE_NAME))
-}
-
-/// Load the persisted OpenAI key from `path`. Returns `Ok(None)` when the file
-/// is absent, `Err` only on a present but unreadable/malformed file. Path-taking
-/// so tests exercise it on a tempfile without touching `$HOME`.
-pub fn load_openai_key_from(path: &Path) -> Result<Option<String>> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
-    };
-    let file: OpenAiKeyFile = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(Some(file.openai_api_key))
-}
-
-/// Write `key` to `path` as `{"openai_api_key": "..."}`, creating the parent
-/// directory if needed. The file holds a secret, so it is written `0600` on
-/// unix (mirrors [`save_credentials`]). Path-taking for testability.
-pub fn save_openai_key_to(path: &Path, key: &str) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let file = OpenAiKeyFile {
-        openai_api_key: key.to_string(),
-    };
-    let json = serde_json::to_vec_pretty(&file).context("failed to serialize openai key")?;
-    std::fs::write(path, &json).with_context(|| format!("failed to write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to chmod 600 {}", path.display()))?;
-    }
-    Ok(())
-}
-
-/// Load `$HOME/.gilb/openai.json`. See [`load_openai_key_from`].
-pub fn load_openai_key() -> Result<Option<String>> {
-    load_openai_key_from(&openai_key_path()?)
-}
-
-/// Persist the BYOK OpenAI key to `$HOME/.gilb/openai.json`. See
-/// [`save_openai_key_to`].
-pub fn save_openai_key(key: &str) -> Result<()> {
-    save_openai_key_to(&openai_key_path()?, key)
-}
-
-/// Remove `$HOME/.gilb/openai.json`. A no-op (Ok) if the file is already absent
-/// — used when the user clears the key field.
-pub fn clear_openai_key() -> Result<()> {
-    let path = openai_key_path()?;
-    match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
-    }
-}
-
 /// On-disk shape of `$HOME/.gilb/prefs.json` — persisted UI preferences that
 /// survive restarts. Not secret, so no `0600`. `#[serde(default)]` lets new
 /// fields land later without breaking older files.
@@ -295,6 +241,9 @@ pub struct Preferences {
     /// detector is stopped and no meeting countdowns/recordings happen. Defaults
     /// to `true` — meeting recording is on out of the box.
     pub meeting_detection_enabled: bool,
+    /// Language for on-device meeting transcription: `"auto"` | `"ru"` | `"en"`.
+    /// Passed to Whisper; `"auto"` detects the language from the first audio.
+    pub transcription_language: String,
 }
 
 impl Default for Preferences {
@@ -302,6 +251,7 @@ impl Default for Preferences {
         Self {
             tracking_paused: false,
             meeting_detection_enabled: true,
+            transcription_language: "auto".to_string(),
         }
     }
 }
@@ -344,34 +294,6 @@ pub fn save_preferences(prefs: &Preferences) -> Result<()> {
     save_preferences_to(&preferences_path()?, prefs)
 }
 
-/// Decide what `OPENAI_API_KEY` should hold, given the persisted key and whether
-/// the env var is already present. The environment wins — an explicitly exported
-/// `OPENAI_API_KEY` is never overridden — so this yields the persisted key only
-/// when the env is absent. Pure; [`hydrate_openai_key_env`] applies it.
-pub fn resolve_hydration(persisted: Option<String>, env_present: bool) -> Option<String> {
-    if env_present {
-        None
-    } else {
-        persisted
-    }
-}
-
-/// Best-effort: load the persisted BYOK key and, unless `OPENAI_API_KEY` is
-/// already set, export it into the process env so [`RecordingSettings::from_env`]
-/// (and thus the meeting transcription trigger) picks it up without any change to
-/// the transcription module. Returns `Err` only if the key file is present but
-/// unreadable; an absent file is `Ok`.
-pub fn hydrate_openai_key_env() -> Result<()> {
-    let env_present = std::env::var_os("OPENAI_API_KEY")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false);
-    let persisted = load_openai_key()?;
-    if let Some(key) = resolve_hydration(persisted, env_present) {
-        std::env::set_var("OPENAI_API_KEY", key);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,48 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_key_save_load_clear_round_trip() {
-        // Use the path-taking fns on a tempfile — never touches `$HOME`/env.
-        let mut path = std::env::temp_dir();
-        path.push(format!("gilb-openai-test-{}.json", std::process::id()));
-        let _ = std::fs::remove_file(&path);
-
-        assert!(load_openai_key_from(&path).unwrap().is_none());
-
-        save_openai_key_to(&path, "sk-test-123").unwrap();
-        assert_eq!(
-            load_openai_key_from(&path).unwrap().as_deref(),
-            Some("sk-test-123")
-        );
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600, "secret file must be 0600");
-        }
-
-        clear_openai_key_at(&path);
-        assert!(load_openai_key_from(&path).unwrap().is_none());
-    }
-
-    // `clear_openai_key` is `$HOME`-anchored; in the round-trip test we remove
-    // the tempfile directly to keep the test hermetic.
-    fn clear_openai_key_at(path: &std::path::Path) {
-        std::fs::remove_file(path).unwrap();
-    }
-
-    #[test]
-    fn resolve_hydration_env_wins() {
-        // Env present ⇒ never override, even with a persisted key.
-        assert_eq!(resolve_hydration(Some("sk-file".into()), true), None);
-        // No env, persisted present ⇒ use the persisted key.
-        assert_eq!(
-            resolve_hydration(Some("sk-file".into()), false),
-            Some("sk-file".into())
-        );
-        // Nothing persisted ⇒ nothing to set, regardless of env.
-        assert_eq!(resolve_hydration(None, false), None);
-        assert_eq!(resolve_hydration(None, true), None);
+    fn preferences_default_language_is_auto() {
+        assert_eq!(Preferences::default().transcription_language, "auto");
     }
 }

@@ -91,6 +91,46 @@
               <span class="toggle-knob" aria-hidden="true"></span>
             </button>
           </div>
+
+          <div class="settings-row settings-row-stacked">
+            <div class="settings-row-text">
+              <span class="settings-row-label">Transcription</span>
+              <span class="settings-row-desc">
+                Runs on this Mac — audio never leaves your device. Transcription
+                turns on automatically once the model is downloaded.
+              </span>
+            </div>
+
+            <div class="model-row">
+              <div class="model-info">
+                <span class="model-name">Whisper Large</span>
+                <span id="model-status" class="key-status">Not downloaded</span>
+              </div>
+              <div class="key-actions">
+                <button id="btn-model-download" class="key-btn key-btn-primary" type="button">
+                  Download
+                </button>
+                <button id="btn-model-cancel" class="key-btn" type="button" hidden>
+                  Cancel
+                </button>
+                <button id="btn-model-delete" class="key-btn" type="button" hidden>
+                  Delete
+                </button>
+              </div>
+            </div>
+            <div id="model-progress" class="model-progress" hidden>
+              <div id="model-progress-bar" class="model-progress-bar"></div>
+            </div>
+
+            <label class="model-lang">
+              <span class="settings-row-label">Language</span>
+              <select id="select-language" class="key-input">
+                <option value="auto">Auto-detect</option>
+                <option value="ru">Russian</option>
+                <option value="en">English</option>
+              </select>
+            </label>
+          </div>
         </div>
 
         <div class="settings-actions">

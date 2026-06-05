@@ -5,9 +5,10 @@ mod events;
 mod logging;
 mod meeting;
 mod state;
+mod transcribe_worker;
 
 use tauri::Manager;
-use tracing::{error, warn};
+use tracing::error;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,16 +44,6 @@ pub fn run() {
 
     let result = builder
         .setup(|app| {
-            // Bridge the persisted BYOK OpenAI key into the process env (unless
-            // one is already exported) so `RecordingSettings::from_env` — and
-            // thus the meeting transcription trigger — sees it. Best-effort: a
-            // missing file is fine, an unreadable one is logged, never fatal.
-            if let Err(err) = gilb_config::hydrate_openai_key_env() {
-                warn!(
-                    ?err,
-                    "failed to hydrate OPENAI_API_KEY from persisted store"
-                );
-            }
             match state::build_app_state() {
                 Ok(s) => {
                     events::spawn_proxies(app.handle().clone(), s.engine.clone());
@@ -64,6 +55,12 @@ pub fn run() {
                     let bus = s.engine.event_bus().clone();
                     let db = s.engine.db().clone();
                     app.manage(s);
+                    // Cancel flag shared between download_model / cancel_model_download.
+                    app.manage(commands::transcription::DownloadCancel::default());
+                    // Background transcription worker + its queue. Spawned before
+                    // the meeting pipeline so the queue exists when meetings end;
+                    // also used by the language setting and the model downloader.
+                    app.manage(transcribe_worker::spawn_transcription_worker(db.clone()));
                     match gilb_config::data_dir() {
                         Ok(data_dir) => {
                             meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)
@@ -107,9 +104,11 @@ pub fn run() {
             commands::countdown::stop_meeting_recording,
             commands::settings::get_meeting_detection,
             commands::settings::set_meeting_detection,
-            commands::settings::get_openai_key,
-            commands::settings::set_openai_key,
-            commands::settings::test_openai_key,
+            commands::transcription::get_transcription_status,
+            commands::transcription::set_transcription_language,
+            commands::transcription::download_model,
+            commands::transcription::cancel_model_download,
+            commands::transcription::delete_model,
             commands::auth::start_login,
             commands::auth::auth_status,
             commands::auth::sign_out,
