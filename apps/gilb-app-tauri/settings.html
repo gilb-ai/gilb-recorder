@@ -31,6 +31,36 @@
           <span class="toggle-knob" aria-hidden="true"></span>
         </button>
       </div>
+
+      <div class="settings-row settings-row-stacked">
+        <div class="settings-row-text">
+          <span class="settings-row-label" id="openai-label">
+            OpenAI API key
+          </span>
+          <span class="settings-row-desc">
+            Bring your own key to transcribe recorded meetings. Stored
+            locally only; clear the field to disable transcription.
+          </span>
+        </div>
+        <input
+          id="openai-key"
+          class="key-input"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="sk-…"
+          aria-labelledby="openai-label"
+        />
+        <div class="key-actions">
+          <button id="btn-save-key" class="key-btn key-btn-primary" type="button">
+            Save
+          </button>
+          <button id="btn-test-key" class="key-btn" type="button">
+            Test
+          </button>
+        </div>
+        <span id="key-status" class="key-status" role="status" aria-live="polite"></span>
+      </div>
     </main>
   </body>
 </html>
