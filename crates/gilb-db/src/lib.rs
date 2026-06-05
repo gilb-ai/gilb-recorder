@@ -10,6 +10,7 @@
 //! FTS5 search (Phase 5) lives in a separate module added by a later phase.
 
 pub mod actions;
+pub mod meetings;
 pub mod sessions;
 pub mod tree_snapshots;
 
