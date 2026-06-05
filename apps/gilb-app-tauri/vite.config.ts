@@ -1,4 +1,8 @@
 import { defineConfig } from "vite";
+import { resolve } from "path";
+import { fileURLToPath } from "url";
+
+const root = fileURLToPath(new URL(".", import.meta.url));
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -10,6 +14,16 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // Multi-page build: the main window (index.html) plus the borderless
+  // pre-record countdown popup (countdown.html), each with its own entry.
+  build: {
+    rollupOptions: {
+      input: {
+        main: resolve(root, "index.html"),
+        countdown: resolve(root, "countdown.html"),
+      },
+    },
+  },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 1420,
