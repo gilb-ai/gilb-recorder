@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Capability for the settings window (label 'settings'). The app-defined open_settings command is auto-allowed for local origins because no app ACL manifest is declared; this presentational window needs no extra IPC permissions.",
+  "windows": ["settings"],
+  "permissions": []
+}

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Gilb Settings</title>
+    <script type="module" src="/src/settings.ts" defer></script>
+  </head>
+  <body class="settings-window">
+    <main class="settings">
+      <h1 class="settings-title">Settings</h1>
+
+      <div class="settings-row">
+        <div class="settings-row-text">
+          <span class="settings-row-label" id="meeting-label">
+            Enable meeting detection
+          </span>
+          <span class="settings-row-desc">
+            Watch for active calls and offer to record when one starts.
+          </span>
+        </div>
+        <button
+          id="toggle-meeting"
+          class="toggle"
+          type="button"
+          role="switch"
+          aria-checked="false"
+          aria-labelledby="meeting-label"
+        >
+          <span class="toggle-knob" aria-hidden="true"></span>
+        </button>
+      </div>
+    </main>
+  </body>
+</html>
