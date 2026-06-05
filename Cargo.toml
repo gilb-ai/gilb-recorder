@@ -13,6 +13,7 @@ members = [
     "crates/gilb-helper",
     "crates/gilb-meeting",
     "crates/gilb-record",
+    "crates/gilb-transcribe",
 ]
 
 [workspace.package]
@@ -31,6 +32,15 @@ readme = "README.md"
 [workspace.dependencies]
 # async / runtime
 tokio = { version = "1", features = ["full"] }
+
+# HTTP client for the OpenAI Whisper transcription upload (BYOK). rustls-tls
+# keeps us off OpenSSL; default features are dropped so the default native-tls
+# backend is never pulled in.
+reqwest = { version = "0.12", default-features = false, features = [
+    "multipart",
+    "rustls-tls",
+    "json",
+] }
 
 # database
 # Local SQLite only — no network, so no TLS backend (drops rustls/ring,
@@ -91,6 +101,7 @@ gilb-engine = { path = "crates/gilb-engine" }
 gilb-helper = { path = "crates/gilb-helper" }
 gilb-meeting = { path = "crates/gilb-meeting" }
 gilb-record = { path = "crates/gilb-record" }
+gilb-transcribe = { path = "crates/gilb-transcribe" }
 
 [profile.release]
 codegen-units = 1
