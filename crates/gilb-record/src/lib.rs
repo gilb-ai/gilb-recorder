@@ -27,6 +27,9 @@ use tracing::{info, warn};
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "windows")]
+mod windows;
+
 /// Target sample rate of the audio sidecar — 16 kHz mono, the rate downstream
 /// transcription ([GILB-6]) consumes.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -63,7 +66,8 @@ pub trait ScreenAudioCapturer: Send + Sync {
     fn stop(&self) -> Result<()>;
 }
 
-/// No-op capturer for the non-macOS build and for tests. Writes nothing.
+/// No-op capturer for the non-macOS/non-Windows build and for tests. Writes
+/// nothing.
 #[derive(Debug, Default)]
 pub struct NoopCapturer;
 
@@ -77,11 +81,15 @@ impl ScreenAudioCapturer for NoopCapturer {
 }
 
 /// The capturer wired up by [`spawn_recorder`]: the real ScreenCaptureKit stack
-/// on macOS, a no-op everywhere else (Windows recording is [GILB-46]).
+/// on macOS, the WGC + Media Foundation + WASAPI stack on Windows ([GILB-46]),
+/// a no-op everywhere else.
 #[cfg(target_os = "macos")]
 pub type PlatformCapturer = macos::MacosCapturer;
 /// See [`PlatformCapturer`].
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+pub type PlatformCapturer = windows::WindowsCapturer;
+/// See [`PlatformCapturer`].
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub type PlatformCapturer = NoopCapturer;
 
 /// Derive the on-disk paths for a meeting's recordings:
