@@ -14,15 +14,15 @@ export default defineConfig(async () => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
-  // Multi-page build: the main window (index.html), the borderless pre-record
-  // countdown popup (countdown.html), and the settings window (settings.html),
-  // each with its own entry.
+  // Multi-page build: the main window (index.html, which also hosts the inline
+  // settings panel), the borderless pre-record countdown popup (countdown.html),
+  // and its stop-countdown mirror (stop-countdown.html), each with its own entry.
   build: {
     rollupOptions: {
       input: {
         main: resolve(root, "index.html"),
         countdown: resolve(root, "countdown.html"),
-        settings: resolve(root, "settings.html"),
+        "stop-countdown": resolve(root, "stop-countdown.html"),
       },
     },
   },

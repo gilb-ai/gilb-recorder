@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Gilb",
+        "title": "Gilb.ai",
         "width": 480,
         "height": 500,
         "resizable": true,

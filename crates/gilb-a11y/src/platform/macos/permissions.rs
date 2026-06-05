@@ -57,3 +57,80 @@ pub fn request_accessibility() -> bool {
         accessibility_sys::AXIsProcessTrustedWithOptions(dict.as_concrete_TypeRef())
     }
 }
+
+/// Returns `true` when the process is approved to capture the screen. Needed
+/// by the meeting recorder's ScreenCaptureKit stream. Polling-safe — does not
+/// trigger the system prompt.
+pub fn screen_recording_granted() -> bool {
+    // SAFETY: CoreGraphics access-check call, thread-safe.
+    unsafe { ffi::CGPreflightScreenCaptureAccess() }
+}
+
+/// Trigger the macOS Screen Recording permission flow. Registers the process
+/// with TCC (so it appears in System Settings → Screen Recording) and shows
+/// the native consent prompt while still ungranted. Returns the current
+/// granted state — typically `false` on first call.
+pub fn request_screen_recording() -> bool {
+    // SAFETY: CoreGraphics request call, thread-safe.
+    unsafe { ffi::CGRequestScreenCaptureAccess() }
+}
+
+/// Returns `true` when the process is authorized to capture microphone audio.
+/// Mirrors `AVCaptureDevice.authorizationStatus(for: .audio) == .authorized`.
+/// Polling-safe — does not trigger the system prompt.
+pub fn microphone_granted() -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    // `AVAuthorizationStatusAuthorized` is `3`; everything else (not
+    // determined / restricted / denied) means "not granted".
+    const AV_AUTHORIZED: isize = 3;
+
+    let Some(cls) = AnyClass::get(c"AVCaptureDevice") else {
+        return false;
+    };
+    // SAFETY: `+[AVCaptureDevice authorizationStatusForMediaType:]` takes an
+    // `AVMediaType` (an `NSString *`) and returns `AVAuthorizationStatus`
+    // (`NSInteger`). `AVMediaTypeAudio` is a framework-exported string; the
+    // call is thread-safe and does not block.
+    let status: isize =
+        unsafe { msg_send![cls, authorizationStatusForMediaType: av_media_type_audio()] };
+    status == AV_AUTHORIZED
+}
+
+/// Trigger the macOS Microphone permission flow. Registers the process with
+/// TCC (so it appears in System Settings → Microphone) and shows the native
+/// consent prompt while still undetermined. Fire-and-forget: the grant is
+/// observed later by polling [`microphone_granted`].
+pub fn request_microphone() {
+    use block2::RcBlock;
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    let Some(cls) = AnyClass::get(c"AVCaptureDevice") else {
+        return;
+    };
+    // `void (^)(BOOL granted)` — we don't act on the result here; the UI
+    // re-polls `microphone_granted` once the user answers the prompt.
+    let handler = RcBlock::new(|_granted: objc2::runtime::Bool| {});
+    // SAFETY: `+[AVCaptureDevice requestAccessForMediaType:completionHandler:]`
+    // takes an `AVMediaType` and a completion block; the block is retained by
+    // the framework for the duration of the async prompt.
+    let _: () = unsafe {
+        msg_send![
+            cls,
+            requestAccessForMediaType: av_media_type_audio(),
+            completionHandler: &*handler,
+        ]
+    };
+}
+
+/// The `AVMediaTypeAudio` constant — an `NSString *` exported by AVFoundation.
+fn av_media_type_audio() -> *const objc2::runtime::AnyObject {
+    #[link(name = "AVFoundation", kind = "framework")]
+    extern "C" {
+        static AVMediaTypeAudio: *const objc2::runtime::AnyObject;
+    }
+    // SAFETY: reading a framework-exported immortal string constant.
+    unsafe { AVMediaTypeAudio }
+}

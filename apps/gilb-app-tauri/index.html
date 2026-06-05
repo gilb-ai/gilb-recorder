@@ -10,10 +10,11 @@
   <body>
     <div id="splash" class="splash" hidden>
       <div class="splash-card">
-        <h1>macOS permission needed</h1>
+        <h1>macOS permissions needed</h1>
         <p class="splash-lead">
-          Gilb records activity via the Accessibility API. Grant the
-          permission below in System Settings → Privacy &amp; Security.
+          Gilb records your activity via the Accessibility API and captures
+          meetings (screen + microphone). Grant the permissions below in
+          System Settings → Privacy &amp; Security.
         </p>
         <ol class="splash-steps">
           <li id="splash-step-ax">
@@ -26,25 +27,116 @@
               Open Accessibility
             </button>
           </li>
+          <li id="splash-step-screen">
+            <span class="dot" id="splash-screen-dot"></span>
+            <div class="splash-step-text">
+              <strong>Screen Recording</strong>
+              <span class="splash-status" id="splash-screen-status">checking…</span>
+            </div>
+            <button
+              type="button"
+              class="splash-btn"
+              data-pane="screen-recording"
+            >
+              Open Screen Recording
+            </button>
+          </li>
+          <li id="splash-step-mic">
+            <span class="dot" id="splash-mic-dot"></span>
+            <div class="splash-step-text">
+              <strong>Microphone</strong>
+              <span class="splash-status" id="splash-mic-status">checking…</span>
+            </div>
+            <button type="button" class="splash-btn" data-pane="microphone">
+              Open Microphone
+            </button>
+          </li>
         </ol>
         <p class="splash-hint">
-          The window updates automatically once you grant the toggle. If
+          The window updates automatically once you grant each toggle. If
           the status doesn't change after granting, restart the app.
         </p>
       </div>
     </div>
 
-    <main class="container">
-      <header>
-        <h1>Gilb.ai</h1>
-      </header>
+    <div
+      id="settings-overlay"
+      class="settings-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-title"
+      hidden
+    >
+      <div class="settings-card">
+        <h1 class="settings-title" id="settings-title">Settings</h1>
 
-      <section class="card">
-        <div class="row">
-          <button id="btn-start" type="button">Record screen</button>
-          <button id="btn-stop" type="button" disabled>Stop record</button>
-          <button id="btn-settings" type="button">Settings</button>
+        <div class="settings-body">
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="meeting-label">
+                Enable meeting detection
+              </span>
+              <span class="settings-row-desc">
+                We'll catch the start of every call and offer to record.
+              </span>
+            </div>
+            <button
+              id="toggle-meeting"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="meeting-label"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
+
+        <div class="settings-actions">
+          <button id="btn-settings-cancel" class="key-btn" type="button">
+            Cancel
+          </button>
+          <button id="btn-settings-save" class="key-btn key-btn-primary" type="button">
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <main class="container">
+      <section class="card capture">
+        <div class="capture-head">
+          <h2>Capture</h2>
+        </div>
+
+        <div
+          id="rec-indicator"
+          class="track rec-row"
+          role="status"
+          aria-live="polite"
+          hidden
+        >
+          <span class="track-state">
+            <span class="track-dot rec-dot" aria-hidden="true"></span>
+            <span>Recording meeting — <strong id="rec-app">this meeting</strong></span>
+          </span>
+          <span class="rec-right">
+            <span class="rec-timer" id="rec-timer">00:00</span>
+            <button id="btn-rec-stop" class="rec-stop" type="button">Stop</button>
+          </span>
+        </div>
+
+        <div class="track">
+          <span class="track-state">
+            <span class="track-dot" id="track-dot" aria-hidden="true"></span>
+            <span id="track-label">Activity tracking</span>
+          </span>
+          <button id="btn-track-toggle" class="track-btn" type="button">
+            Pause
+          </button>
+        </div>
+
         <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
 
@@ -76,7 +168,33 @@
         </div>
       </section>
 
-      <footer class="version" id="app-version"></footer>
+      <footer class="appbar">
+        <span class="version" id="app-version"></span>
+        <button
+          id="btn-settings"
+          class="settings-gear"
+          type="button"
+          aria-label="Settings"
+          title="Settings"
+        >
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="3"></circle>
+            <path
+              d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"
+            ></path>
+          </svg>
+        </button>
+      </footer>
     </main>
   </body>
 </html>

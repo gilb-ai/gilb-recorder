@@ -36,6 +36,7 @@ core-foundation-sys = "0.8"
 foreign-types-shared = "0.3"
 accessibility-sys = "0.2"
 objc2 = "0.6"
+block2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSValue", "NSDictionary", "NSDate", "NSArray", "NSNotification", "NSRunLoop"] }
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace", "NSRunningApplication", "NSPasteboard"] }
 libc = "0.2"

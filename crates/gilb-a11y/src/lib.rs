@@ -34,6 +34,12 @@ use gilb_events::EventBus;
 pub struct Permissions {
     pub accessibility: bool,
     pub input_monitoring: bool,
+    /// Screen Recording (macOS). Required by the meeting recorder, which
+    /// captures the call window's video via ScreenCaptureKit.
+    pub screen_recording: bool,
+    /// Microphone (macOS). Required by the meeting recorder, which captures
+    /// mic audio via `cpal` alongside the system audio.
+    pub microphone: bool,
 }
 
 /// Context wired into a [`CapturePlatform::start`] invocation.

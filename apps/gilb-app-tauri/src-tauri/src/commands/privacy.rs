@@ -1,13 +1,15 @@
 //! macOS Privacy & Security pane shortcuts.
 //!
-//! Asks macOS for the Accessibility TCC permission (registering Gilb in
-//! System Settings so it shows up with a toggle) and opens the pane so
-//! the user can flip it. The native consent prompt, if shown, layers on
-//! top of the settings UI.
+//! For each TCC permission Gilb needs, this asks macOS to register the
+//! process (so it shows up in System Settings with a toggle) and opens the
+//! matching pane so the user can flip it. The native consent prompt, if
+//! shown, layers on top of the settings UI.
 //!
-//! Input Monitoring is intentionally not exposed: CGEventTap honours the
-//! Accessibility grant, so we don't ask for two permissions when one
-//! covers the recorder's needs.
+//! Three permissions are surfaced: **Accessibility** (the a11y recorder),
+//! **Screen Recording** and **Microphone** (the meeting recorder's
+//! ScreenCaptureKit video + `cpal` mic capture). Input Monitoring is
+//! intentionally not exposed: CGEventTap honours the Accessibility grant,
+//! so we don't ask for a permission that another already covers.
 
 #[tauri::command]
 pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<(), String> {
@@ -20,6 +22,14 @@ pub async fn open_privacy_pane(app: tauri::AppHandle, pane: String) -> Result<()
             "accessibility" => {
                 let _ = permissions::request_accessibility();
                 "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+            }
+            "screen-recording" => {
+                let _ = permissions::request_screen_recording();
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+            }
+            "microphone" => {
+                permissions::request_microphone();
+                "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
             }
             other => return Err(format!("unknown privacy pane: {other}")),
         };

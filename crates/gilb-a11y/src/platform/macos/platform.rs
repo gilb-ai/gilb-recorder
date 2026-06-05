@@ -57,6 +57,8 @@ impl CapturePlatform for MacosPlatform {
         Permissions {
             accessibility: permissions::accessibility_granted(),
             input_monitoring: permissions::input_monitoring_granted(),
+            screen_recording: permissions::screen_recording_granted(),
+            microphone: permissions::microphone_granted(),
         }
     }
 

@@ -12,6 +12,14 @@ use std::ffi::c_void;
 extern "C" {
     pub fn CGPreflightListenEventAccess() -> bool;
     pub fn CGRequestListenEventAccess() -> bool;
+
+    // Screen Recording access (macOS 10.15+). `CGPreflight…` is a
+    // polling-safe status probe; `CGRequest…` registers the process with
+    // TCC (so it appears in System Settings → Screen Recording) and shows
+    // the native consent prompt. The meeting recorder's ScreenCaptureKit
+    // stream needs this grant.
+    pub fn CGPreflightScreenCaptureAccess() -> bool;
+    pub fn CGRequestScreenCaptureAccess() -> bool;
 }
 
 // ---- CGEvent keyboard text extraction -----------------------------------

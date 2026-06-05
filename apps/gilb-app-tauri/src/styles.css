@@ -100,10 +100,38 @@ button:disabled {
   cursor: default;
 }
 
-#btn-start { background: #2563eb; color: white; border-color: #1d4ed8; }
-#btn-start:hover:not(:disabled) { background: #1d4ed8; }
-#btn-stop { background: #ef4444; color: white; border-color: #dc2626; }
-#btn-stop:hover:not(:disabled) { background: #dc2626; }
+/* Activity tracking (subsystem A) status row — a calm, NON-pulsing indicator.
+   The pulse is reserved for live meeting recording (`.rec-indicator`); the
+   always-on a11y layer reads as steady. Green = on, gray = paused. */
+/* Activity tracking row inside the unified "Capture" card: status on the
+   left, the Pause/Resume control on the right — same grammar as the meeting
+   row above it (`.rec-row`). */
+.track {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+}
+/* Capture card header: just the "Capture" caption. App-level Settings lives in
+   the footer (.appbar), not in this card. */
+.capture-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+.capture-head h2 { margin: 0; }
+.track-state { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.track-dot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+.track-dot.on { background: #22c55e; }
+.track-dot.paused { background: #9ca3af; }
 
 .message {
   margin: 12px 0 0;
@@ -138,11 +166,29 @@ button:disabled {
   word-break: break-all;
 }
 
-.version {
+/* App-level footer: version text with the Settings gear beside it. */
+.appbar {
   margin-top: 4px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.version {
   font-size: 11px;
   color: #9ca3af;
+}
+.settings-gear {
+  border: none;
+  background: none;
+  padding: 5px;
+  border-radius: 8px;
+  line-height: 0;
+  color: #9ca3af;
+}
+.appbar .settings-gear:hover:not(:disabled) {
+  background: #f3f4f6;
+  color: #4b5563;
 }
 
 .splash {
@@ -309,6 +355,8 @@ body.countdown-window {
   bottom: 0;
   width: 0;
   background: rgba(255, 255, 255, 0.28);
+  /* Decorative progress fill — never intercept clicks meant for the button. */
+  pointer-events: none;
 }
 .countdown-record.filling .countdown-fill {
   width: 100%;
@@ -352,27 +400,108 @@ body.countdown-window {
   .countdown-cancel:active:not(:disabled) { background: #353945; }
 }
 
-/* Settings window — a standard decorated second window. One presentational
-   row (label + description + a switch-style toggle). The toggle reuses the
-   app's blue accent; settings.ts flips aria-checked, CSS does the rest. */
-body.settings-window {
-  padding: 0;
-  height: 100vh;
-  overflow: hidden;
+/* Stop-countdown popup: same layout as the pre-record countdown, but the
+   progress button counts down to *stopping*, so it wears a red accent. */
+.countdown-record--stop { background: #dc2626; border-color: #b91c1c; }
+.countdown-record--stop:hover:not(:disabled) { background: #b91c1c; }
+.countdown-record--stop:active:not(:disabled) { background: #991b1b; }
+.countdown-record--stop:focus-visible { outline-color: #dc2626; }
+@media (prefers-color-scheme: dark) {
+  .countdown-record--stop { background: #b91c1c; border-color: #991b1b; }
+  .countdown-record--stop:hover:not(:disabled) { background: #991b1b; }
+  .countdown-record--stop:active:not(:disabled) { background: #7f1d1d; }
 }
 
-.settings {
-  height: 100vh;
+/* Meeting recording row — same plain row format as Activity tracking
+   (`.track`), so the two read as one Capture list. The "live recording" cue is
+   carried by the pulsing green dot + the red Stop button, not a boxed highlight.
+   Shown only while a meeting records. */
+.rec-row { margin-bottom: 14px; }
+.rec-row[hidden] { display: none; }
+/* Green + pulsing, overriding the calm `.track-dot`. */
+.rec-dot {
+  background: #22c55e;
+  animation: rec-pulse 1.4s ease-in-out infinite;
+}
+.rec-right {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.rec-timer {
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+.rec-stop {
+  flex: none;
+  padding: 3px 10px;
+  border: 1px solid #b91c1c;
+  border-radius: 7px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.rec-stop:hover:not(:disabled) { background: #b91c1c; }
+.rec-stop:active:not(:disabled) { background: #991b1b; }
+.rec-stop:focus-visible { outline: 2px solid #dc2626; outline-offset: 2px; }
+.rec-stop:disabled { opacity: 0.5; cursor: default; }
+@keyframes rec-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* Settings — a modal overlay within the main window (no second OS window).
+   Open shows only the settings screen (toggle + BYOK key) with Save/Cancel,
+   floating over the main view. Mirrors the `.splash` overlay pattern. */
+.settings-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 1000;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+}
+.settings-overlay[hidden] { display: none; }
+
+.settings-card {
+  background: white;
+  border-radius: 14px;
+  padding: 24px 28px;
+  width: 100%;
+  max-width: 460px;
+  box-shadow: 0 12px 40px rgba(15, 23, 42, 0.25);
   display: flex;
   flex-direction: column;
   gap: 18px;
-  padding: 24px 28px;
 }
 
 .settings-title {
   margin: 0;
   font-size: 20px;
   letter-spacing: -0.01em;
+}
+
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .settings-card { background: #15171e; }
 }
 
 .settings-row {
@@ -553,6 +682,8 @@ body.settings-window {
   .card { background: #1a1c24; box-shadow: none; }
   button { background: #232631; color: #f5f5f7; border-color: #2f3340; }
   button:hover:not(:disabled) { background: #2c2f3a; }
+  .settings-gear { background: none; color: #6b7280; }
+  .appbar .settings-gear:hover:not(:disabled) { background: #2c2f3a; color: #d1d5db; }
   .card h2, .subtitle { color: #9ca3af; }
   .auth-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
 

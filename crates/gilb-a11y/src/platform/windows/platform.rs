@@ -57,6 +57,8 @@ impl CapturePlatform for WindowsPlatform {
         Permissions {
             accessibility: true,
             input_monitoring: true,
+            screen_recording: true,
+            microphone: true,
         }
     }
 
