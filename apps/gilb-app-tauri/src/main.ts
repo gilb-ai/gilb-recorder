@@ -152,6 +152,14 @@ async function signOut() {
   refreshAuth();
 }
 
+async function openSettings() {
+  try {
+    await invoke("open_settings");
+  } catch (err) {
+    setMessage(`open_settings error: ${String(err)}`, "error");
+  }
+}
+
 async function openPrivacyPane(pane: "accessibility") {
   try {
     await invoke("open_privacy_pane", { pane });
@@ -218,6 +226,7 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-stop")?.addEventListener("click", stopCapture);
   $("btn-connect")?.addEventListener("click", connect);
   $("btn-signout")?.addEventListener("click", signOut);
+  $("btn-settings")?.addEventListener("click", openSettings);
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {
