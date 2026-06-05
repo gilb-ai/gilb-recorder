@@ -51,10 +51,9 @@ use windows::Graphics::DirectX::DirectXPixelFormat;
 use windows::Win32::Foundation::{CloseHandle, BOOL, HMODULE, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_HARDWARE;
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_BIND_FLAG,
-    D3D11_CPU_ACCESS_READ, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE,
-    D3D11_MAP_READ, D3D11_RESOURCE_MISC_FLAG, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_STAGING,
+    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D, D3D11_CPU_ACCESS_READ,
+    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_MAPPED_SUBRESOURCE, D3D11_MAP_READ, D3D11_SDK_VERSION,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTOPRIMARY};
@@ -815,11 +814,13 @@ unsafe fn on_frame(
             .map(|s| s.width != src_w || s.height != src_h)
             .unwrap_or(true);
         if stale {
+            // The `*Flags` fields of D3D11_TEXTURE2D_DESC are plain `u32`
+            // bitmasks; the typed constants must be unwrapped to their value.
             let mut sdesc = desc;
             sdesc.Usage = D3D11_USAGE_STAGING;
-            sdesc.BindFlags = D3D11_BIND_FLAG(0);
-            sdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-            sdesc.MiscFlags = D3D11_RESOURCE_MISC_FLAG(0);
+            sdesc.BindFlags = 0;
+            sdesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ.0 as u32;
+            sdesc.MiscFlags = 0;
             let mut tex: Option<ID3D11Texture2D> = None;
             device
                 .CreateTexture2D(&sdesc, None, Some(&mut tex))
