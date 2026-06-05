@@ -1,31 +1,72 @@
-//! Shannon CLI. Reads recent recorded activity (read-only), reduces + redacts
-//! it into a slice, and prints it (`--dry-run`, the only mode today). Uploading
-//! the slice to `gilb-web /analyze` lands when that endpoint exists; the
-//! credentials contract is `gilb_config::load_credentials()`.
+//! Shannon CLI.
+//!
+//! - `slice` — reduce + redact recent activity into a de-identified slice (the
+//!   original Layer-1 dry-run; works fully local).
+//! - `find` — Phase 1: run the therblig-finder prompt as `claude -p` over
+//!   gilb-mcp, parse the emitted Therbligs, dedup, push to gilb-web, record the
+//!   run. `--dry-run` does all of it except touch the network.
+//! - `run` — loop `find` on the server-controlled cadence (in-process daemon).
+//!
+//! Everything but `slice` needs enterprise credentials
+//! (`gilb_config::load_credentials`); without them only `slice` is available
+//! (Tier-1, local-only).
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use clap::Parser;
-use sqlx::Row;
+use clap::{Parser, Subcommand};
 
-use gilb_analyzer::{redact, ActionRow};
+use gilb_analyzer::claude::ClaudeRunner;
+use gilb_analyzer::config::ensure_config;
+use gilb_analyzer::pipeline::{run_find, FindSummary};
+use gilb_analyzer::web::Web;
+use gilb_analyzer::{db, redact};
+
+const FAR_FUTURE: &str = "9999-12-31T23:59:59Z";
 
 #[derive(Parser, Debug)]
 #[command(
     name = "gilb-analyzer",
-    about = "Shannon — reduce + redact recorded activity into a de-identified slice"
+    about = "Shannon — reduce/redact activity and find Therbligs"
 )]
 struct Cli {
-    /// DB path (default: ~/.gilb/db.sqlite).
-    #[arg(long)]
-    db: Option<PathBuf>,
-    /// Only actions at/after this ISO8601 time (default: last 1h).
-    #[arg(long)]
-    since: Option<String>,
-    /// Pretty-print the slice JSON.
-    #[arg(long)]
-    pretty: bool,
+    #[command(subcommand)]
+    cmd: Command,
+}
+
+#[derive(Subcommand, Debug)]
+enum Command {
+    /// Reduce + redact recent activity into a de-identified slice (local).
+    Slice {
+        /// DB path (default: ~/.gilb/db.sqlite).
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Only actions at/after this ISO8601 time (default: last 1h).
+        #[arg(long)]
+        since: Option<String>,
+        /// Pretty-print the slice JSON.
+        #[arg(long)]
+        pretty: bool,
+    },
+    /// Phase 1: find Therbligs in a window and push them to gilb-web.
+    Find {
+        /// DB path (default: ~/.gilb/db.sqlite).
+        #[arg(long)]
+        db: Option<PathBuf>,
+        /// Window start (default: now - cadence).
+        #[arg(long)]
+        since: Option<String>,
+        /// Build + analyze + parse, but touch no network (no dedup, no push).
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Loop `find` on the server-controlled cadence (in-process daemon).
+    Run {
+        /// DB path (default: ~/.gilb/db.sqlite).
+        #[arg(long)]
+        db: Option<PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -39,23 +80,33 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    match cli.cmd {
+        Command::Slice { db, since, pretty } => cmd_slice(db, since, pretty).await,
+        Command::Find { db, since, dry_run } => cmd_find(db, since, dry_run).await,
+        Command::Run { db } => cmd_run(db).await,
+    }
+}
 
-    let db_path = match cli.db {
+async fn open_db(db: Option<PathBuf>) -> Result<sqlx::SqlitePool> {
+    let db_path = match db {
         Some(p) => p,
         None => gilb_config::db_path().context("resolve db path")?,
     };
-    let db = gilb_db::open_db_read_only(&db_path)
+    gilb_db::open_db_read_only(&db_path)
         .await
-        .with_context(|| format!("open db at {}", db_path.display()))?;
+        .with_context(|| format!("open db at {}", db_path.display()))
+}
 
-    let since = cli
-        .since
-        .unwrap_or_else(|| (chrono::Utc::now() - chrono::Duration::hours(1)).to_rfc3339());
+fn default_since(secs: u64) -> String {
+    (chrono::Utc::now() - chrono::Duration::seconds(secs as i64)).to_rfc3339()
+}
 
-    let rows = load_rows(&db, &since).await?;
+async fn cmd_slice(db: Option<PathBuf>, since: Option<String>, pretty: bool) -> Result<()> {
+    let pool = open_db(db).await?;
+    let since = since.unwrap_or_else(|| default_since(3600));
+    let rows = db::load_rows(&pool, &since, FAR_FUTURE).await?;
     let slice = redact(&rows);
-
-    let json = if cli.pretty {
+    let json = if pretty {
         serde_json::to_string_pretty(&slice)?
     } else {
         serde_json::to_string(&slice)?
@@ -64,40 +115,105 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn load_rows(db: &sqlx::SqlitePool, since: &str) -> Result<Vec<ActionRow>> {
-    let rows = sqlx::query(
-        r#"
-        SELECT captured_at, kind, app_name, app_bundle_id, window_title,
-               browser_url, element_role, element_name, element_value,
-               text_content, password_flag, extra_json
-        FROM actions
-        WHERE captured_at >= ?1
-        ORDER BY captured_at ASC
-        "#,
-    )
-    .bind(since)
-    .fetch_all(db)
-    .await
-    .context("query actions")?;
+/// Build a runner from env: `GILB_CLAUDE_BIN` (default `claude`),
+/// `GILB_MCP_CONFIG` (path to the gilb-mcp MCP config), `GILB_CLAUDE_MODEL`.
+fn runner_from_env() -> ClaudeRunner {
+    let mut runner = ClaudeRunner::new();
+    if let Ok(bin) = std::env::var("GILB_CLAUDE_BIN") {
+        runner = runner.bin(bin);
+    }
+    if let Ok(path) = std::env::var("GILB_MCP_CONFIG") {
+        runner = runner.mcp_config(PathBuf::from(path));
+    }
+    runner = runner.model(std::env::var("GILB_CLAUDE_MODEL").ok());
+    runner
+}
 
-    Ok(rows
-        .into_iter()
-        .map(|r| ActionRow {
-            captured_at: r.get("captured_at"),
-            kind: r.get("kind"),
-            app_name: r.try_get("app_name").unwrap_or(None),
-            app_bundle_id: r.try_get("app_bundle_id").unwrap_or(None),
-            window_title: r.try_get("window_title").unwrap_or(None),
-            browser_url: r.try_get("browser_url").unwrap_or(None),
-            element_role: r.try_get("element_role").unwrap_or(None),
-            element_name: r.try_get("element_name").unwrap_or(None),
-            element_value: r.try_get("element_value").unwrap_or(None),
-            text_content: r.try_get("text_content").unwrap_or(None),
-            password_flag: r.try_get::<i64, _>("password_flag").unwrap_or(0) != 0,
-            extra_json: r
-                .try_get::<Option<String>, _>("extra_json")
-                .unwrap_or(None)
-                .and_then(|s| serde_json::from_str(&s).ok()),
-        })
-        .collect())
+async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> Result<()> {
+    let Some(creds) = gilb_config::load_credentials()? else {
+        eprintln!("not enterprise-configured (no credentials); only `slice` is available locally");
+        return Ok(());
+    };
+    let pool = open_db(db).await?;
+    let config = ensure_config(&creds).await?;
+    let runner = runner_from_env();
+    let web = Web::new(&creds.gilb_web_url, &creds.token);
+
+    let since = since.unwrap_or_else(|| default_since(config.interval_secs()));
+    let to = chrono::Utc::now().to_rfc3339();
+
+    let summary = run_find(&pool, &config, &runner, &web, &since, &to, dry_run).await?;
+    print_summary(&summary, dry_run);
+    Ok(())
+}
+
+async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
+    let Some(creds) = gilb_config::load_credentials()? else {
+        eprintln!("not enterprise-configured (no credentials); `run` needs Tier-2");
+        return Ok(());
+    };
+    let pool = open_db(db).await?;
+    let runner = runner_from_env();
+    let web = Web::new(&creds.gilb_web_url, &creds.token);
+
+    loop {
+        // Refresh config every tick (cheap conditional GET).
+        let config = match ensure_config(&creds).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("config fetch failed, stopping: {e:#}");
+                return Err(e);
+            }
+        };
+        let interval = config.interval_secs();
+        let to = chrono::Utc::now().to_rfc3339();
+        let from = default_since(interval);
+
+        match run_find(&pool, &config, &runner, &web, &from, &to, false).await {
+            Ok(summary) => tracing::info!(
+                "tick: outcome={:?} created={} deduped={} failed={}",
+                summary.run.outcome,
+                summary.run.therbligs_created.len(),
+                summary.run.therbligs_deduped,
+                summary.run.therbligs_failed,
+            ),
+            Err(e) => tracing::error!("tick failed: {e:#}"),
+        }
+
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(interval)) => {}
+            _ = tokio::signal::ctrl_c() => {
+                tracing::info!("interrupted; stopping");
+                return Ok(());
+            }
+        }
+    }
+}
+
+fn print_summary(summary: &FindSummary, dry_run: bool) {
+    let run = &summary.run;
+    if dry_run {
+        // No network was touched; show what would be pushed.
+        match serde_json::to_string_pretty(&summary.new_therbligs) {
+            Ok(json) => println!("{json}"),
+            Err(e) => eprintln!("failed to render therbligs: {e}"),
+        }
+        eprintln!(
+            "[dry-run] outcome={:?} would_push={} deduped={} input_tokens={}",
+            run.outcome,
+            summary.new_therbligs.len(),
+            run.therbligs_deduped,
+            run.usage.input_tokens,
+        );
+    } else {
+        eprintln!(
+            "outcome={:?} created={} deduped={} failed={} input_tokens={} cost_usd={:?}",
+            run.outcome,
+            run.therbligs_created.len(),
+            run.therbligs_deduped,
+            run.therbligs_failed,
+            run.usage.input_tokens,
+            run.total_cost_usd,
+        );
+    }
 }

@@ -13,6 +13,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::json;
 
+use crate::run::RunRecord;
 use crate::therblig::Therblig;
 
 /// Minimal view of an already-pushed Therblig, for dedup.
@@ -155,6 +156,25 @@ impl Web {
                 Ok(PostOutcome::Failed { status: code, body })
             }
         }
+    }
+
+    /// POST one run-accounting record (`{"run": …}`). Lower-stakes than Therblig
+    /// push — the caller logs on failure rather than aborting.
+    pub async fn post_run(&self, run: &RunRecord) -> Result<()> {
+        let url = self.url("/api/v1/analyzer/runs");
+        let resp = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(&json!({ "run": run }))
+            .send()
+            .await
+            .with_context(|| format!("POST {url} failed"))?;
+        let status = resp.status();
+        if !status.is_success() {
+            anyhow::bail!("POST {url} returned HTTP {status}");
+        }
+        Ok(())
     }
 }
 

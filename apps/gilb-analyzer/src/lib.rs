@@ -5,8 +5,11 @@
 
 pub mod claude;
 pub mod config;
+pub mod db;
 pub mod pii;
+pub mod pipeline;
 pub mod redact;
+pub mod run;
 pub mod slice;
 pub mod therblig;
 pub mod web;
