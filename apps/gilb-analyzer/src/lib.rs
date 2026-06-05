@@ -3,6 +3,7 @@
 //! `docs/redaction-spec.md`). The slice is the only thing that leaves the
 //! machine; raw activity never does.
 
+pub mod claude;
 pub mod config;
 pub mod pii;
 pub mod redact;
