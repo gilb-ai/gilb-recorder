@@ -17,12 +17,17 @@
 //! mapping ([`plan_action`]) and app selection ([`pick_app`]) are pure so they
 //! unit-test without a detector, recorder, or windows.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use gilb_db::{meetings::insert_meeting, Db};
+use gilb_config::RecordingSettings;
+use gilb_db::{
+    meetings::{get_meeting, insert_meeting},
+    Db,
+};
 use gilb_events::EventBus;
 use gilb_meeting::{MeetingApp, MeetingDetector, MeetingEvent};
 use gilb_record::{spawn_recorder, RecordingOutcome};
+use gilb_transcribe::{transcribe_meeting, OpenAiTranscriber};
 use tauri::AppHandle;
 use tracing::{debug, error, warn};
 
@@ -118,6 +123,7 @@ pub fn spawn_meeting_pipeline(app: AppHandle, bus: EventBus, db: Db, data_dir: P
                         if let Err(err) = recorder.stop(RecordingOutcome::Completed).await {
                             warn!(meeting_id = id, error = %err, "failed to stop recorder");
                         }
+                        maybe_spawn_transcription(&db, id).await;
                     }
                 }
                 MeetingAction::Ignore => debug!(?event, "meeting event ignored"),
@@ -127,6 +133,48 @@ pub fn spawn_meeting_pipeline(app: AppHandle, bus: EventBus, db: Db, data_dir: P
         // Keep the detector alive for the life of the loop; dropping it stops
         // the platform worker.
         drop(detector);
+    });
+}
+
+/// After a meeting finalizes, kick off batch transcription on a detached task —
+/// best-effort and only when a BYOK OpenAI key is configured
+/// (`OPENAI_API_KEY`). A no-op when no key is set or the meeting has no audio
+/// path. Never blocks the bridge or panics; the outcome (transcript or error)
+/// is persisted to `meeting_transcripts` by [`transcribe_meeting`].
+async fn maybe_spawn_transcription(db: &Db, meeting_id: i64) {
+    let Some(api_key) = RecordingSettings::from_env().openai_api_key else {
+        return;
+    };
+    let audio_path = match get_meeting(db, meeting_id).await {
+        Ok(Some(m)) => m.audio_path,
+        Ok(None) => None,
+        Err(err) => {
+            warn!(meeting_id, error = %err, "failed to load meeting for transcription");
+            return;
+        }
+    };
+    let Some(audio_path) = audio_path else {
+        debug!(
+            meeting_id,
+            "meeting has no audio path; skipping transcription"
+        );
+        return;
+    };
+
+    let db = db.clone();
+    tauri::async_runtime::spawn(async move {
+        let transcriber = OpenAiTranscriber::new();
+        if let Err(err) = transcribe_meeting(
+            &db,
+            &api_key,
+            meeting_id,
+            Path::new(&audio_path),
+            &transcriber,
+        )
+        .await
+        {
+            warn!(meeting_id, error = %err, "failed to persist transcription outcome");
+        }
     });
 }
 

@@ -1970,6 +1970,7 @@ dependencies = [
  "gilb-events",
  "gilb-meeting",
  "gilb-record",
+ "gilb-transcribe",
  "parking_lot",
  "serde",
  "serde_json",
