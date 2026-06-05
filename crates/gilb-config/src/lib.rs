@@ -28,7 +28,13 @@ pub struct RecordingSettings {
     pub capture_clipboard: bool,
     /// Persist tree snapshots. Default: enabled.
     pub capture_tree_snapshots: bool,
+    /// Seconds the pre-record countdown popup fills before auto-arming.
+    /// Default: 5.
+    pub countdown_seconds: u32,
 }
+
+/// Default fill duration for the pre-record countdown popup, in seconds.
+pub const DEFAULT_COUNTDOWN_SECONDS: u32 = 5;
 
 impl Default for RecordingSettings {
     fn default() -> Self {
@@ -37,6 +43,7 @@ impl Default for RecordingSettings {
             capture_mouse_move: false,
             capture_clipboard: true,
             capture_tree_snapshots: true,
+            countdown_seconds: DEFAULT_COUNTDOWN_SECONDS,
         }
     }
 }
@@ -56,6 +63,12 @@ impl RecordingSettings {
         }
         if let Some(v) = env_bool("CAPTURE_TREE_SNAPSHOTS") {
             s.capture_tree_snapshots = v;
+        }
+        if let Some(v) = std::env::var("GILB_COUNTDOWN_SECONDS")
+            .ok()
+            .and_then(|raw| raw.parse::<u32>().ok())
+        {
+            s.countdown_seconds = v;
         }
         s
     }
@@ -182,5 +195,27 @@ pub fn clear_credentials() -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn countdown_seconds_defaults_to_five() {
+        assert_eq!(
+            RecordingSettings::default().countdown_seconds,
+            DEFAULT_COUNTDOWN_SECONDS
+        );
+        assert_eq!(DEFAULT_COUNTDOWN_SECONDS, 5);
+    }
+
+    #[test]
+    fn countdown_seconds_env_override_parses() {
+        std::env::set_var("GILB_COUNTDOWN_SECONDS", "12");
+        let s = RecordingSettings::from_env();
+        std::env::remove_var("GILB_COUNTDOWN_SECONDS");
+        assert_eq!(s.countdown_seconds, 12);
     }
 }
