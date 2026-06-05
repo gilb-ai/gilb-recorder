@@ -1,0 +1,31 @@
+[package]
+name = "gilb-record"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gilb-events = { workspace = true }
+gilb-db = { workspace = true }
+gilb-config = { workspace = true }
+
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+hound = "3"
+
+# macOS capture stack: ScreenCaptureKit video -> AVAssetWriter HEVC, SCStream
+# system audio + cpal mic -> mixed WAV. Compiled only on macOS; the non-macOS
+# build uses the no-op capturer.
+[target.'cfg(target_os = "macos")'.dependencies]
+screencapturekit = "0.3"
+cpal = "0.15"
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+core-foundation = "0.10"
+
+[dev-dependencies]
+uuid = { workspace = true }
+tokio = { workspace = true }
