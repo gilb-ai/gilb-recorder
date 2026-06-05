@@ -352,6 +352,112 @@ body.countdown-window {
   .countdown-cancel:active:not(:disabled) { background: #353945; }
 }
 
+/* Settings window — a standard decorated second window. One presentational
+   row (label + description + a switch-style toggle). The toggle reuses the
+   app's blue accent; settings.ts flips aria-checked, CSS does the rest. */
+body.settings-window {
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.settings {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  padding: 24px 28px;
+}
+
+.settings-title {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -0.01em;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 16px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+}
+
+.settings-row-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  gap: 3px;
+}
+
+.settings-row-label {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.settings-row-desc {
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.45;
+}
+
+/* Switch-style toggle. Track recolors to the accent when on; the knob slides.
+   Five states are covered below: default, hover, focus, active, disabled. */
+.toggle {
+  appearance: none;
+  flex: 0 0 auto;
+  position: relative;
+  width: 44px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid #cbd0d8;
+  border-radius: 999px;
+  background: #d1d5db;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.toggle:hover:not(:disabled) { background: #c2c7cf; }
+.toggle:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.toggle:active:not(:disabled) { background: #b6bcc6; }
+.toggle:disabled { opacity: 0.5; cursor: default; }
+
+.toggle[aria-checked="true"] {
+  background: #2563eb;
+  border-color: #1d4ed8;
+}
+.toggle[aria-checked="true"]:hover:not(:disabled) { background: #1d4ed8; }
+.toggle[aria-checked="true"]:active:not(:disabled) { background: #1e40af; }
+
+.toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: white;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.25);
+  transition: transform 0.15s ease;
+}
+.toggle[aria-checked="true"] .toggle-knob { transform: translateX(18px); }
+
+@media (prefers-color-scheme: dark) {
+  .settings-row { background: #1a1c24; border-color: #2f3340; }
+  .settings-row-desc { color: #9ca3af; }
+  .toggle { background: #2f3340; border-color: #3a3f4d; }
+  .toggle:hover:not(:disabled) { background: #383d4a; }
+  .toggle:active:not(:disabled) { background: #424857; }
+  .toggle[aria-checked="true"] { background: #1d4ed8; border-color: #1e40af; }
+  .toggle[aria-checked="true"]:hover:not(:disabled) { background: #1e40af; }
+  .toggle[aria-checked="true"]:active:not(:disabled) { background: #1e3a8a; }
+  .toggle-knob { background: #e5e7eb; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5); }
+}
+
 @media (prefers-color-scheme: dark) {
   :root { color: #f5f5f7; background: #0f1117; }
   body { background: #0f1117; }
