@@ -73,6 +73,8 @@ pub fn run() {
             commands::capture::stop_capture,
             commands::capture::status,
             commands::privacy::open_privacy_pane,
+            commands::countdown::show_countdown,
+            commands::countdown::resolve_countdown,
             commands::auth::start_login,
             commands::auth::auth_status,
             commands::auth::sign_out,

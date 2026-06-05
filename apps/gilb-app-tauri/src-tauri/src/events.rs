@@ -3,6 +3,7 @@
 //!
 //! - `permission` — `BusMessage<PermissionEvent>`
 //! - `health`     — `BusMessage<HealthEvent>`
+//! - `recording`  — `BusMessage<RecordingEvent>`
 //!
 //! Tasks live until the broadcast sender is dropped (i.e. process exit).
 
@@ -17,13 +18,15 @@ use tracing::warn;
 
 const PERMISSION_EVENT: &str = "permission";
 const HEALTH_EVENT: &str = "health";
+const RECORDING_EVENT: &str = "recording";
 
-/// Subscribe to permission + health channels on the engine's event bus and
-/// forward each message to the webview. Spawned tasks own the receivers.
+/// Subscribe to permission + health + recording channels on the engine's event
+/// bus and forward each message to the webview. Spawned tasks own the receivers.
 pub fn spawn_proxies(app: AppHandle, engine: Arc<Engine>) {
     let bus = engine.event_bus().clone();
     spawn_proxy_permission(app.clone(), &bus);
-    spawn_proxy_health(app, &bus);
+    spawn_proxy_health(app.clone(), &bus);
+    spawn_proxy_recording(app, &bus);
 }
 
 fn spawn_proxy_permission(app: AppHandle, bus: &EventBus) {
@@ -49,6 +52,21 @@ fn spawn_proxy_health(app: AppHandle, bus: &EventBus) {
                 Ok(msg) => emit(&app, HEALTH_EVENT, &msg),
                 Err(RecvError::Lagged(n)) => {
                     warn!(skipped = n, "health proxy lagged");
+                }
+                Err(RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+fn spawn_proxy_recording(app: AppHandle, bus: &EventBus) {
+    let mut rx = bus.subscribe_recording();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(msg) => emit(&app, RECORDING_EVENT, &msg),
+                Err(RecvError::Lagged(n)) => {
+                    warn!(skipped = n, "recording proxy lagged");
                 }
                 Err(RecvError::Closed) => break,
             }

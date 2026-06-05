@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "countdown",
+  "description": "Capability for the borderless pre-record countdown popup (label 'countdown'). App-defined commands (show_countdown, resolve_countdown) are auto-allowed for local origins because no app ACL manifest is declared; this capability only grants the listen/unlisten the webview needs for the 'recording' event.",
+  "windows": ["countdown"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten"
+  ]
+}
