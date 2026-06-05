@@ -1950,6 +1950,7 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "directories",
  "gilb-a11y",
  "gilb-config",
@@ -1957,6 +1958,8 @@ dependencies = [
  "gilb-db",
  "gilb-engine",
  "gilb-events",
+ "gilb-meeting",
+ "gilb-record",
  "parking_lot",
  "serde",
  "serde_json",

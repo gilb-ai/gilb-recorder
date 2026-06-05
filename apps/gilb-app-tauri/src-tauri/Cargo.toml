@@ -40,6 +40,12 @@ gilb-events = { workspace = true }
 gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
+gilb-meeting = { workspace = true }
+gilb-record = { workspace = true }
+
+[dev-dependencies]
+# Construct MeetingEvent timestamps in the meeting-bridge mapping tests.
+chrono = { workspace = true }
 
 # Desktop-only plugins. The updater builds on desktop OSes; single-instance
 # (with the deep-link feature) routes a `gilb://` link to the running instance

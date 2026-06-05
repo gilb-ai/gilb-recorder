@@ -89,6 +89,8 @@ gilb-a11y = { path = "crates/gilb-a11y" }
 gilb-db = { path = "crates/gilb-db" }
 gilb-engine = { path = "crates/gilb-engine" }
 gilb-helper = { path = "crates/gilb-helper" }
+gilb-meeting = { path = "crates/gilb-meeting" }
+gilb-record = { path = "crates/gilb-record" }
 
 [profile.release]
 codegen-units = 1

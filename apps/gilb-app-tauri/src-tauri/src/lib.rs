@@ -3,6 +3,7 @@
 mod commands;
 mod events;
 mod logging;
+mod meeting;
 mod state;
 
 use tauri::Manager;
@@ -44,7 +45,20 @@ pub fn run() {
         .setup(|app| match state::build_app_state() {
             Ok(s) => {
                 events::spawn_proxies(app.handle().clone(), s.engine.clone());
+
+                // Start the meeting flow: detector + recorder + countdown
+                // bridge. Pull the bus/db off the engine before `manage` moves
+                // the state in. The detector is the live macOS path; elsewhere
+                // it's a no-op stand-in (see `meeting`).
+                let bus = s.engine.event_bus().clone();
+                let db = s.engine.db().clone();
                 app.manage(s);
+                match gilb_config::data_dir() {
+                    Ok(data_dir) => {
+                        meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)
+                    }
+                    Err(err) => error!(?err, "data_dir failed; meeting pipeline not started"),
+                }
 
                 // Deep-link auth callbacks (gilb://auth/callback?token=…).
                 use tauri_plugin_deep_link::DeepLinkExt;
