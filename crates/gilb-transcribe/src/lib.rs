@@ -19,10 +19,49 @@ use tracing::{info, warn};
 
 /// OpenAI audio transcription endpoint.
 const OPENAI_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
+/// OpenAI models endpoint — a cheap authenticated GET used to validate a key.
+const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
 /// Whisper model used for transcription.
 pub const MODEL: &str = "whisper-1";
 /// Total attempts before giving up (one initial try + retries).
 const MAX_ATTEMPTS: usize = 3;
+
+/// Outcome of validating a BYOK OpenAI key against the API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyValidity {
+    /// The key authenticated successfully (HTTP 200).
+    Valid,
+    /// The key was rejected (HTTP 401/403).
+    Invalid,
+    /// The server answered but neither accepted nor rejected the key (rate
+    /// limit, 5xx, …) — inconclusive, worth retrying later.
+    Unknown,
+}
+
+/// Pure mapping from an HTTP status to a [`KeyValidity`]: 200 ⇒ valid,
+/// 401/403 ⇒ invalid, anything else ⇒ unknown. Unit-tested without network.
+pub fn key_validity_from_status(status: reqwest::StatusCode) -> KeyValidity {
+    use reqwest::StatusCode;
+    match status {
+        StatusCode::OK => KeyValidity::Valid,
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => KeyValidity::Invalid,
+        _ => KeyValidity::Unknown,
+    }
+}
+
+/// Validate a BYOK OpenAI key with a GET to the models endpoint, classifying the
+/// response via [`key_validity_from_status`]. Returns `Err` only on a transport
+/// failure (no response). Makes a real network request — exercised manually, not
+/// in CI; the status→validity mapping it delegates to is the CI-tested part.
+pub async fn validate_api_key(key: &str) -> Result<KeyValidity> {
+    let resp = reqwest::Client::new()
+        .get(OPENAI_MODELS_URL)
+        .bearer_auth(key)
+        .send()
+        .await
+        .context("send key validation request")?;
+    Ok(key_validity_from_status(resp.status()))
+}
 
 /// A successful transcription, split into the fields persisted by
 /// [`upsert_transcript`]: the flat `text` and the `segments` array of

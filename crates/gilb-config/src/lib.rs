@@ -3,7 +3,7 @@
 //! v0 is intentionally tiny: paths + a few capture toggles. Per-app exclusion
 //! lists land in Phase 4.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -12,6 +12,7 @@ const DEFAULT_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
+const OPENAI_KEY_FILE_NAME: &str = "openai.json";
 
 /// Default cadence for the analyzer's incremental upload when the server
 /// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
@@ -209,6 +210,105 @@ pub fn clear_credentials() -> Result<()> {
     }
 }
 
+/// On-disk shape of `$HOME/.gilb/openai.json` — the persisted BYOK OpenAI key.
+/// Deliberately separate from [`Credentials`]; it holds only the key so the two
+/// stores stay independent.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct OpenAiKeyFile {
+    openai_api_key: String,
+}
+
+/// Resolve `$HOME/.gilb/openai.json` — the BYOK OpenAI key store.
+pub fn openai_key_path() -> Result<PathBuf> {
+    Ok(data_dir()?.join(OPENAI_KEY_FILE_NAME))
+}
+
+/// Load the persisted OpenAI key from `path`. Returns `Ok(None)` when the file
+/// is absent, `Err` only on a present but unreadable/malformed file. Path-taking
+/// so tests exercise it on a tempfile without touching `$HOME`.
+pub fn load_openai_key_from(path: &Path) -> Result<Option<String>> {
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
+    };
+    let file: OpenAiKeyFile = serde_json::from_slice(&bytes)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(Some(file.openai_api_key))
+}
+
+/// Write `key` to `path` as `{"openai_api_key": "..."}`, creating the parent
+/// directory if needed. The file holds a secret, so it is written `0600` on
+/// unix (mirrors [`save_credentials`]). Path-taking for testability.
+pub fn save_openai_key_to(path: &Path, key: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let file = OpenAiKeyFile {
+        openai_api_key: key.to_string(),
+    };
+    let json = serde_json::to_vec_pretty(&file).context("failed to serialize openai key")?;
+    std::fs::write(path, &json).with_context(|| format!("failed to write {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .with_context(|| format!("failed to chmod 600 {}", path.display()))?;
+    }
+    Ok(())
+}
+
+/// Load `$HOME/.gilb/openai.json`. See [`load_openai_key_from`].
+pub fn load_openai_key() -> Result<Option<String>> {
+    load_openai_key_from(&openai_key_path()?)
+}
+
+/// Persist the BYOK OpenAI key to `$HOME/.gilb/openai.json`. See
+/// [`save_openai_key_to`].
+pub fn save_openai_key(key: &str) -> Result<()> {
+    save_openai_key_to(&openai_key_path()?, key)
+}
+
+/// Remove `$HOME/.gilb/openai.json`. A no-op (Ok) if the file is already absent
+/// — used when the user clears the key field.
+pub fn clear_openai_key() -> Result<()> {
+    let path = openai_key_path()?;
+    match std::fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
+    }
+}
+
+/// Decide what `OPENAI_API_KEY` should hold, given the persisted key and whether
+/// the env var is already present. The environment wins — an explicitly exported
+/// `OPENAI_API_KEY` is never overridden — so this yields the persisted key only
+/// when the env is absent. Pure; [`hydrate_openai_key_env`] applies it.
+pub fn resolve_hydration(persisted: Option<String>, env_present: bool) -> Option<String> {
+    if env_present {
+        None
+    } else {
+        persisted
+    }
+}
+
+/// Best-effort: load the persisted BYOK key and, unless `OPENAI_API_KEY` is
+/// already set, export it into the process env so [`RecordingSettings::from_env`]
+/// (and thus the meeting transcription trigger) picks it up without any change to
+/// the transcription module. Returns `Err` only if the key file is present but
+/// unreadable; an absent file is `Ok`.
+pub fn hydrate_openai_key_env() -> Result<()> {
+    let env_present = std::env::var_os("OPENAI_API_KEY")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false);
+    let persisted = load_openai_key()?;
+    if let Some(key) = resolve_hydration(persisted, env_present) {
+        std::env::set_var("OPENAI_API_KEY", key);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +328,51 @@ mod tests {
         let s = RecordingSettings::from_env();
         std::env::remove_var("GILB_COUNTDOWN_SECONDS");
         assert_eq!(s.countdown_seconds, 12);
+    }
+
+    #[test]
+    fn openai_key_save_load_clear_round_trip() {
+        // Use the path-taking fns on a tempfile — never touches `$HOME`/env.
+        let mut path = std::env::temp_dir();
+        path.push(format!("gilb-openai-test-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        assert!(load_openai_key_from(&path).unwrap().is_none());
+
+        save_openai_key_to(&path, "sk-test-123").unwrap();
+        assert_eq!(
+            load_openai_key_from(&path).unwrap().as_deref(),
+            Some("sk-test-123")
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "secret file must be 0600");
+        }
+
+        clear_openai_key_at(&path);
+        assert!(load_openai_key_from(&path).unwrap().is_none());
+    }
+
+    // `clear_openai_key` is `$HOME`-anchored; in the round-trip test we remove
+    // the tempfile directly to keep the test hermetic.
+    fn clear_openai_key_at(path: &std::path::Path) {
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn resolve_hydration_env_wins() {
+        // Env present ⇒ never override, even with a persisted key.
+        assert_eq!(resolve_hydration(Some("sk-file".into()), true), None);
+        // No env, persisted present ⇒ use the persisted key.
+        assert_eq!(
+            resolve_hydration(Some("sk-file".into()), false),
+            Some("sk-file".into())
+        );
+        // Nothing persisted ⇒ nothing to set, regardless of env.
+        assert_eq!(resolve_hydration(None, false), None);
+        assert_eq!(resolve_hydration(None, true), None);
     }
 }

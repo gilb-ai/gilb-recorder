@@ -446,9 +446,98 @@ body.settings-window {
 }
 .toggle[aria-checked="true"] .toggle-knob { transform: translateX(18px); }
 
+/* OpenAI API-key row — stacks the label, a password input, the Save/Test
+   actions, and a status line. Reuses the app's blue accent + gray palette and
+   the existing font; no new tokens. All interactive states covered below. */
+.settings-row-stacked {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.key-input {
+  width: 100%;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: #1f2330;
+  background: white;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.key-input::placeholder { color: #9ca3af; }
+.key-input:hover:not(:disabled) { border-color: #c2c7cf; }
+.key-input:focus-visible {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+.key-input:disabled { opacity: 0.5; cursor: default; }
+
+.key-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.key-btn {
+  appearance: none;
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #1f2330;
+  padding: 7px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.key-btn:hover:not(:disabled) { background: #f3f4f6; }
+.key-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.key-btn:active:not(:disabled) { background: #e5e7eb; }
+.key-btn:disabled { opacity: 0.5; cursor: default; }
+
+.key-btn-primary {
+  background: #2563eb;
+  color: white;
+  border-color: #1d4ed8;
+}
+.key-btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+.key-btn-primary:active:not(:disabled) { background: #1e40af; }
+
+.key-status {
+  min-height: 16px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #6b7280;
+}
+.key-status[data-kind="ok"] { color: #15803d; }
+.key-status[data-kind="warn"] { color: #b45309; }
+.key-status[data-kind="error"] { color: #b91c1c; }
+
 @media (prefers-color-scheme: dark) {
   .settings-row { background: #1a1c24; border-color: #2f3340; }
   .settings-row-desc { color: #9ca3af; }
+  .key-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
+  .key-input::placeholder { color: #6b7280; }
+  .key-input:hover:not(:disabled) { border-color: #3a3f4d; }
+  .key-input:focus-visible {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.28);
+  }
+  .key-btn { background: #232631; color: #f5f5f7; border-color: #2f3340; }
+  .key-btn:hover:not(:disabled) { background: #2c2f3a; }
+  .key-btn:active:not(:disabled) { background: #353945; }
+  .key-btn-primary { background: #1d4ed8; color: white; border-color: #1e40af; }
+  .key-btn-primary:hover:not(:disabled) { background: #1e40af; }
+  .key-btn-primary:active:not(:disabled) { background: #1e3a8a; }
+  .key-status { color: #9ca3af; }
+  .key-status[data-kind="ok"] { color: #4ade80; }
+  .key-status[data-kind="warn"] { color: #fbbf24; }
+  .key-status[data-kind="error"] { color: #f87171; }
   .toggle { background: #2f3340; border-color: #3a3f4d; }
   .toggle:hover:not(:disabled) { background: #383d4a; }
   .toggle:active:not(:disabled) { background: #424857; }
