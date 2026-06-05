@@ -1,5 +1,9 @@
-//! Recording lifecycle: start/stop/status. Each command resolves an
-//! `AppState` reference and forwards to `gilb-engine`.
+//! Activity-tracking lifecycle: start/stop/status + the persisted pause flag.
+//!
+//! `start_capture`/`stop_capture` drive the always-on a11y engine (subsystem A
+//! in `docs/ui-design.md`); the UI presents them as Resume/Pause. The pause flag
+//! is persisted so a deliberate pause survives restarts (the UI reads it on
+//! launch to decide whether to auto-resume).
 
 use gilb_config::RecordingSettings;
 use gilb_engine::EngineStatus;
@@ -28,4 +32,20 @@ pub async fn stop_capture(state: tauri::State<'_, AppState>) -> Result<(), Strin
 #[tauri::command]
 pub async fn status(state: tauri::State<'_, AppState>) -> Result<EngineStatus, String> {
     state.engine.status().await.map_err(|e| e.to_string())
+}
+
+/// Whether the user has paused activity tracking (persisted). The UI reads this
+/// on launch to decide whether to auto-resume capture.
+#[tauri::command]
+pub async fn get_tracking_paused() -> bool {
+    gilb_config::load_preferences().tracking_paused
+}
+
+/// Persist the paused flag. Called alongside `stop_capture` (pause) and
+/// `start_capture` (resume) so the choice survives restarts.
+#[tauri::command]
+pub async fn set_tracking_paused(paused: bool) -> Result<(), String> {
+    let mut prefs = gilb_config::load_preferences();
+    prefs.tracking_paused = paused;
+    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())
 }

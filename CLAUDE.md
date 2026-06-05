@@ -23,6 +23,10 @@ implemented:
   Rust dialog/error text, `Info.plist` usage descriptions, READMEs.
 - **CLAUDE.md and any other docs read by an agent as instructions:
   English.**
+- **UI/UX: follow `docs/ui-design.md`.** Single main window with in-app
+  modal overlays (not popup windows) for app screens, explicit
+  Save/Cancel, the green=active / red=stop color language, etc. Read it
+  before adding or changing any frontend UI.
 
 ## Commands
 

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "stop-countdown",
+  "description": "Capability for the borderless stop-countdown popup (label 'stop-countdown'). The app-defined resolve_stop_countdown command is auto-allowed for local origins because no app ACL manifest is declared; this window only invokes that command and needs no extra IPC permissions.",
+  "windows": ["stop-countdown"],
+  "permissions": []
+}

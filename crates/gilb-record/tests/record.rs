@@ -12,8 +12,8 @@ use anyhow::Result;
 use gilb_db::{meetings, open_db, Db};
 use gilb_events::{EventBus, RecordingEvent};
 use gilb_record::{
-    meeting_paths, mix_to_mono_16k, write_wav_16k_mono, NoopCapturer, Recorder, RecordingOutcome,
-    ScreenAudioCapturer, TARGET_SAMPLE_RATE,
+    meeting_paths, mix_to_mono_16k, scale_bgra, write_wav_16k_mono, NoopCapturer, Recorder,
+    RecordingOutcome, ScreenAudioCapturer, TARGET_SAMPLE_RATE,
 };
 use uuid::Uuid;
 
@@ -34,9 +34,15 @@ async fn temp_db(dir: &Path) -> Db {
 
 #[test]
 fn meeting_paths_layout() {
-    let (video, audio) = meeting_paths(Path::new("/data"), 7);
-    assert_eq!(video, PathBuf::from("/data/meetings/7.mp4"));
-    assert_eq!(audio, PathBuf::from("/data/meetings/7.audio.wav"));
+    let (video, audio) = meeting_paths(Path::new("/data"), "2026-06-05_16-57-03");
+    assert_eq!(
+        video,
+        PathBuf::from("/data/meetings/2026-06-05_16-57-03/video.mp4")
+    );
+    assert_eq!(
+        audio,
+        PathBuf::from("/data/meetings/2026-06-05_16-57-03/audio.wav")
+    );
 }
 
 #[test]
@@ -92,6 +98,39 @@ fn wav_roundtrips_through_hound() {
     cleanup(&dir);
 }
 
+#[test]
+fn scale_bgra_identity_is_a_copy() {
+    // 2x2 BGRA, same dst size → byte-for-byte copy.
+    let src = vec![0, 0, 0, 255, 100, 0, 0, 255, 200, 0, 0, 255, 40, 0, 0, 255];
+    assert_eq!(scale_bgra(&src, 2, 2, 2, 2), src);
+}
+
+#[test]
+fn scale_bgra_downscale_2x2_to_1x1_blends_all_four() {
+    // Centre sample of a 2x2 → 1x1 is the bilinear blend of the four pixels.
+    // B channel: 0,100,200,40 → top=50, bot=120, mid=85. Alpha all 255.
+    let src = vec![0, 0, 0, 255, 100, 0, 0, 255, 200, 0, 0, 255, 40, 0, 0, 255];
+    assert_eq!(scale_bgra(&src, 2, 2, 1, 1), vec![85, 0, 0, 255]);
+}
+
+#[test]
+fn scale_bgra_upscale_1x1_fills_with_source_pixel() {
+    let src = vec![10, 20, 30, 40];
+    let out = scale_bgra(&src, 1, 1, 2, 2);
+    assert_eq!(
+        out,
+        vec![10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40]
+    );
+}
+
+#[test]
+fn scale_bgra_degenerate_inputs_are_zeroed() {
+    // Too-short source → zeroed output of the destination size.
+    assert_eq!(scale_bgra(&[], 2, 2, 2, 2), vec![0u8; 16]);
+    // Zero destination → empty.
+    assert!(scale_bgra(&[1, 2, 3, 4], 1, 1, 0, 0).is_empty());
+}
+
 /// Capturer that counts start/stop calls and remembers the last paths.
 #[derive(Default)]
 struct CountingCapturer {
@@ -100,7 +139,7 @@ struct CountingCapturer {
 }
 
 impl ScreenAudioCapturer for CountingCapturer {
-    fn start(&self, _video: &Path, _audio: &Path) -> Result<()> {
+    fn start(&self, _video: &Path, _audio: &Path, _app_bundle_id: Option<&str>) -> Result<()> {
         self.starts.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
@@ -121,19 +160,19 @@ async fn arm_sets_paths_then_stop_completes() {
     let recorder = Recorder::new(db.clone(), dir.clone(), CountingCapturer::default());
     recorder.arm(id).await.expect("arm");
 
-    let (video, audio) = meeting_paths(&dir, id);
     let m = meetings::get_meeting(&db, id)
         .await
         .expect("get")
         .expect("present");
-    assert_eq!(
-        m.video_path.as_deref(),
-        Some(video.to_string_lossy().as_ref())
-    );
-    assert_eq!(
-        m.audio_path.as_deref(),
-        Some(audio.to_string_lossy().as_ref())
-    );
+    // The names are time-stamped (set inside `arm`), so assert structure rather
+    // than an exact path: both live under `<dir>/meetings/` with the right ext.
+    let meetings_dir = dir.join("meetings");
+    let video = m.video_path.as_deref().expect("video path set");
+    let audio = m.audio_path.as_deref().expect("audio path set");
+    assert!(video.ends_with(".mp4"), "video should be .mp4: {video}");
+    assert!(audio.ends_with(".wav"), "audio should be .wav: {audio}");
+    assert!(Path::new(video).starts_with(&meetings_dir));
+    assert!(Path::new(audio).starts_with(&meetings_dir));
     assert_eq!(m.status, "recording");
 
     recorder

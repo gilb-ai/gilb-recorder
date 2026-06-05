@@ -21,9 +21,39 @@ hound = "3"
 # build uses the no-op capturer.
 [target.'cfg(target_os = "macos")'.dependencies]
 screencapturekit = "0.3"
+# Re-exported sample-buffer type used by screencapturekit's output trait; the
+# crate hands us `core_media_rs::CMSampleBuffer` values, so we depend on it
+# directly to name them and pull system-audio PCM out of the buffer list.
+core-media-rs = "0.3"
 cpal = "0.15"
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", features = [
+    "NSString",
+    "NSURL",
+    "NSDictionary",
+    "NSValue",
+    "NSError",
+] }
+objc2-av-foundation = { version = "0.3", features = [
+    "AVAssetWriter",
+    "AVAssetWriterInput",
+    "AVMediaFormat",
+    "AVVideoSettings",
+    "AVAsset",
+    "AVAssetTrack",
+    "AVComposition",
+    "AVCompositionTrack",
+    "AVAssetExportSession",
+    "objc2-core-media",
+    "block2",
+] }
+objc2-core-media = { version = "0.3", features = [
+    "CMBase",
+    "CMSampleBuffer",
+    "CMTime",
+    "CMTimeRange",
+] }
+block2 = "0.6"
 core-foundation = "0.10"
 
 # Windows capture stack: Windows.Graphics.Capture screen -> Media Foundation
@@ -31,6 +61,9 @@ core-foundation = "0.10"
 # Compiled only on Windows; pins match gilb-meeting's WASAPI detector. The
 # non-Windows build uses the no-op capturer. (GILB-46)
 [target.'cfg(target_os = "windows")'.dependencies]
+# `gilb-meeting` only for the allowlist's bundle_id -> process-name map,
+# used to resolve the call app's window (parity with macOS window capture).
+gilb-meeting = { workspace = true }
 windows-core = "0.58"
 windows = { version = "0.58", features = [
     "Foundation",
@@ -40,6 +73,7 @@ windows = { version = "0.58", features = [
     "Graphics_DirectX_Direct3D11",
     "Win32_Foundation",
     "Win32_System_Com",
+    "Win32_System_Threading",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
@@ -50,6 +84,7 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Gdi",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 
 [dev-dependencies]
