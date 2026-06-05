@@ -31,6 +31,10 @@ pub struct RecordingSettings {
     /// Seconds the pre-record countdown popup fills before auto-arming.
     /// Default: 5.
     pub countdown_seconds: u32,
+    /// OpenAI API key for batch meeting transcription (BYOK). Read from
+    /// `OPENAI_API_KEY`; `None` disables transcription.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub openai_api_key: Option<String>,
 }
 
 /// Default fill duration for the pre-record countdown popup, in seconds.
@@ -44,6 +48,7 @@ impl Default for RecordingSettings {
             capture_clipboard: true,
             capture_tree_snapshots: true,
             countdown_seconds: DEFAULT_COUNTDOWN_SECONDS,
+            openai_api_key: None,
         }
     }
 }
@@ -69,6 +74,12 @@ impl RecordingSettings {
             .and_then(|raw| raw.parse::<u32>().ok())
         {
             s.countdown_seconds = v;
+        }
+        if let Some(v) = std::env::var("OPENAI_API_KEY")
+            .ok()
+            .filter(|raw| !raw.is_empty())
+        {
+            s.openai_api_key = Some(v);
         }
         s
     }

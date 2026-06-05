@@ -1,0 +1,23 @@
+[package]
+name = "gilb-transcribe"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+gilb-db = { workspace = true }
+gilb-config = { workspace = true }
+
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+# Dyn-dispatched async trait (`&dyn Transcriber`) so the OpenAI HTTP path is
+# swappable for a mock in tests.
+async-trait = "0.1"
+
+[dev-dependencies]
+uuid = { workspace = true }

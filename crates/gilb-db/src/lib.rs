@@ -12,6 +12,7 @@
 pub mod actions;
 pub mod meetings;
 pub mod sessions;
+pub mod transcripts;
 pub mod tree_snapshots;
 
 use anyhow::{Context, Result};
