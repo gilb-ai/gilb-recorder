@@ -244,6 +244,114 @@ button:disabled {
   line-height: 1.5;
 }
 
+/* Pre-record countdown popup — a borderless second window. The Record button
+   doubles as a progress bar: a translucent fill sweeps across the accent over
+   `--seconds`, so white label text stays readable from 0% to 100%. */
+body.countdown-window {
+  padding: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.countdown {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
+.countdown-lead {
+  margin: 0;
+  font-size: 13px;
+  color: #6b7280;
+}
+
+.countdown-app {
+  margin: 0 0 6px;
+  font-size: 22px;
+  letter-spacing: -0.01em;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.countdown-record {
+  position: relative;
+  overflow: hidden;
+  width: 100%;
+  max-width: 280px;
+  padding: 14px 16px;
+  border: 1px solid #1d4ed8;
+  border-radius: 10px;
+  background: #2563eb;
+  color: white;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.countdown-record:hover:not(:disabled) { background: #1d4ed8; }
+.countdown-record:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.countdown-record:active:not(:disabled) { background: #1e40af; }
+.countdown-record:disabled { opacity: 0.5; cursor: default; }
+
+.countdown-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: rgba(255, 255, 255, 0.28);
+}
+.countdown-record.filling .countdown-fill {
+  width: 100%;
+  transition: width var(--seconds, 5s) linear;
+}
+
+.countdown-record-label {
+  position: relative;
+  z-index: 1;
+}
+
+.countdown-cancel {
+  width: 100%;
+  max-width: 280px;
+  padding: 9px 16px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  background: white;
+  color: #1f2330;
+  font-size: 14px;
+  cursor: pointer;
+}
+.countdown-cancel:hover:not(:disabled) { background: #f3f4f6; }
+.countdown-cancel:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+.countdown-cancel:active:not(:disabled) { background: #e5e7eb; }
+.countdown-cancel:disabled { opacity: 0.5; cursor: default; }
+
+@media (prefers-color-scheme: dark) {
+  .countdown-lead { color: #9ca3af; }
+  /* Darker accent + a softer translucent sweep so the fill reads on a dark
+     display without the harsh white wash the light theme can afford. */
+  .countdown-record { background: #1d4ed8; border-color: #1e40af; }
+  .countdown-record:hover:not(:disabled) { background: #1e40af; }
+  .countdown-record:active:not(:disabled) { background: #1e3a8a; }
+  .countdown-fill { background: rgba(255, 255, 255, 0.18); }
+  .countdown-cancel { background: #232631; color: #f5f5f7; border-color: #2f3340; }
+  .countdown-cancel:hover:not(:disabled) { background: #2c2f3a; }
+  .countdown-cancel:active:not(:disabled) { background: #353945; }
+}
+
 @media (prefers-color-scheme: dark) {
   :root { color: #f5f5f7; background: #0f1117; }
   body { background: #0f1117; }
