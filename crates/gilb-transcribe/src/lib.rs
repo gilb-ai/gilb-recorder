@@ -1,216 +1,322 @@
-//! Batch meeting transcription via the remote OpenAI Whisper API (BYOK).
+//! Local meeting transcription via whisper.cpp (whisper-rs), fully on-device.
 //!
-//! After a recording finalizes, [`transcribe_meeting`] uploads the meeting's
-//! `.audio.wav` and stores the result in `meeting_transcripts` (1:1 with
-//! `meetings`). The OpenAI HTTP call lives behind the [`Transcriber`] trait so
-//! the whole module — retry/backoff, response parsing, the DB upsert, and the
-//! error path — is unit-testable with a mock, no network or API key required.
-//! Only [`OpenAiTranscriber`] makes a real request.
+//! A meeting records two audio channels — `mic.wav` (the local participant) and
+//! `system.wav` (remote call participants). [`transcribe_meeting`] transcribes
+//! each separately, tags every utterance with its [`Channel`], merges them by
+//! start time, and stores the result in `meeting_transcripts` (1:1 with
+//! `meetings`). Per-channel transcription gives a free local-vs-remote split;
+//! the stored `channel` ("mic"/"system") is rendered as "Me"/"Others" upstream.
+//!
+//! An energy [`voiced_mask`] gates Whisper's silence hallucinations: a silent
+//! channel is skipped entirely and segments landing in unvoiced spans are
+//! dropped. The whisper.cpp call lives behind the [`Transcriber`] trait (and the
+//! `local-whisper` feature) so the orchestration is unit-testable with a mock —
+//! no model, no GPU. Only [`LocalTranscriber`] loads a real model.
 
 use std::path::Path;
-use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result};
 use async_trait::async_trait;
 use gilb_db::transcripts::{set_transcript_error, upsert_transcript};
 use gilb_db::Db;
-use serde::Deserialize;
 use tracing::{info, warn};
 
-/// OpenAI audio transcription endpoint.
-const OPENAI_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
-/// OpenAI models endpoint — a cheap authenticated GET used to validate a key.
-const OPENAI_MODELS_URL: &str = "https://api.openai.com/v1/models";
-/// Whisper model used for transcription.
-pub const MODEL: &str = "whisper-1";
-/// Total attempts before giving up (one initial try + retries).
-const MAX_ATTEMPTS: usize = 3;
+/// Model label stored in `meeting_transcripts.model`.
+pub const MODEL: &str = "whisper-large-v3-turbo";
 
-/// Outcome of validating a BYOK OpenAI key against the API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyValidity {
-    /// The key authenticated successfully (HTTP 200).
-    Valid,
-    /// The key was rejected (HTTP 401/403).
-    Invalid,
-    /// The server answered but neither accepted nor rejected the key (rate
-    /// limit, 5xx, …) — inconclusive, worth retrying later.
-    Unknown,
+// ---------------------------------------------------------------------------
+// Energy VAD (pure — no model, unit-testable). Operates on 16 kHz mono f32.
+// ---------------------------------------------------------------------------
+
+/// VAD analysis frame: 20 ms at 16 kHz.
+pub const VAD_FRAME: usize = 320;
+/// A channel whose loudest frames stay below this RMS is treated as pure silence.
+const ABS_SILENCE: f32 = 0.01;
+/// Minimum voiced time for a channel to be worth transcribing at all.
+pub const MIN_VOICED_SECS: f32 = 0.3;
+/// A Whisper segment is kept only if at least this fraction of it is voiced —
+/// drops the "Thank you."/"Спасибо." hallucinations whisper emits over silence.
+pub const SEG_VOICED_MIN: f32 = 0.2;
+
+/// Per-frame voiced mask via RMS energy with an adaptive threshold. An all-false
+/// mask means the channel is (near) silent.
+pub fn voiced_mask(samples: &[f32]) -> Vec<bool> {
+    let rms: Vec<f32> = samples
+        .chunks(VAD_FRAME)
+        .map(|c| (c.iter().map(|s| s * s).sum::<f32>() / c.len() as f32).sqrt())
+        .collect();
+    if rms.is_empty() {
+        return vec![];
+    }
+    let mut sorted = rms.clone();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let floor = sorted[sorted.len() * 10 / 100];
+    let peak = sorted[sorted.len() * 95 / 100];
+    if peak < ABS_SILENCE {
+        return vec![false; rms.len()];
+    }
+    let thresh = (floor + 0.15 * (peak - floor)).max(0.006);
+    rms.iter().map(|&e| e > thresh).collect()
 }
 
-/// Pure mapping from an HTTP status to a [`KeyValidity`]: 200 ⇒ valid,
-/// 401/403 ⇒ invalid, anything else ⇒ unknown. Unit-tested without network.
-pub fn key_validity_from_status(status: reqwest::StatusCode) -> KeyValidity {
-    use reqwest::StatusCode;
-    match status {
-        StatusCode::OK => KeyValidity::Valid,
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => KeyValidity::Invalid,
-        _ => KeyValidity::Unknown,
+/// Total voiced time in seconds implied by `mask`.
+pub fn voiced_secs(mask: &[bool]) -> f32 {
+    mask.iter().filter(|&&v| v).count() as f32 * VAD_FRAME as f32 / 16_000.0
+}
+
+/// Fraction of frames overlapping `[t0, t1]` (seconds) that are voiced.
+pub fn voiced_fraction(mask: &[bool], t0: f32, t1: f32) -> f32 {
+    let secs_per_frame = VAD_FRAME as f32 / 16_000.0;
+    let lo = ((t0 / secs_per_frame).floor() as usize).min(mask.len());
+    let hi = ((t1 / secs_per_frame).ceil() as usize).min(mask.len());
+    if hi <= lo {
+        return 0.0;
+    }
+    let voiced = mask[lo..hi].iter().filter(|&&v| v).count();
+    voiced as f32 / (hi - lo) as f32
+}
+
+// ---------------------------------------------------------------------------
+// Transcriber trait + merged segment model
+// ---------------------------------------------------------------------------
+
+/// Which audio channel an utterance came from. Stored verbatim ("mic"/"system")
+/// in `segments_json`; presentation ("Me"/"Others") is decided upstream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Channel {
+    Mic,
+    System,
+}
+
+impl Channel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Channel::Mic => "mic",
+            Channel::System => "system",
+        }
     }
 }
 
-/// Validate a BYOK OpenAI key with a GET to the models endpoint, classifying the
-/// response via [`key_validity_from_status`]. Returns `Err` only on a transport
-/// failure (no response). Makes a real network request — exercised manually, not
-/// in CI; the status→validity mapping it delegates to is the CI-tested part.
-pub async fn validate_api_key(key: &str) -> Result<KeyValidity> {
-    let resp = reqwest::Client::new()
-        .get(OPENAI_MODELS_URL)
-        .bearer_auth(key)
-        .send()
-        .await
-        .context("send key validation request")?;
-    Ok(key_validity_from_status(resp.status()))
-}
-
-/// A successful transcription, split into the fields persisted by
-/// [`upsert_transcript`]: the flat `text` and the `segments` array of
-/// `verbose_json` serialized back to a JSON string.
+/// One transcribed span from a single channel (channel assigned by the caller).
 #[derive(Debug, Clone)]
-pub struct WhisperResponse {
+pub struct Utterance {
+    /// Start time in seconds.
+    pub t0: f32,
+    /// End time in seconds.
+    pub t1: f32,
     pub text: String,
-    pub segments_json: String,
 }
 
-/// The OpenAI HTTP call, abstracted so tests can substitute a mock.
+/// A merged, channel-tagged utterance — the unit serialized to `segments_json`.
+#[derive(Debug, Clone)]
+pub struct Segment {
+    pub t0: f32,
+    pub t1: f32,
+    pub channel: Channel,
+    pub text: String,
+}
+
+/// Transcribes one audio file into VAD-filtered [`Utterance`]s. Returns an empty
+/// vec for a silent file; `Err` only on a hard failure (unreadable file, model
+/// error). Abstracted so the meeting flow is testable with a mock.
 #[async_trait]
 pub trait Transcriber: Send + Sync {
-    /// Upload `audio_path` and return its transcription. Returns `Err` on any
-    /// network / HTTP / parse failure (the caller retries).
-    async fn transcribe(&self, audio_path: &Path, api_key: &str) -> Result<WhisperResponse>;
+    async fn transcribe(&self, audio_path: &Path) -> Result<Vec<Utterance>>;
 }
 
-/// Real transcriber: a multipart POST to the OpenAI Whisper API.
-pub struct OpenAiTranscriber {
-    client: reqwest::Client,
-}
-
-impl OpenAiTranscriber {
-    pub fn new() -> Self {
-        Self {
-            client: reqwest::Client::new(),
-        }
-    }
-}
-
-impl Default for OpenAiTranscriber {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[async_trait]
-impl Transcriber for OpenAiTranscriber {
-    async fn transcribe(&self, audio_path: &Path, api_key: &str) -> Result<WhisperResponse> {
-        let bytes = tokio::fs::read(audio_path)
-            .await
-            .with_context(|| format!("read audio file {}", audio_path.display()))?;
-        let file_name = audio_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("audio.wav")
-            .to_string();
-
-        let part = reqwest::multipart::Part::bytes(bytes)
-            .file_name(file_name)
-            .mime_str("audio/wav")
-            .context("build multipart audio part")?;
-        let form = reqwest::multipart::Form::new()
-            .text("model", MODEL)
-            .text("response_format", "verbose_json")
-            .part("file", part);
-
-        let resp = self
-            .client
-            .post(OPENAI_URL)
-            .bearer_auth(api_key)
-            .multipart(form)
-            .send()
-            .await
-            .context("send transcription request")?;
-
-        let status = resp.status();
-        let body = resp.text().await.context("read transcription response")?;
-        if !status.is_success() {
-            return Err(anyhow!("openai transcription failed ({status}): {body}"));
-        }
-
-        let (text, segments_json) = parse_response(&body)?;
-        Ok(WhisperResponse {
-            text,
-            segments_json,
+/// Serialize merged segments to the compact JSON stored in `segments_json`.
+fn segments_to_json(segs: &[Segment]) -> String {
+    let arr: Vec<serde_json::Value> = segs
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "t0": s.t0,
+                "t1": s.t1,
+                "channel": s.channel.as_str(),
+                "text": s.text,
+            })
         })
+        .collect();
+    serde_json::Value::Array(arr).to_string()
+}
+
+/// Sibling path `<dir>/<name>` next to `audio_path`, or `None` if it has no parent.
+fn sibling(audio_path: &Path, name: &str) -> Option<std::path::PathBuf> {
+    audio_path.parent().map(|d| d.join(name))
+}
+
+/// Transcribe both channels next to `audio_path` and return their merged,
+/// time-sorted segments. A channel file that doesn't exist is skipped.
+async fn transcribe_channels(
+    audio_path: &Path,
+    t: &dyn Transcriber,
+) -> Result<Vec<Segment>> {
+    let mut segs = Vec::new();
+    for (name, channel) in [("mic.wav", Channel::Mic), ("system.wav", Channel::System)] {
+        let Some(path) = sibling(audio_path, name) else {
+            continue;
+        };
+        if !path.exists() {
+            continue;
+        }
+        let utts = t
+            .transcribe(&path)
+            .await
+            .with_context(|| format!("transcribe {}", path.display()))?;
+        segs.extend(utts.into_iter().map(|u| Segment {
+            t0: u.t0,
+            t1: u.t1,
+            channel,
+            text: u.text,
+        }));
     }
+    segs.sort_by(|a, b| a.t0.partial_cmp(&b.t0).unwrap_or(std::cmp::Ordering::Equal));
+    Ok(segs)
 }
 
-/// Exponential backoff between retries: 250ms, 500ms, 1s. `backoff_delays()[i]`
-/// is slept *before* attempt `i + 1`, so the last entry is unused at
-/// [`MAX_ATTEMPTS`] = 3 (kept for a 4th attempt and to keep the curve obvious).
-pub fn backoff_delays() -> [Duration; 3] {
-    [
-        Duration::from_millis(250),
-        Duration::from_millis(500),
-        Duration::from_millis(1000),
-    ]
-}
-
-/// Pure parse of a Whisper `verbose_json` body into the persisted
-/// `(text, segments_json)` pair. `segments_json` is the `segments` array
-/// re-serialized to a compact JSON string (empty array if absent).
-pub fn parse_response(body: &str) -> Result<(String, String)> {
-    #[derive(Deserialize)]
-    struct Raw {
-        text: String,
-        #[serde(default)]
-        segments: Vec<serde_json::Value>,
-    }
-    let raw: Raw = serde_json::from_str(body).context("parse whisper verbose_json")?;
-    let segments_json =
-        serde_json::to_string(&raw.segments).context("serialize transcript segments")?;
-    Ok((raw.text, segments_json))
-}
-
-/// Transcribe `meeting_id`'s audio and persist the outcome.
+/// Transcribe `meeting_id`'s two audio channels and persist the outcome.
 ///
-/// Retries the upload up to [`MAX_ATTEMPTS`] times with exponential backoff. On
-/// success the transcript is stored via [`upsert_transcript`]; once attempts are
-/// exhausted the last error is recorded via [`set_transcript_error`] so the
-/// failure is visible in the DB. Returns `Err` only if writing the DB row
-/// itself fails.
+/// On success the merged transcript is stored via [`upsert_transcript`] (flat
+/// `text` for search, `segments_json` carrying per-utterance `channel`/timings).
+/// On a hard failure the error is recorded via [`set_transcript_error`] so it's
+/// visible in the DB. Returns `Err` only if writing the DB row itself fails.
 pub async fn transcribe_meeting(
     db: &Db,
-    api_key: &str,
     meeting_id: i64,
     audio_path: &Path,
     t: &dyn Transcriber,
 ) -> Result<()> {
-    let delays = backoff_delays();
-    let mut last_err: Option<String> = None;
+    match transcribe_channels(audio_path, t).await {
+        Ok(segs) => {
+            let text = segs
+                .iter()
+                .map(|s| s.text.as_str())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let json = segments_to_json(&segs);
+            upsert_transcript(db, meeting_id, &text, &json, MODEL)
+                .await
+                .context("store transcript")?;
+            info!(meeting_id, segments = segs.len(), "meeting transcribed");
+            Ok(())
+        }
+        Err(err) => {
+            let msg = format!("{err:#}");
+            warn!(meeting_id, error = %msg, "transcription failed");
+            set_transcript_error(db, meeting_id, &msg)
+                .await
+                .context("store transcript error")?;
+            Ok(())
+        }
+    }
+}
 
-    for (attempt, delay) in delays.iter().enumerate().take(MAX_ATTEMPTS) {
-        match t.transcribe(audio_path, api_key).await {
-            Ok(resp) => {
-                upsert_transcript(db, meeting_id, &resp.text, &resp.segments_json, MODEL)
-                    .await
-                    .context("store transcript")?;
-                info!(meeting_id, attempt, "meeting transcribed");
-                return Ok(());
-            }
-            Err(err) => {
-                let msg = err.to_string();
-                warn!(meeting_id, attempt, error = %msg, "transcription attempt failed");
-                last_err = Some(msg);
-                if attempt + 1 < MAX_ATTEMPTS {
-                    tokio::time::sleep(*delay).await;
-                }
-            }
+// ---------------------------------------------------------------------------
+// LocalTranscriber — the real whisper.cpp path (feature-gated).
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "local-whisper")]
+mod local {
+    use std::path::Path;
+    use std::sync::Arc;
+
+    use anyhow::{Context, Result};
+    use async_trait::async_trait;
+    use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+
+    use crate::{voiced_fraction, voiced_mask, voiced_secs, Transcriber, Utterance, MIN_VOICED_SECS, SEG_VOICED_MIN};
+
+    /// On-device transcriber holding a loaded whisper.cpp model. The model is
+    /// loaded once (it costs ~hundreds of MB + seconds) and reused across calls;
+    /// each call creates a fresh decode state.
+    pub struct LocalTranscriber {
+        ctx: Arc<WhisperContext>,
+        /// "auto" | "ru" | "en" — passed to whisper for language selection.
+        language: String,
+    }
+
+    impl LocalTranscriber {
+        /// Load `model_path` (a ggml model) for transcription in `language`.
+        pub fn new(model_path: &Path, language: impl Into<String>) -> Result<Self> {
+            let ctx = WhisperContext::new_with_params(
+                &model_path.to_string_lossy(),
+                WhisperContextParameters::default(),
+            )
+            .with_context(|| format!("load whisper model {}", model_path.display()))?;
+            Ok(Self {
+                ctx: Arc::new(ctx),
+                language: language.into(),
+            })
         }
     }
 
-    let error = last_err.unwrap_or_else(|| "transcription failed".to_string());
-    warn!(meeting_id, error = %error, "transcription failed after retries");
-    set_transcript_error(db, meeting_id, &error)
-        .await
-        .context("store transcript error")?;
-    Ok(())
+    /// Read a 16 kHz mono i16 wav as f32 in [-1, 1].
+    fn read_wav_16k_mono(path: &Path) -> Result<Vec<f32>> {
+        let mut reader = hound::WavReader::open(path)
+            .with_context(|| format!("open wav {}", path.display()))?;
+        let spec = reader.spec();
+        anyhow::ensure!(spec.sample_rate == 16_000, "expected 16 kHz wav");
+        anyhow::ensure!(spec.channels == 1, "expected mono wav");
+        reader
+            .samples::<i16>()
+            .map(|s| Ok(s.context("read sample")? as f32 / 32768.0))
+            .collect()
+    }
+
+    /// Blocking whisper.cpp pass over `samples`, returning raw segments.
+    fn run_whisper(
+        ctx: &WhisperContext,
+        samples: &[f32],
+        language: &str,
+    ) -> Result<Vec<Utterance>> {
+        let mut state = ctx.create_state().context("create whisper state")?;
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+        params.set_language(Some(language));
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_special(false);
+        params.set_print_timestamps(false);
+        state.full(params, samples).context("whisper full")?;
+
+        let n = state.full_n_segments().context("n segments")?;
+        let mut out = Vec::with_capacity(n as usize);
+        for i in 0..n {
+            let text = state
+                .full_get_segment_text(i)
+                .unwrap_or_default()
+                .trim()
+                .to_string();
+            out.push(Utterance {
+                t0: state.full_get_segment_t0(i).unwrap_or(0) as f32 / 100.0,
+                t1: state.full_get_segment_t1(i).unwrap_or(0) as f32 / 100.0,
+                text,
+            });
+        }
+        Ok(out)
+    }
+
+    #[async_trait]
+    impl Transcriber for LocalTranscriber {
+        async fn transcribe(&self, audio_path: &Path) -> Result<Vec<Utterance>> {
+            let samples = read_wav_16k_mono(audio_path)?;
+            let mask = voiced_mask(&samples);
+            if voiced_secs(&mask) < MIN_VOICED_SECS {
+                return Ok(vec![]); // silent channel — skip, no hallucinations
+            }
+
+            let ctx = self.ctx.clone();
+            let language = self.language.clone();
+            let raw = tokio::task::spawn_blocking(move || run_whisper(&ctx, &samples, &language))
+                .await
+                .context("whisper task join")??;
+
+            Ok(raw
+                .into_iter()
+                .filter(|u| !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN)
+                .collect())
+        }
+    }
 }
+
+#[cfg(feature = "local-whisper")]
+pub use local::LocalTranscriber;

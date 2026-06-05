@@ -26,7 +26,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use gilb_config::RecordingSettings;
 use gilb_db::{
     meetings::{get_meeting, insert_meeting},
     Db,
@@ -34,7 +33,7 @@ use gilb_db::{
 use gilb_events::{EventBus, RecordingEvent};
 use gilb_meeting::{MeetingApp, MeetingDetector, MeetingEvent};
 use gilb_record::{spawn_recorder, RecordingOutcome};
-use gilb_transcribe::{transcribe_meeting, OpenAiTranscriber};
+use gilb_transcribe::{transcribe_meeting, LocalTranscriber};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::broadcast::error::RecvError;
@@ -414,15 +413,23 @@ async fn stop_recording(
     );
 }
 
-/// After a meeting finalizes, kick off batch transcription on a detached task —
-/// best-effort and only when a BYOK OpenAI key is configured
-/// (`OPENAI_API_KEY`). A no-op when no key is set or the meeting has no audio
-/// path. Never blocks the bridge or panics; the outcome (transcript or error)
-/// is persisted to `meeting_transcripts` by [`transcribe_meeting`].
+/// After a meeting finalizes, kick off on-device transcription on a detached
+/// task — best-effort and only when the local Whisper model has been downloaded
+/// (its presence is the gate). A no-op when no model is present or the meeting
+/// has no audio path. Never blocks the bridge or panics; the outcome (transcript
+/// or error) is persisted to `meeting_transcripts` by [`transcribe_meeting`].
 async fn maybe_spawn_transcription(db: &Db, meeting_id: i64) {
-    let Some(api_key) = RecordingSettings::from_env().openai_api_key else {
-        return;
+    let model_path = match gilb_config::transcribe_model_path() {
+        Ok(p) => p,
+        Err(err) => {
+            warn!(meeting_id, error = %err, "could not resolve model path");
+            return;
+        }
     };
+    if !model_path.exists() {
+        debug!(meeting_id, "no local transcription model; skipping transcription");
+        return;
+    }
     let audio_path = match get_meeting(db, meeting_id).await {
         Ok(Some(m)) => m.audio_path,
         Ok(None) => None,
@@ -439,17 +446,28 @@ async fn maybe_spawn_transcription(db: &Db, meeting_id: i64) {
         return;
     };
 
+    let language = gilb_config::load_preferences().transcription_language;
     let db = db.clone();
     tauri::async_runtime::spawn(async move {
-        let transcriber = OpenAiTranscriber::new();
-        if let Err(err) = transcribe_meeting(
-            &db,
-            &api_key,
-            meeting_id,
-            Path::new(&audio_path),
-            &transcriber,
-        )
-        .await
+        // Loading the model is blocking (~hundreds of MB) — keep it off the
+        // async runtime. The transcription pass itself blocks inside
+        // `LocalTranscriber`.
+        let transcriber =
+            match tauri::async_runtime::spawn_blocking(move || LocalTranscriber::new(&model_path, language))
+                .await
+            {
+                Ok(Ok(t)) => t,
+                Ok(Err(err)) => {
+                    warn!(meeting_id, error = %err, "failed to load local transcription model");
+                    return;
+                }
+                Err(err) => {
+                    warn!(meeting_id, error = %err, "model-load task panicked");
+                    return;
+                }
+            };
+        if let Err(err) =
+            transcribe_meeting(&db, meeting_id, Path::new(&audio_path), &transcriber).await
         {
             warn!(meeting_id, error = %err, "failed to persist transcription outcome");
         }

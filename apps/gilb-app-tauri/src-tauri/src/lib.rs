@@ -7,7 +7,7 @@ mod meeting;
 mod state;
 
 use tauri::Manager;
-use tracing::{error, warn};
+use tracing::error;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -43,16 +43,6 @@ pub fn run() {
 
     let result = builder
         .setup(|app| {
-            // Bridge the persisted BYOK OpenAI key into the process env (unless
-            // one is already exported) so `RecordingSettings::from_env` — and
-            // thus the meeting transcription trigger — sees it. Best-effort: a
-            // missing file is fine, an unreadable one is logged, never fatal.
-            if let Err(err) = gilb_config::hydrate_openai_key_env() {
-                warn!(
-                    ?err,
-                    "failed to hydrate OPENAI_API_KEY from persisted store"
-                );
-            }
             match state::build_app_state() {
                 Ok(s) => {
                     events::spawn_proxies(app.handle().clone(), s.engine.clone());
@@ -107,9 +97,6 @@ pub fn run() {
             commands::countdown::stop_meeting_recording,
             commands::settings::get_meeting_detection,
             commands::settings::set_meeting_detection,
-            commands::settings::get_openai_key,
-            commands::settings::set_openai_key,
-            commands::settings::test_openai_key,
             commands::auth::start_login,
             commands::auth::auth_status,
             commands::auth::sign_out,
