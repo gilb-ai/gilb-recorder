@@ -89,10 +89,20 @@ pub enum Channel {
 }
 
 impl Channel {
+    /// Neutral machine tag stored in the DB / `transcript.json` channel field.
     pub fn as_str(self) -> &'static str {
         match self {
             Channel::Mic => "mic",
             Channel::System => "system",
+        }
+    }
+
+    /// Human-facing speaker label for the on-disk transcript files: the local
+    /// participant (mic) is "Me", remote call audio (system) is "Others".
+    pub fn speaker(self) -> &'static str {
+        match self {
+            Channel::Mic => "Me",
+            Channel::System => "Others",
         }
     }
 }
@@ -143,6 +153,57 @@ fn segments_to_json(segs: &[Segment]) -> String {
 /// Sibling path `<dir>/<name>` next to `audio_path`, or `None` if it has no parent.
 fn sibling(audio_path: &Path, name: &str) -> Option<std::path::PathBuf> {
     audio_path.parent().map(|d| d.join(name))
+}
+
+/// Format seconds as `M:SS` (or `H:MM:SS` past an hour) for the text transcript.
+fn fmt_timestamp(secs: f32) -> String {
+    let total = secs.max(0.0) as u64;
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// Write the meeting's transcript into its folder as a human-readable
+/// `transcript.txt` and a machine-readable `transcript.json`, both using the
+/// "Me"/"Others" speaker labels. Best-effort: a write failure is logged, not
+/// propagated — the DB row is the source of truth.
+fn write_transcript_files(dir: &Path, segs: &[Segment]) {
+    let mut txt = String::new();
+    for s in segs {
+        txt.push_str(&format!(
+            "[{}] {}: {}\n",
+            fmt_timestamp(s.t0),
+            s.channel.speaker(),
+            s.text
+        ));
+    }
+    let json = serde_json::json!({
+        "model": MODEL,
+        "segments": segs
+            .iter()
+            .map(|s| serde_json::json!({
+                "start": s.t0,
+                "end": s.t1,
+                "speaker": s.channel.speaker(),
+                "text": s.text,
+            }))
+            .collect::<Vec<_>>(),
+    });
+
+    if let Err(err) = std::fs::write(dir.join("transcript.txt"), txt) {
+        warn!(error = %err, "failed to write transcript.txt");
+    }
+    match serde_json::to_vec_pretty(&json) {
+        Ok(bytes) => {
+            if let Err(err) = std::fs::write(dir.join("transcript.json"), bytes) {
+                warn!(error = %err, "failed to write transcript.json");
+            }
+        }
+        Err(err) => warn!(error = %err, "failed to serialize transcript.json"),
+    }
 }
 
 /// Transcribe both channels next to `audio_path` and return their merged,
@@ -197,6 +258,10 @@ pub async fn transcribe_meeting(
             upsert_transcript(db, meeting_id, &text, &json, MODEL)
                 .await
                 .context("store transcript")?;
+            // Also drop the transcript into the meeting folder (best-effort).
+            if let Some(dir) = audio_path.parent() {
+                write_transcript_files(dir, &segs);
+            }
             info!(meeting_id, segments = segs.len(), "meeting transcribed");
             Ok(())
         }

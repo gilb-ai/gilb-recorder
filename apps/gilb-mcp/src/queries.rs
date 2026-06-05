@@ -583,3 +583,135 @@ fn _enforce_masked_constant_used() {
 // directly when binding parameters.
 #[allow(dead_code)]
 pub type Ts = DateTime<Utc>;
+
+// ---------- meetings & transcripts --------------------------------------
+
+/// Convert an epoch-millis timestamp (how `meetings`/`meeting_transcripts`
+/// store time) to an RFC3339 string, matching the ISO strings used elsewhere.
+fn ms_to_iso(ms: Option<i64>) -> Option<String> {
+    ms.and_then(DateTime::<Utc>::from_timestamp_millis)
+        .map(|dt| dt.to_rfc3339())
+}
+
+/// Map the stored neutral channel to the human speaker label.
+fn speaker_of(channel: &str) -> &str {
+    match channel {
+        "mic" => "Me",
+        "system" => "Others",
+        other => other,
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MeetingRow {
+    pub id: i64,
+    pub started_at: Option<String>,
+    pub ended_at: Option<String>,
+    pub app: String,
+    pub status: String,
+    /// Whether a successful transcript exists (text present).
+    pub has_transcript: bool,
+    /// Last transcription error, if the attempt failed.
+    pub transcript_error: Option<String>,
+}
+
+/// Recent meetings (newest first), each flagged with whether it has a transcript.
+pub async fn list_meetings(db: &SqlitePool, limit: i64) -> Result<Vec<MeetingRow>> {
+    let rows = sqlx::query(
+        r#"
+        SELECT m.id, m.started_at, m.ended_at, m.app, m.status,
+               (t.text IS NOT NULL) AS has_transcript,
+               t.error AS transcript_error
+        FROM meetings m
+        LEFT JOIN meeting_transcripts t ON t.meeting_id = m.id
+        ORDER BY m.started_at DESC
+        LIMIT ?1
+        "#,
+    )
+    .bind(limit)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| MeetingRow {
+            id: r.get("id"),
+            started_at: ms_to_iso(Some(r.get::<i64, _>("started_at"))),
+            ended_at: ms_to_iso(r.get::<Option<i64>, _>("ended_at")),
+            app: r.get("app"),
+            status: r.get("status"),
+            has_transcript: r.get::<i64, _>("has_transcript") != 0,
+            transcript_error: r.get("transcript_error"),
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptSegment {
+    pub start: f64,
+    pub end: f64,
+    /// "Me" (local mic) or "Others" (remote call audio).
+    pub speaker: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MeetingTranscript {
+    pub meeting_id: i64,
+    pub app: String,
+    pub started_at: Option<String>,
+    pub model: Option<String>,
+    pub created_at: Option<String>,
+    /// Flat transcript text (no speaker labels); `None` until transcribed.
+    pub text: Option<String>,
+    /// Per-utterance segments with speaker + timings.
+    pub segments: Vec<TranscriptSegment>,
+    /// Last transcription error, if any.
+    pub error: Option<String>,
+}
+
+/// One meeting's transcript (header + segments). `None` if the meeting id is
+/// unknown; a known meeting with no transcript yet returns empty `segments`.
+pub async fn get_meeting_transcript(
+    db: &SqlitePool,
+    meeting_id: i64,
+) -> Result<Option<MeetingTranscript>> {
+    let row = sqlx::query(
+        r#"
+        SELECT m.app, m.started_at,
+               t.model, t.created_at, t.text, t.segments_json, t.error
+        FROM meetings m
+        LEFT JOIN meeting_transcripts t ON t.meeting_id = m.id
+        WHERE m.id = ?1
+        "#,
+    )
+    .bind(meeting_id)
+    .fetch_optional(db)
+    .await?;
+
+    let Some(r) = row else { return Ok(None) };
+
+    let segments = r
+        .get::<Option<String>, _>("segments_json")
+        .and_then(|s| serde_json::from_str::<Vec<serde_json::Value>>(&s).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| TranscriptSegment {
+            start: v.get("t0").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            end: v.get("t1").and_then(|x| x.as_f64()).unwrap_or(0.0),
+            speaker: speaker_of(v.get("channel").and_then(|x| x.as_str()).unwrap_or("")).to_string(),
+            text: v.get("text").and_then(|x| x.as_str()).unwrap_or("").to_string(),
+        })
+        .collect();
+
+    Ok(Some(MeetingTranscript {
+        meeting_id,
+        app: r.get("app"),
+        started_at: ms_to_iso(Some(r.get::<i64, _>("started_at"))),
+        model: r.get("model"),
+        created_at: ms_to_iso(r.get::<Option<i64>, _>("created_at")),
+        text: r.get("text"),
+        segments,
+        error: r.get("error"),
+    }))
+}

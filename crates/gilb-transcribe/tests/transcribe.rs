@@ -121,6 +121,14 @@ async fn merges_channels_sorted_with_tags() {
     assert_eq!(t.model.as_deref(), Some(MODEL));
     assert!(t.error.is_none());
 
+    // Sibling transcript files are written with Me/Others speaker labels.
+    let txt = std::fs::read_to_string(dir.join("transcript.txt")).expect("transcript.txt");
+    assert!(txt.contains("Me: hello from mic"), "txt: {txt}");
+    assert!(txt.contains("Others: reply from call"), "txt: {txt}");
+    let js = std::fs::read_to_string(dir.join("transcript.json")).expect("transcript.json");
+    assert!(js.contains(r#""speaker": "Me""#), "json: {js}");
+    assert!(js.contains(r#""speaker": "Others""#), "json: {js}");
+
     db.close().await;
     cleanup(&dbp);
     let _ = std::fs::remove_dir_all(dir);
