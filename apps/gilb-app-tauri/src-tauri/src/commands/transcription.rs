@@ -9,8 +9,10 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::io::AsyncWriteExt;
+
+use crate::transcribe_worker::{TranscribeTx, TranscriptionJob};
 
 /// HuggingFace URL for the ggml large-v3-turbo (q5_0) model we ship.
 const MODEL_URL: &str =
@@ -52,15 +54,22 @@ pub async fn get_transcription_status() -> TranscriptionStatus {
 }
 
 /// Persist the transcription language. Rejects anything but `auto`/`ru`/`en`.
+/// Signals the worker to drop its warm model so the next meeting reloads with
+/// the new language.
 #[tauri::command]
-pub async fn set_transcription_language(language: String) -> Result<(), String> {
+pub async fn set_transcription_language(
+    tx: State<'_, TranscribeTx>,
+    language: String,
+) -> Result<(), String> {
     match language.as_str() {
         "auto" | "ru" | "en" => {}
         other => return Err(format!("unsupported language: {other}")),
     }
     let mut prefs = gilb_config::load_preferences();
     prefs.transcription_language = language;
-    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())
+    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())?;
+    let _ = tx.0.send(TranscriptionJob::ReloadModel);
+    Ok(())
 }
 
 /// Delete the downloaded model, turning transcription off. A no-op if absent.
@@ -114,15 +123,29 @@ pub async fn download_model(
             }
             let _ = app.emit(
                 "model-download",
-                Progress { status: "done", downloaded, total: downloaded, error: None },
+                Progress {
+                    status: "done",
+                    downloaded,
+                    total: downloaded,
+                    error: None,
+                },
             );
+            // A model is now available — sweep meetings still awaiting a transcript.
+            if let Some(tx) = app.try_state::<TranscribeTx>() {
+                let _ = tx.0.send(TranscriptionJob::Sweep);
+            }
             Ok(())
         }
         Ok(None) => {
             let _ = tokio::fs::remove_file(&part_path).await;
             let _ = app.emit(
                 "model-download",
-                Progress { status: "cancelled", downloaded: 0, total: 0, error: None },
+                Progress {
+                    status: "cancelled",
+                    downloaded: 0,
+                    total: 0,
+                    error: None,
+                },
             );
             Ok(())
         }
@@ -135,7 +158,12 @@ pub async fn download_model(
 }
 
 fn err_event(error: String) -> Progress {
-    Progress { status: "error", downloaded: 0, total: 0, error: Some(error) }
+    Progress {
+        status: "error",
+        downloaded: 0,
+        total: 0,
+        error: Some(error),
+    }
 }
 
 /// Stream `url` into `part_path`, emitting throttled progress. Returns
@@ -167,7 +195,12 @@ async fn stream_to_file(
             last_emit = downloaded;
             let _ = app.emit(
                 "model-download",
-                Progress { status: "progress", downloaded, total, error: None },
+                Progress {
+                    status: "progress",
+                    downloaded,
+                    total,
+                    error: None,
+                },
             );
         }
     }

@@ -5,6 +5,7 @@ mod events;
 mod logging;
 mod meeting;
 mod state;
+mod transcribe_worker;
 
 use tauri::Manager;
 use tracing::error;
@@ -56,6 +57,10 @@ pub fn run() {
                     app.manage(s);
                     // Cancel flag shared between download_model / cancel_model_download.
                     app.manage(commands::transcription::DownloadCancel::default());
+                    // Background transcription worker + its queue. Spawned before
+                    // the meeting pipeline so the queue exists when meetings end;
+                    // also used by the language setting and the model downloader.
+                    app.manage(transcribe_worker::spawn_transcription_worker(db.clone()));
                     match gilb_config::data_dir() {
                         Ok(data_dir) => {
                             meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)

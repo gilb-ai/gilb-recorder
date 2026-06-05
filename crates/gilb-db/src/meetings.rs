@@ -63,6 +63,24 @@ pub async fn insert_meeting(db: &Db, started_at_ms: i64, app: &str) -> Result<i6
     Ok(res.last_insert_rowid())
 }
 
+/// Meeting ids that still need transcribing: completed, with an audio path, and
+/// lacking a successful transcript (no `meeting_transcripts` row, or one whose
+/// `text` is NULL — i.e. a prior failure). Oldest first, for FIFO catch-up. Used
+/// by the transcription worker's launch/after-download sweep.
+pub async fn pending_transcriptions(db: &Db) -> Result<Vec<i64>> {
+    let rows = sqlx::query_scalar::<_, i64>(
+        "SELECT m.id FROM meetings m \
+         LEFT JOIN meeting_transcripts t ON t.meeting_id = m.id \
+         WHERE m.status = 'completed' \
+           AND m.audio_path IS NOT NULL \
+           AND (t.meeting_id IS NULL OR t.text IS NULL) \
+         ORDER BY m.started_at ASC",
+    )
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
 /// Fetch a meeting by id, or `None` if it does not exist.
 pub async fn get_meeting(db: &Db, id: i64) -> Result<Option<Meeting>> {
     let row = sqlx::query_as::<_, Meeting>(
@@ -154,6 +172,52 @@ mod tests {
         let path = temp_db_path();
         let db = open_db(&path).await.expect("open_db");
         assert!(get_meeting(&db, 999).await.expect("get").is_none());
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn pending_transcriptions_filters_correctly() {
+        let path = temp_db_path();
+        let db = open_db(&path).await.expect("open_db");
+
+        // A: completed + audio, no transcript → pending.
+        let a = insert_meeting(&db, 1, "z").await.unwrap();
+        set_recording_paths(&db, a, "/v.mp4", "/a.wav")
+            .await
+            .unwrap();
+        finish_meeting(&db, a, 2, "completed").await.unwrap();
+
+        // B: still recording (not completed) → not pending.
+        let b = insert_meeting(&db, 3, "z").await.unwrap();
+        set_recording_paths(&db, b, "/v.mp4", "/a.wav")
+            .await
+            .unwrap();
+
+        // C: completed with a successful transcript → not pending.
+        let c = insert_meeting(&db, 4, "z").await.unwrap();
+        set_recording_paths(&db, c, "/v.mp4", "/a.wav")
+            .await
+            .unwrap();
+        finish_meeting(&db, c, 5, "completed").await.unwrap();
+        crate::transcripts::upsert_transcript(&db, c, "hi", "[]", "m")
+            .await
+            .unwrap();
+
+        // D: completed but transcription errored (text NULL) → pending.
+        let d = insert_meeting(&db, 6, "z").await.unwrap();
+        set_recording_paths(&db, d, "/v.mp4", "/a.wav")
+            .await
+            .unwrap();
+        finish_meeting(&db, d, 7, "completed").await.unwrap();
+        crate::transcripts::set_transcript_error(&db, d, "boom")
+            .await
+            .unwrap();
+
+        let pending = pending_transcriptions(&db).await.unwrap();
+        assert_eq!(pending, vec![a, d], "only A and D pending, oldest first");
+        let _ = b;
+
         db.close().await;
         cleanup(&path);
     }
