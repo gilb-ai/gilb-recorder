@@ -6,5 +6,9 @@
     <string>Gilb records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
     <key>NSAppleEventsUsageDescription</key>
     <string>Gilb queries the active application and window for context.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Gilb records microphone audio while a recording session is active to capture spoken context alongside your actions.</string>
+    <key>NSScreenCaptureDescription</key>
+    <string>Gilb captures the screen while a recording session is active to build a local journal of your work.</string>
 </dict>
 </plist>
