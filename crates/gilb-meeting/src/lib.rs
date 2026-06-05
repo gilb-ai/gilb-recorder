@@ -7,8 +7,8 @@
 //! shape are the contract referenced by `research/07-meeting-detection.md`
 //! §5 — keep them in sync with that document.
 //!
-//! The in-memory [`MockDetector`] and the macOS [`MacosDetector`] live
-//! here; the Windows detector lands in a follow-up card.
+//! The in-memory [`MockDetector`], the macOS [`MacosDetector`], and the
+//! Windows [`WindowsDetector`] (WASAPI session events) live here.
 
 use std::time::Duration;
 
@@ -20,10 +20,15 @@ use tokio::sync::{mpsc, Mutex};
 
 pub mod allowlist;
 mod macos;
+mod wasapi;
 
 #[cfg(target_os = "macos")]
 pub use macos::MacosDetector;
 pub use macos::{parse_attribution_line, Tracker};
+pub use wasapi::{SessionEvent, SessionTracker};
+
+#[cfg(target_os = "windows")]
+pub use wasapi::WindowsDetector;
 
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
