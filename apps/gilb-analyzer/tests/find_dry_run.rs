@@ -74,7 +74,6 @@ fn config() -> AnalyzerConfig {
         prompts,
         analyze_interval_secs: Some(3600),
         etag: None,
-        fetched_at: None,
     }
 }
 

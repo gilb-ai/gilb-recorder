@@ -135,7 +135,9 @@ async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> 
         return Ok(());
     };
     let pool = open_db(db).await?;
-    let config = ensure_config(&creds).await?;
+    // One-shot: no prior in-memory cache, so this always fetches the prompt
+    // fresh (it is never read from / written to disk).
+    let config = ensure_config(&creds, None).await?;
     let runner = runner_from_env();
     let web = Web::new(&creds.gilb_web_url, &creds.token);
 
@@ -160,15 +162,19 @@ async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
     let runner = runner_from_env();
     let web = Web::new(&creds.gilb_web_url, &creds.token);
 
+    // The config (incl. the private prompt) lives only here, in memory, for the
+    // life of the daemon — never on disk. Reused across ticks for a cheap 304.
+    let mut cached: Option<gilb_config::AnalyzerConfig> = None;
+
     loop {
-        // Refresh config every tick (cheap conditional GET).
-        let config = match ensure_config(&creds).await {
+        let config = match ensure_config(&creds, cached.as_ref()).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::error!("config fetch failed, stopping: {e:#}");
                 return Err(e);
             }
         };
+        cached = Some(config.clone());
         let interval = config.interval_secs();
         let to = chrono::Utc::now().to_rfc3339();
         let from = default_since(interval);

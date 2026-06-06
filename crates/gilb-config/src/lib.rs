@@ -14,7 +14,6 @@ const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 const PREFERENCES_FILE_NAME: &str = "prefs.json";
-const ANALYZER_CONFIG_FILE_NAME: &str = "analyzer_config.json";
 const MODELS_DIR_NAME: &str = "models";
 
 /// Filename of the local Whisper model (ggml large-v3-turbo, q5_0 quantized),
@@ -230,15 +229,16 @@ pub fn clear_credentials() -> Result<()> {
     }
 }
 
-/// Server-delivered analyzer configuration, cached at
-/// `$HOME/.gilb/analyzer_config.json`. Fetched from gilb-web
-/// (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon"); this is the
-/// on-disk cache so a run can fall back to it when the network blips. Holds the
-/// (private) prompt texts, so it is written `0600` on unix.
+/// Server-delivered analyzer configuration (prompts + cadence) fetched from
+/// gilb-web (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon").
 ///
-/// The `version`/`prompts`/`analyze_interval_secs` fields mirror the wire body;
-/// `etag` and `fetched_at` are stamped locally to drive conditional refresh.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// **Deliberately not persisted.** The prompt text is private, so it is never
+/// written to the filesystem — it lives only in process memory for the lifetime
+/// of a run (the daemon keeps the last good copy in-memory across ticks and
+/// uses `etag` for a conditional refresh). The `version`/`prompts`/
+/// `analyze_interval_secs` fields mirror the wire body; `etag` is the cache
+/// validator echoed back as `If-None-Match`.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyzerConfig {
     /// Monotonic server version of the config — logged next to each produced
     /// Therblig so we know which prompt generation made it.
@@ -248,15 +248,10 @@ pub struct AnalyzerConfig {
     pub prompts: BTreeMap<String, String>,
     /// Server-controlled analysis cadence in seconds; absent ⇒
     /// [`DEFAULT_ANALYZE_INTERVAL_SECS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub analyze_interval_secs: Option<u64>,
-    /// ETag of the cached response, sent back as `If-None-Match` to get a cheap
+    /// ETag of the last response, sent back as `If-None-Match` to get a cheap
     /// `304 Not Modified` when the config is unchanged.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub etag: Option<String>,
-    /// RFC3339 time this cache entry was fetched.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fetched_at: Option<String>,
 }
 
 impl AnalyzerConfig {
@@ -270,52 +265,6 @@ impl AnalyzerConfig {
     pub fn prompt(&self, name: &str) -> Option<&str> {
         self.prompts.get(name).map(String::as_str)
     }
-}
-
-/// Resolve `$HOME/.gilb/analyzer_config.json`.
-pub fn analyzer_config_path() -> Result<PathBuf> {
-    Ok(data_dir()?.join(ANALYZER_CONFIG_FILE_NAME))
-}
-
-/// Load the analyzer-config cache from `path`. Returns `Ok(None)` when absent,
-/// `Err` only on a present-but-malformed file. Path-taking for testability.
-pub fn load_analyzer_config_from(path: &Path) -> Result<Option<AnalyzerConfig>> {
-    let bytes = match std::fs::read(path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(e) => return Err(e).with_context(|| format!("failed to read {}", path.display())),
-    };
-    let cfg: AnalyzerConfig = serde_json::from_slice(&bytes)
-        .with_context(|| format!("failed to parse {}", path.display()))?;
-    Ok(Some(cfg))
-}
-
-/// Write the analyzer-config cache to `path` (creating the parent if needed).
-/// Holds private prompt texts, so it is `0600` on unix.
-pub fn save_analyzer_config_to(path: &Path, cfg: &AnalyzerConfig) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let json = serde_json::to_vec_pretty(cfg).context("failed to serialize analyzer config")?;
-    std::fs::write(path, &json).with_context(|| format!("failed to write {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to chmod 600 {}", path.display()))?;
-    }
-    Ok(())
-}
-
-/// Load `$HOME/.gilb/analyzer_config.json` (None if absent).
-pub fn load_analyzer_config() -> Result<Option<AnalyzerConfig>> {
-    load_analyzer_config_from(&analyzer_config_path()?)
-}
-
-/// Persist `$HOME/.gilb/analyzer_config.json`.
-pub fn save_analyzer_config(cfg: &AnalyzerConfig) -> Result<()> {
-    save_analyzer_config_to(&analyzer_config_path()?, cfg)
 }
 
 /// On-disk shape of `$HOME/.gilb/prefs.json` — persisted UI preferences that
@@ -411,50 +360,22 @@ mod tests {
     }
 
     #[test]
-    fn analyzer_config_absent_is_none() {
-        let dir = std::env::temp_dir().join(format!("gilb-cfg-test-{}", std::process::id()));
-        let path = dir.join("analyzer_config.json");
-        let _ = std::fs::remove_file(&path);
-        assert!(load_analyzer_config_from(&path).unwrap().is_none());
-    }
-
-    #[test]
-    fn analyzer_config_round_trips() {
-        let dir = std::env::temp_dir().join(format!("gilb-cfg-rt-{}", std::process::id()));
-        let path = dir.join("analyzer_config.json");
+    fn analyzer_config_interval_defaults_and_prompt_lookup() {
         let mut prompts = BTreeMap::new();
         prompts.insert("therblig-finder".to_string(), "find them".to_string());
         let cfg = AnalyzerConfig {
-            version: 7,
-            prompts,
-            analyze_interval_secs: Some(1800),
-            etag: Some("\"abc\"".to_string()),
-            fetched_at: Some("2026-06-06T00:00:00Z".to_string()),
-        };
-        save_analyzer_config_to(&path, &cfg).unwrap();
-        let back = load_analyzer_config_from(&path).unwrap().unwrap();
-        assert_eq!(cfg, back);
-        assert_eq!(back.interval_secs(), 1800);
-        assert_eq!(back.prompt("therblig-finder"), Some("find them"));
-
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-            assert_eq!(mode & 0o777, 0o600);
-        }
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn analyzer_config_interval_defaults() {
-        let cfg = AnalyzerConfig {
             version: 1,
-            prompts: BTreeMap::new(),
+            prompts,
             analyze_interval_secs: None,
             etag: None,
-            fetched_at: None,
         };
         assert_eq!(cfg.interval_secs(), DEFAULT_ANALYZE_INTERVAL_SECS);
+        assert_eq!(cfg.prompt("therblig-finder"), Some("find them"));
+
+        let tuned = AnalyzerConfig {
+            analyze_interval_secs: Some(900),
+            ..cfg
+        };
+        assert_eq!(tuned.interval_secs(), 900);
     }
 }

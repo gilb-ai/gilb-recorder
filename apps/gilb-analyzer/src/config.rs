@@ -1,16 +1,17 @@
-//! Fetch + cache the analyzer config (prompts + cadence) from gilb-web.
+//! Fetch the analyzer config (prompts + cadence) from gilb-web.
 //!
 //! gilb-web is the control plane: after the employee authenticates (bearer
 //! token in [`gilb_config::Credentials`]), Shannon pulls the prompt texts and
-//! cadence from `GET /api/v1/analyzer/config`. The prompts therefore live on
-//! the server (not in this public repo, not in env vars) and can be iterated
-//! without shipping a new binary.
+//! cadence from `GET /api/v1/analyzer/config`. The prompts live on the server
+//! (not in this public repo, not in env vars) and can be iterated without
+//! shipping a new binary.
 //!
-//! Refresh is a conditional GET: we send the cached `ETag` as `If-None-Match`
-//! and the server answers `304 Not Modified` when nothing changed, so the
-//! prompt body is not re-downloaded each tick. The last good response is cached
-//! at `~/.gilb/analyzer_config.json`; if a refresh fails (network blip) we fall
-//! back to that cache — except on 401/403, which is a hard "re-authenticate".
+//! **The prompt is never written to disk.** The config — including the private
+//! prompt text — is held only in process memory. The daemon keeps the last good
+//! copy in-memory across ticks and passes it back in as `cached`; refresh is a
+//! conditional GET (cached `ETag` → `If-None-Match`) so an unchanged config
+//! answers `304` and the body isn't re-downloaded. A one-shot `find` has no
+//! prior cache and so always fetches fresh.
 
 use anyhow::{bail, Context, Result};
 use gilb_config::{AnalyzerConfig, Credentials};
@@ -20,9 +21,9 @@ use std::collections::BTreeMap;
 
 const CONFIG_PATH: &str = "/api/v1/analyzer/config";
 
-/// Wire body of `GET /api/v1/analyzer/config`. `etag`/`fetched_at` on
-/// [`AnalyzerConfig`] are stamped locally, not part of the body — kept as a
-/// separate struct so the wire shape can evolve independently of the cache.
+/// Wire body of `GET /api/v1/analyzer/config`. `etag` on [`AnalyzerConfig`] is
+/// observed from the response header, not the body — kept as a separate struct
+/// so the wire shape can evolve independently of the in-memory type.
 #[derive(Debug, Deserialize)]
 struct WireConfig {
     version: i64,
@@ -32,19 +33,18 @@ struct WireConfig {
 }
 
 /// Returned when the server rejects the token — surfaced as a hard failure so
-/// callers don't silently keep running on a stale cache after a deauth.
+/// callers don't silently keep running on a stale in-memory copy after a deauth.
 #[derive(Debug, thiserror::Error)]
 #[error("gilb-web rejected the token (HTTP {0}) fetching analyzer config — re-authenticate")]
 struct Unauthorized(u16);
 
-/// Map the wire body + locally-observed metadata into the cached shape.
-fn build(wire: WireConfig, etag: Option<String>, now: String) -> AnalyzerConfig {
+/// Map the wire body + the observed ETag into the in-memory config.
+fn build(wire: WireConfig, etag: Option<String>) -> AnalyzerConfig {
     AnalyzerConfig {
         version: wire.version,
         prompts: wire.prompts,
         analyze_interval_secs: wire.analyze_interval_secs,
         etag,
-        fetched_at: Some(now),
     }
 }
 
@@ -71,12 +71,7 @@ enum Fetch {
     Modified(Box<AnalyzerConfig>),
 }
 
-async fn fetch(
-    client: &reqwest::Client,
-    creds: &Credentials,
-    etag: Option<&str>,
-    now: String,
-) -> Result<Fetch> {
+async fn fetch(client: &reqwest::Client, creds: &Credentials, etag: Option<&str>) -> Result<Fetch> {
     let url = format!(
         "{}{}",
         creds.gilb_web_url.trim_end_matches('/'),
@@ -102,38 +97,36 @@ async fn fetch(
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
             let wire: WireConfig = resp.json().await.context("config body is not valid JSON")?;
-            Ok(Fetch::Modified(Box::new(build(wire, new_etag, now))))
+            Ok(Fetch::Modified(Box::new(build(wire, new_etag))))
         }
     }
 }
 
-/// Fetch the freshest analyzer config, preferring the cache when the server is
-/// unreachable. A `304` returns the cache as-is; a hard auth failure (401/403)
-/// propagates so the caller can prompt re-authentication.
-pub async fn ensure_config(creds: &Credentials) -> Result<AnalyzerConfig> {
-    let cached = gilb_config::load_analyzer_config()?;
+/// Fetch the freshest analyzer config, reusing the in-memory `cached` copy when
+/// the server says `304` or is unreachable. A hard auth failure (401/403)
+/// propagates so the caller can prompt re-authentication. Nothing is persisted.
+pub async fn ensure_config(
+    creds: &Credentials,
+    cached: Option<&AnalyzerConfig>,
+) -> Result<AnalyzerConfig> {
     let client = reqwest::Client::new();
-    let now = chrono::Utc::now().to_rfc3339();
-    let etag = cached.as_ref().and_then(|c| c.etag.clone());
+    let etag = cached.and_then(|c| c.etag.clone());
 
-    match fetch(&client, creds, etag.as_deref(), now).await {
-        Ok(Fetch::Modified(cfg)) => {
-            gilb_config::save_analyzer_config(&cfg).context("failed to cache analyzer config")?;
-            Ok(*cfg)
-        }
-        Ok(Fetch::NotModified) => {
-            cached.context("server returned 304 but no cached analyzer config exists")
-        }
+    match fetch(&client, creds, etag.as_deref()).await {
+        Ok(Fetch::Modified(cfg)) => Ok(*cfg),
+        Ok(Fetch::NotModified) => cached
+            .cloned()
+            .context("server returned 304 but no in-memory config to reuse"),
         Err(e) if e.downcast_ref::<Unauthorized>().is_some() => Err(e),
         Err(e) => match cached {
             Some(c) => {
                 tracing::warn!(
-                    "config refresh failed ({e:#}); using cached config v{}",
+                    "config refresh failed ({e:#}); reusing in-memory config v{}",
                     c.version
                 );
-                Ok(c)
+                Ok(c.clone())
             }
-            None => Err(e).context("config refresh failed and no cached config to fall back on"),
+            None => Err(e).context("config refresh failed and no in-memory config to reuse"),
         },
     }
 }
@@ -154,7 +147,7 @@ mod tests {
     }
 
     #[test]
-    fn build_maps_wire_and_stamps_local_fields() {
+    fn build_maps_wire_and_observed_etag() {
         let mut prompts = BTreeMap::new();
         prompts.insert("therblig-finder".to_string(), "find".to_string());
         let wire = WireConfig {
@@ -162,16 +155,11 @@ mod tests {
             prompts,
             analyze_interval_secs: Some(1800),
         };
-        let cfg = build(
-            wire,
-            Some("\"e1\"".to_string()),
-            "2026-06-06T00:00:00Z".to_string(),
-        );
+        let cfg = build(wire, Some("\"e1\"".to_string()));
         assert_eq!(cfg.version, 7);
         assert_eq!(cfg.prompt("therblig-finder"), Some("find"));
         assert_eq!(cfg.interval_secs(), 1800);
         assert_eq!(cfg.etag.as_deref(), Some("\"e1\""));
-        assert_eq!(cfg.fetched_at.as_deref(), Some("2026-06-06T00:00:00Z"));
     }
 
     #[test]
