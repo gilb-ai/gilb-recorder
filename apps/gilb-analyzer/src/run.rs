@@ -5,9 +5,11 @@
 //! together); the server divides by the linked findings (same `run_id`) to get
 //! cost-per-one. `job` tags which analysis kind this run was.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
-use crate::claude::{ClaudeResult, Usage};
+use crate::claude::{ClaudeResult, ModelUsage, Usage};
 use crate::db::SourceCounts;
 
 // Token usage is reported with the same field names Claude Code emits, so
@@ -65,6 +67,10 @@ pub struct RunRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
     pub usage: Usage,
+    /// Per-model token usage and cost — every model the run touched. Omitted
+    /// when Claude Code reported none (e.g. an errored run with no result).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub model_usage: BTreeMap<String, ModelUsage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
     pub outcome: Outcome,
@@ -117,6 +123,10 @@ impl RunRecord {
             num_turns: inp.claude.and_then(|c| c.num_turns),
             duration_ms: inp.claude.and_then(|c| c.duration_ms),
             usage,
+            model_usage: inp
+                .claude
+                .map(|c| c.model_usage.clone())
+                .unwrap_or_default(),
             total_cost_usd: inp.claude.and_then(|c| c.total_cost_usd),
             outcome: classify_outcome(errored, inp.created.max(0) as usize),
             input: InputBlock {
@@ -144,6 +154,15 @@ mod tests {
     }
 
     fn claude(input_tokens: i64, is_error: bool) -> ClaudeResult {
+        let model = "claude-opus-4-8".to_string();
+        let model_usage = BTreeMap::from([(
+            model.clone(),
+            ModelUsage {
+                input_tokens,
+                output_tokens: 10,
+                ..ModelUsage::default()
+            },
+        )]);
         ClaudeResult {
             text: "[]".to_string(),
             usage: Usage {
@@ -152,10 +171,11 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_creation_tokens: 0,
             },
+            model_usage,
             total_cost_usd: Some(0.05),
             num_turns: Some(4),
             duration_ms: Some(1000),
-            model: Some("claude-opus-4-8".to_string()),
+            model: Some(model),
             is_error,
         }
     }
@@ -220,5 +240,16 @@ mod tests {
         assert_eq!(v["findings_created"], 1);
         assert_eq!(v["input"]["llm_input_tokens"], 100);
         assert_eq!(v["usage"]["input_tokens"], 100);
+        assert_eq!(v["model_usage"]["claude-opus-4-8"]["input_tokens"], 100);
+        assert_eq!(v["model_usage"]["claude-opus-4-8"]["output_tokens"], 10);
+    }
+
+    #[test]
+    fn omits_empty_model_usage() {
+        let mut inp = inputs(None, 0);
+        inp.error = Some("claude timed out".to_string());
+        let rec = RunRecord::assemble(inp);
+        let v = serde_json::to_value(&rec).unwrap();
+        assert!(v.get("model_usage").is_none());
     }
 }

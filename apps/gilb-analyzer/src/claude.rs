@@ -17,6 +17,7 @@
 //! owns the spawn/timeout/IO and is exercised by an integration test that puts
 //! a fake `claude` on disk — no network, no real model.
 
+use std::collections::BTreeMap;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -37,15 +38,37 @@ pub struct Usage {
     pub cache_creation_tokens: i64,
 }
 
+/// Per-model usage Claude Code reports under `modelUsage` — one entry per model
+/// a single run touched (e.g. the main model plus a small helper). Field names
+/// double as the gilb-web wire shape (snake_case); deserialized from Claude
+/// Code's camelCase via [`WireModelUsage`].
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct ModelUsage {
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_creation_tokens: i64,
+    pub web_search_requests: i64,
+    pub cost_usd: f64,
+    pub context_window: i64,
+    pub max_output_tokens: i64,
+}
+
 /// Parsed outcome of a `claude -p --output-format json` invocation.
 #[derive(Debug)]
 pub struct ClaudeResult {
     /// The model's text answer (the `result` field) — fed to `parse_therbligs`.
     pub text: String,
     pub usage: Usage,
+    /// Per-model usage (`modelUsage`): every model the run used, with its own
+    /// token counts and cost. Empty if Claude Code didn't report it.
+    pub model_usage: BTreeMap<String, ModelUsage>,
     pub total_cost_usd: Option<f64>,
     pub num_turns: Option<i64>,
     pub duration_ms: Option<i64>,
+    /// The run's primary model — the `modelUsage` entry with the most tokens
+    /// (falls back to a top-level `model` field on older Claude Code). `None`
+    /// when neither is present.
     pub model: Option<String>,
     /// Claude Code reported the run itself errored (we still keep `usage`).
     pub is_error: bool,
@@ -67,6 +90,10 @@ struct WireResult {
     model: Option<String>,
     #[serde(default)]
     usage: Option<WireUsage>,
+    /// Per-model usage map. Newer Claude Code reports this instead of a
+    /// top-level `model`.
+    #[serde(rename = "modelUsage", default)]
+    model_usage: BTreeMap<String, WireModelUsage>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -79,6 +106,50 @@ struct WireUsage {
     cache_read_input_tokens: i64,
     #[serde(default)]
     cache_creation_input_tokens: i64,
+}
+
+/// One `modelUsage` entry as Claude Code emits it (camelCase).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireModelUsage {
+    #[serde(default)]
+    input_tokens: i64,
+    #[serde(default)]
+    output_tokens: i64,
+    #[serde(default)]
+    cache_read_input_tokens: i64,
+    #[serde(default)]
+    cache_creation_input_tokens: i64,
+    #[serde(default)]
+    web_search_requests: i64,
+    #[serde(default, rename = "costUSD")]
+    cost_usd: f64,
+    #[serde(default)]
+    context_window: i64,
+    #[serde(default)]
+    max_output_tokens: i64,
+}
+
+impl From<WireModelUsage> for ModelUsage {
+    fn from(w: WireModelUsage) -> Self {
+        ModelUsage {
+            input_tokens: w.input_tokens,
+            output_tokens: w.output_tokens,
+            cache_read_tokens: w.cache_read_input_tokens,
+            cache_creation_tokens: w.cache_creation_input_tokens,
+            web_search_requests: w.web_search_requests,
+            cost_usd: w.cost_usd,
+            context_window: w.context_window,
+            max_output_tokens: w.max_output_tokens,
+        }
+    }
+}
+
+impl ModelUsage {
+    /// Total tokens attributed to this model — used to pick a run's primary one.
+    fn total_tokens(&self) -> i64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_creation_tokens
+    }
 }
 
 /// Parse the single `result` JSON object Claude Code prints under
@@ -95,6 +166,19 @@ pub fn parse_result(stdout: &str) -> Result<ClaudeResult> {
         )
     })?;
     let usage = wire.usage.unwrap_or_default();
+    let model_usage: BTreeMap<String, ModelUsage> = wire
+        .model_usage
+        .into_iter()
+        .map(|(k, v)| (k, v.into()))
+        .collect();
+    // Primary model: prefer a top-level `model` (older Claude Code), else the
+    // `modelUsage` entry that consumed the most tokens.
+    let model = wire.model.or_else(|| {
+        model_usage
+            .iter()
+            .max_by_key(|(_, u)| u.total_tokens())
+            .map(|(name, _)| name.clone())
+    });
     Ok(ClaudeResult {
         text: wire.result.unwrap_or_default(),
         usage: Usage {
@@ -103,10 +187,11 @@ pub fn parse_result(stdout: &str) -> Result<ClaudeResult> {
             cache_read_tokens: usage.cache_read_input_tokens,
             cache_creation_tokens: usage.cache_creation_input_tokens,
         },
+        model_usage,
         total_cost_usd: wire.total_cost_usd,
         num_turns: wire.num_turns,
         duration_ms: wire.duration_ms,
-        model: wire.model,
+        model,
         is_error: wire.is_error,
     })
 }
@@ -324,6 +409,40 @@ mod tests {
         assert_eq!(r.num_turns, Some(7));
         assert_eq!(r.model.as_deref(), Some("claude-opus-4-8"));
         assert!(!r.is_error);
+    }
+
+    // Newer Claude Code (2.x): no top-level `model`, a `modelUsage` map instead.
+    const MODEL_USAGE: &str = r#"{
+        "is_error": false, "result": "[]",
+        "usage": {"input_tokens": 2553, "output_tokens": 4},
+        "modelUsage": {
+            "claude-haiku-4-5-20251001": {
+                "inputTokens": 462, "outputTokens": 20,
+                "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0,
+                "webSearchRequests": 0, "costUSD": 0.000562,
+                "contextWindow": 200000, "maxOutputTokens": 32000
+            },
+            "claude-opus-4-8[1m]": {
+                "inputTokens": 2553, "outputTokens": 4,
+                "cacheReadInputTokens": 15821, "cacheCreationInputTokens": 2275,
+                "webSearchRequests": 0, "costUSD": 0.0349,
+                "contextWindow": 1000000, "maxOutputTokens": 64000
+            }
+        }
+    }"#;
+
+    #[test]
+    fn parses_model_usage_and_derives_primary_model() {
+        let r = parse_result(MODEL_USAGE).unwrap();
+        assert_eq!(r.model_usage.len(), 2);
+        let opus = &r.model_usage["claude-opus-4-8[1m]"];
+        assert_eq!(opus.input_tokens, 2553);
+        assert_eq!(opus.cache_read_tokens, 15821);
+        assert_eq!(opus.cache_creation_tokens, 2275);
+        assert_eq!(opus.cost_usd, 0.0349);
+        assert_eq!(opus.context_window, 1_000_000);
+        // Primary model = the entry with the most tokens (opus, via cache reads).
+        assert_eq!(r.model.as_deref(), Some("claude-opus-4-8[1m]"));
     }
 
     #[test]
