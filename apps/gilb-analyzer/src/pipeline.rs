@@ -139,18 +139,14 @@ pub async fn run_find(
     }
 
     let finished_at = chrono::Utc::now().to_rfc3339();
-    let errored = error.is_some()
-        || claude_for_record
-            .as_ref()
-            .map(|c| c.is_error)
-            .unwrap_or(false);
-    let outcome_count = if dry_run {
+    // Dry-run pushes nothing, so reflect what *would* be created in the outcome.
+    let created_count = if dry_run {
         new_therbligs.len()
     } else {
         created_count
     };
 
-    let mut run = RunRecord::assemble(RunInputs {
+    let run = RunRecord::assemble(RunInputs {
         started_at,
         finished_at,
         window_from: from,
@@ -160,12 +156,11 @@ pub async fn run_find(
         source,
         claude: claude_for_record.as_ref(),
         created: created_ids,
+        created_count,
         deduped,
         failed,
         error,
     });
-    // `assemble` classifies on created.len(); for dry-run reflect would-create.
-    run.outcome = crate::run::classify_outcome(errored, outcome_count);
 
     if !dry_run {
         if let Err(e) = web.post_run(&run).await {

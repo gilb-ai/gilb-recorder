@@ -54,8 +54,12 @@ pub struct Evidence {
 /// not a silent drop).
 pub fn parse_therbligs(raw: &str) -> Result<Vec<Therblig>> {
     let json = extract_json(raw).context("no JSON array/object found in model output")?;
-    let value: Value = serde_json::from_str(json)
-        .with_context(|| format!("model output is not valid JSON: {}", snippet(json)))?;
+    let value: Value = serde_json::from_str(json).with_context(|| {
+        format!(
+            "model output is not valid JSON: {}",
+            crate::util::snippet(json)
+        )
+    })?;
 
     let items = into_items(value)?;
     let mut out = Vec::with_capacity(items.len());
@@ -137,20 +141,6 @@ fn find_fence(s: &str) -> Option<&str> {
     // Drop an optional language tag on the fence line (e.g. `json`).
     let body_start = after_ticks.find('\n').map(|n| n + 1).unwrap_or(0);
     Some(&after_ticks[body_start..])
-}
-
-fn snippet(s: &str) -> String {
-    const MAX: usize = 160;
-    let s = s.trim();
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    // Truncate on a char boundary at or below MAX.
-    let mut end = MAX;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 fn kind_of(v: &Value) -> &'static str {

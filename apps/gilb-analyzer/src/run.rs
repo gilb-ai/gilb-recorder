@@ -106,7 +106,11 @@ pub struct RunInputs<'a> {
     pub config_version: i64,
     pub source: SourceCounts,
     pub claude: Option<&'a ClaudeResult>,
+    /// Server-assigned ids of created Therbligs (those whose id we could read).
     pub created: Vec<i64>,
+    /// How many Therbligs were created (or, in a dry run, *would* be) — drives
+    /// the outcome. May exceed `created.len()` when the server omits an id.
+    pub created_count: usize,
     pub deduped: i64,
     pub failed: i64,
     pub error: Option<String>,
@@ -138,7 +142,7 @@ impl RunRecord {
             duration_ms: inp.claude.and_then(|c| c.duration_ms),
             usage,
             total_cost_usd: inp.claude.and_then(|c| c.total_cost_usd),
-            outcome: classify_outcome(errored, inp.created.len()),
+            outcome: classify_outcome(errored, inp.created_count),
             input: InputBlock {
                 window_secs: inp.window_secs,
                 source: inp.source,
@@ -191,6 +195,7 @@ mod tests {
             config_version: 7,
             source: SourceCounts::default(),
             claude: c,
+            created_count: created.len(),
             created,
             deduped: 0,
             failed: 0,

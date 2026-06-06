@@ -85,7 +85,7 @@ pub fn parse_result(stdout: &str) -> Result<ClaudeResult> {
     let wire: WireResult = serde_json::from_str(trimmed).with_context(|| {
         format!(
             "claude output is not the expected result JSON: {}",
-            snippet(trimmed)
+            crate::util::snippet(trimmed)
         )
     })?;
     let usage = wire.usage.unwrap_or_default();
@@ -227,18 +227,6 @@ impl ClaudeRunner {
 
         parse_result(&String::from_utf8_lossy(&out_buf))
     }
-}
-
-fn snippet(s: &str) -> String {
-    const MAX: usize = 160;
-    if s.len() <= MAX {
-        return s.to_string();
-    }
-    let mut end = MAX;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}…", &s[..end])
 }
 
 #[cfg(test)]
