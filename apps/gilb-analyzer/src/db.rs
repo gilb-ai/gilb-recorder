@@ -77,6 +77,16 @@ pub async fn load_rows(db: &SqlitePool, from: &str, to: &str) -> Result<Vec<Acti
         .collect())
 }
 
+/// Earliest `captured_at` in the DB (RFC3339 text), or `None` if there are no
+/// actions yet. Used by `backfill` to start from the beginning of history.
+pub async fn earliest_action(db: &SqlitePool) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT MIN(captured_at) AS t FROM actions")
+        .fetch_one(db)
+        .await
+        .context("query earliest action")?;
+    Ok(row.try_get::<Option<String>, _>("t").unwrap_or(None))
+}
+
 /// Count tree snapshots in `[from, to)`.
 pub async fn count_tree_snapshots(db: &SqlitePool, from: &str, to: &str) -> Result<i64> {
     let row = sqlx::query(

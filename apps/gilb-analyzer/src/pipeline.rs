@@ -68,6 +68,37 @@ pub async fn run_job(
     let trees = db::count_tree_snapshots(db, from, to).await.unwrap_or(0);
     let source = db::source_counts(&rows, trees);
 
+    // Empty window (nothing recorded) — don't spend a claude run on it. Still
+    // record the empty run so the server's coverage (window_to) advances; this
+    // is what keeps a fresh app / an idle hour / a backfill over nights cheap.
+    if source.actions_total == 0 && trees == 0 {
+        let run = RunRecord::assemble(RunInputs {
+            run_id,
+            job: job.name.clone(),
+            started_at,
+            finished_at: chrono::Utc::now().to_rfc3339(),
+            window_from: from,
+            window_to: to,
+            window_secs: window_secs(from, to),
+            config_version,
+            source,
+            claude: None,
+            created: 0,
+            deduped: 0,
+            failed: 0,
+            error: None,
+        });
+        if !dry_run {
+            if let Err(e) = web.post_run(&run).await {
+                tracing::warn!("failed to post run record: {e:#}");
+            }
+        }
+        return Ok(FindSummary {
+            run,
+            findings: Vec::new(),
+        });
+    }
+
     let full = build_trigger(&job.prompt, from, to);
     let claude_res = runner.run(&full).await;
 

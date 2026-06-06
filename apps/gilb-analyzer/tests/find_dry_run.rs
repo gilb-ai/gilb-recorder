@@ -113,3 +113,35 @@ async fn find_dry_run_parses_and_accounts_without_network() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn empty_window_skips_claude() {
+    let dir = std::env::temp_dir().join(format!("gilb-empty-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    // Migrated but no actions in the window → nothing to analyze.
+    let pool = gilb_db::open_db(&dir.join("db.sqlite"))
+        .await
+        .expect("open+migrate db");
+
+    // If run_job were to call this, the spawn would fail and the run would be an
+    // Error — so asserting Empty proves claude was never invoked.
+    let runner = ClaudeRunner::new()
+        .bin("/nonexistent/claude-must-not-run")
+        .skip_permissions(false);
+    let web = Web::new("http://127.0.0.1:0", "token");
+
+    let cfg = config();
+    let job = cfg.job("therblig-finder").unwrap();
+    let window = Window { from: FROM, to: TO };
+    let summary = run_job(&pool, cfg.version, job, &runner, &web, window, true)
+        .await
+        .expect("empty dry-run");
+
+    assert_eq!(summary.run.outcome, Outcome::Empty);
+    assert!(summary.findings.is_empty());
+    assert_eq!(summary.run.findings_created, 0);
+    assert_eq!(summary.run.usage.input_tokens, 0); // claude never ran
+    assert_eq!(summary.run.input.source.actions_total, 0);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -2,16 +2,21 @@
 //!
 //! For the PoC the LLM is Claude Code on the operator's subscription (not the
 //! Anthropic API, not a proxy): we spawn `claude -p --output-format json`,
-//! optionally attaching `gilb-mcp` via `--mcp-config` so the model can read the
+//! optionally attaching `gilb-mcp` via `--mcp-config` (inline JSON, plus
+//! `--strict-mcp-config` so only our server is used) so the model can read the
 //! live DB read-only. The prompt goes in on stdin; the single `result` JSON
 //! object comes back on stdout, carrying both the model's text answer and the
 //! token `usage` we record per run.
+//!
+//! `resolve_claude_bin` / `sibling_mcp_config` cope with a bundled `.app`: when
+//! launched from Finder the process PATH is minimal and `gilb-mcp` lives next to
+//! us in `Contents/MacOS/`, so we probe known install dirs for `claude` and
+//! point it at the sibling `gilb-mcp` by absolute path.
 //!
 //! `parse_result` is pure (unit-tested with a canned object). `ClaudeRunner`
 //! owns the spawn/timeout/IO and is exercised by an integration test that puts
 //! a fake `claude` on disk — no network, no real model.
 
-use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
@@ -112,7 +117,9 @@ pub fn parse_result(stdout: &str) -> Result<ClaudeResult> {
 #[derive(Debug)]
 pub struct ClaudeRunner {
     bin: String,
-    mcp_config: Option<PathBuf>,
+    /// Inline MCP-config JSON (see `sibling_mcp_config`), passed as a string to
+    /// `--mcp-config`; `None` runs the model without any MCP server.
+    mcp_config: Option<String>,
     model: Option<String>,
     skip_permissions: bool,
     timeout: Duration,
@@ -143,9 +150,10 @@ impl ClaudeRunner {
         self
     }
 
-    /// Attach an MCP config file (e.g. the one describing `gilb-mcp`).
-    pub fn mcp_config(mut self, path: impl Into<PathBuf>) -> Self {
-        self.mcp_config = Some(path.into());
+    /// Attach the inline MCP-config JSON describing `gilb-mcp` (see
+    /// `sibling_mcp_config`). Passed verbatim to `--mcp-config`.
+    pub fn mcp_config(mut self, json: impl Into<String>) -> Self {
+        self.mcp_config = Some(json.into());
         self
     }
 
@@ -167,12 +175,20 @@ impl ClaudeRunner {
         if self.skip_permissions {
             cmd.arg("--dangerously-skip-permissions");
         }
-        if let Some(path) = &self.mcp_config {
-            cmd.arg("--mcp-config").arg(path);
+        if let Some(json) = &self.mcp_config {
+            // Inline JSON + strict: use only our gilb-mcp, never the user's
+            // globally-configured MCP servers (keeps the run deterministic).
+            cmd.arg("--mcp-config").arg(json).arg("--strict-mcp-config");
         }
         if let Some(model) = &self.model {
             cmd.arg("--model").arg(model);
         }
+        // A bundled .app inherits a minimal PATH; widen it so `claude` (and, for
+        // the npm build, its `node`) resolve.
+        cmd.env("PATH", augmented_path());
+        // If the run future is dropped (daemon caught a shutdown signal mid-tick)
+        // kill `claude` too — otherwise it keeps burning the subscription.
+        cmd.kill_on_drop(true);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -223,6 +239,65 @@ impl ClaudeRunner {
 
         parse_result(&String::from_utf8_lossy(&out_buf))
     }
+}
+
+/// Bin dirs Claude Code (and a Homebrew/npm `node`) commonly install into, in
+/// probe order. Used both to locate `claude` and to widen the child's PATH.
+fn claude_bin_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![
+        format!("{home}/.local/bin"),
+        format!("{home}/.claude/local"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+        format!("{home}/.npm-global/bin"),
+    ]
+}
+
+/// Locate the `claude` binary. `GILB_CLAUDE_BIN` overrides everything; otherwise
+/// probe the known install dirs (a bundled `.app` has a minimal PATH, so we
+/// cannot rely on a bare `claude`). Falls back to `claude` (PATH) if none hit.
+pub fn resolve_claude_bin() -> String {
+    if let Ok(p) = std::env::var("GILB_CLAUDE_BIN") {
+        if !p.is_empty() {
+            return p;
+        }
+    }
+    for dir in claude_bin_dirs() {
+        let candidate = format!("{dir}/claude");
+        if std::path::Path::new(&candidate).is_file() {
+            return candidate;
+        }
+    }
+    "claude".to_string()
+}
+
+/// PATH for the spawned `claude`: the known bin dirs prepended to the inherited
+/// PATH, so an npm-installed `claude` can find its `node` even from a bundle.
+fn augmented_path() -> String {
+    let mut parts = claude_bin_dirs();
+    if let Ok(current) = std::env::var("PATH") {
+        if !current.is_empty() {
+            parts.push(current);
+        }
+    }
+    parts.join(":")
+}
+
+/// Build the inline MCP-config JSON pointing `claude` at the `gilb-mcp` binary
+/// sitting next to our own executable (true in the bundle's `Contents/MacOS/`
+/// and in `target/<profile>/` during dev). `None` if we can't resolve our path
+/// or the sibling is missing — the caller then runs without MCP.
+pub fn sibling_mcp_config() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    let mcp = exe.parent()?.join("gilb-mcp");
+    if !mcp.is_file() {
+        return None;
+    }
+    let cfg = serde_json::json!({
+        "mcpServers": { "gilb-mcp": { "command": mcp.to_string_lossy() } }
+    });
+    Some(cfg.to_string())
 }
 
 #[cfg(test)]
