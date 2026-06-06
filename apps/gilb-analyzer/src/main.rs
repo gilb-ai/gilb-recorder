@@ -141,7 +141,11 @@ async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> 
     let runner = runner_from_env();
     let web = Web::new(&creds.gilb_web_url, &creds.token);
 
-    let since = since.unwrap_or_else(|| default_since(config.interval_secs()));
+    let interval = config
+        .job("therblig-finder")
+        .map(|j| j.interval_secs())
+        .unwrap_or(gilb_config::DEFAULT_ANALYZE_INTERVAL_SECS);
+    let since = since.unwrap_or_else(|| default_since(interval));
     let to = chrono::Utc::now().to_rfc3339();
 
     let window = Window {
@@ -175,7 +179,10 @@ async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
             }
         };
         cached = Some(config.clone());
-        let interval = config.interval_secs();
+        let interval = config
+            .job("therblig-finder")
+            .map(|j| j.interval_secs())
+            .unwrap_or(gilb_config::DEFAULT_ANALYZE_INTERVAL_SECS);
         let to = chrono::Utc::now().to_rfc3339();
         let from = default_since(interval);
         let window = Window {

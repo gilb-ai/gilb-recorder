@@ -3,7 +3,6 @@
 //! v0 is intentionally tiny: paths + a few capture toggles. Per-app exclusion
 //! lists land in Phase 4.
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -229,41 +228,63 @@ pub fn clear_credentials() -> Result<()> {
     }
 }
 
-/// Server-delivered analyzer configuration (prompts + cadence) fetched from
-/// gilb-web (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon").
+/// When an analyzer job fires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Trigger {
+    /// Run on a rolling window every `secs` seconds.
+    Interval { secs: u64 },
+    /// Run once per finished meeting (event-driven).
+    MeetingEnd,
+}
+
+/// One analysis job served by gilb-web: a prompt, when to run it, and where to
+/// post the findings. The recorder runs `name`'s prompt as `claude -p` over
+/// gilb-mcp and forwards what it emits to `post_to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    /// Stable id, e.g. `"therblig-finder"` / `"meeting-facts"`.
+    pub name: String,
+    /// Emit-only prompt body (the recorder appends the window/params trigger).
+    pub prompt: String,
+    pub trigger: Trigger,
+    /// gilb-web endpoint findings are POSTed to (e.g. `/api/v1/therbligs`).
+    pub post_to: String,
+}
+
+impl Job {
+    /// Cadence for an interval job; hourly default otherwise.
+    pub fn interval_secs(&self) -> u64 {
+        match self.trigger {
+            Trigger::Interval { secs } => secs,
+            _ => DEFAULT_ANALYZE_INTERVAL_SECS,
+        }
+    }
+}
+
+/// Server-delivered analyzer configuration fetched from gilb-web
+/// (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon").
 ///
-/// **Deliberately not persisted.** The prompt text is private, so it is never
+/// **Deliberately not persisted.** Prompts are private, so the config is never
 /// written to the filesystem — it lives only in process memory for the lifetime
-/// of a run (the daemon keeps the last good copy in-memory across ticks and
-/// uses `etag` for a conditional refresh). The `version`/`prompts`/
-/// `analyze_interval_secs` fields mirror the wire body; `etag` is the cache
-/// validator echoed back as `If-None-Match`.
+/// of a run (the daemon keeps the last good copy in-memory across ticks and uses
+/// `etag` for a conditional refresh). `version`/`jobs` mirror the wire body;
+/// `etag` is the cache validator echoed back as `If-None-Match`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AnalyzerConfig {
-    /// Monotonic server version of the config — logged next to each produced
-    /// Therblig so we know which prompt generation made it.
+    /// Monotonic server version — logged next to each produced finding so we
+    /// know which config generation made it.
     pub version: i64,
-    /// Named prompt texts, e.g. `"therblig-finder"`. A map so new prompts
-    /// (e.g. `"skill-builder"`) land without a schema change.
-    pub prompts: BTreeMap<String, String>,
-    /// Server-controlled analysis cadence in seconds; absent ⇒
-    /// [`DEFAULT_ANALYZE_INTERVAL_SECS`].
-    pub analyze_interval_secs: Option<u64>,
+    /// The analysis jobs to run (prompt + trigger + destination each).
+    pub jobs: Vec<Job>,
     /// ETag of the last response, sent back as `If-None-Match` to get a cheap
     /// `304 Not Modified` when the config is unchanged.
     pub etag: Option<String>,
 }
 
 impl AnalyzerConfig {
-    /// Effective analysis cadence: server value, or the hourly default.
-    pub fn interval_secs(&self) -> u64 {
-        self.analyze_interval_secs
-            .unwrap_or(DEFAULT_ANALYZE_INTERVAL_SECS)
-    }
-
-    /// Look up a named prompt (e.g. `"therblig-finder"`).
-    pub fn prompt(&self, name: &str) -> Option<&str> {
-        self.prompts.get(name).map(String::as_str)
+    /// Look up a job by name (e.g. `"therblig-finder"`).
+    pub fn job(&self, name: &str) -> Option<&Job> {
+        self.jobs.iter().find(|j| j.name == name)
     }
 }
 
@@ -360,22 +381,36 @@ mod tests {
     }
 
     #[test]
-    fn analyzer_config_interval_defaults_and_prompt_lookup() {
-        let mut prompts = BTreeMap::new();
-        prompts.insert("therblig-finder".to_string(), "find them".to_string());
+    fn analyzer_config_job_lookup_and_interval() {
         let cfg = AnalyzerConfig {
             version: 1,
-            prompts,
-            analyze_interval_secs: None,
+            jobs: vec![
+                Job {
+                    name: "therblig-finder".to_string(),
+                    prompt: "find them".to_string(),
+                    trigger: Trigger::Interval { secs: 900 },
+                    post_to: "/api/v1/therbligs".to_string(),
+                },
+                Job {
+                    name: "meeting-facts".to_string(),
+                    prompt: "extract".to_string(),
+                    trigger: Trigger::MeetingEnd,
+                    post_to: "/api/v1/meeting_facts".to_string(),
+                },
+            ],
             etag: None,
         };
-        assert_eq!(cfg.interval_secs(), DEFAULT_ANALYZE_INTERVAL_SECS);
-        assert_eq!(cfg.prompt("therblig-finder"), Some("find them"));
 
-        let tuned = AnalyzerConfig {
-            analyze_interval_secs: Some(900),
-            ..cfg
-        };
-        assert_eq!(tuned.interval_secs(), 900);
+        let finder = cfg.job("therblig-finder").unwrap();
+        assert_eq!(finder.prompt, "find them");
+        assert_eq!(finder.interval_secs(), 900);
+        assert_eq!(finder.post_to, "/api/v1/therbligs");
+
+        // MeetingEnd has no interval → hourly default.
+        assert_eq!(
+            cfg.job("meeting-facts").unwrap().interval_secs(),
+            DEFAULT_ANALYZE_INTERVAL_SECS
+        );
+        assert!(cfg.job("nope").is_none());
     }
 }

@@ -4,14 +4,13 @@
 
 #![cfg(unix)]
 
-use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 
 use gilb_analyzer::claude::ClaudeRunner;
 use gilb_analyzer::pipeline::{run_find, Window};
 use gilb_analyzer::run::Outcome;
 use gilb_analyzer::web::Web;
-use gilb_config::AnalyzerConfig;
+use gilb_config::{AnalyzerConfig, Job, Trigger};
 
 const FROM: &str = "2026-06-06T00:00:00Z";
 const TO: &str = "2026-06-06T01:00:00Z";
@@ -67,12 +66,14 @@ fn fake_claude(dir: &std::path::Path) -> String {
 }
 
 fn config() -> AnalyzerConfig {
-    let mut prompts = BTreeMap::new();
-    prompts.insert("therblig-finder".to_string(), "FIND THERBLIGS".to_string());
     AnalyzerConfig {
         version: 9,
-        prompts,
-        analyze_interval_secs: Some(3600),
+        jobs: vec![Job {
+            name: "therblig-finder".to_string(),
+            prompt: "FIND THERBLIGS".to_string(),
+            trigger: Trigger::Interval { secs: 3600 },
+            post_to: "/api/v1/therbligs".to_string(),
+        }],
         etag: None,
     }
 }

@@ -16,8 +16,8 @@ use crate::run::{RunInputs, RunRecord};
 use crate::therblig::{parse_therbligs, Therblig};
 use crate::web::{dedup_key, PostOutcome, Web};
 
-/// Prompt name fetched from the config bundle.
-const FINDER_PROMPT: &str = "therblig-finder";
+/// Job name looked up in the config bundle.
+const FINDER_JOB: &str = "therblig-finder";
 
 /// Append the emit-only trigger to the server-delivered prompt: bound the
 /// window, read via gilb-mcp, emit a JSON array, push nothing (Rust owns the
@@ -92,10 +92,10 @@ pub async fn run_find(
     let trees = db::count_tree_snapshots(db, from, to).await.unwrap_or(0);
     let source = db::source_counts(&rows, segments, trees);
 
-    let prompt = config
-        .prompt(FINDER_PROMPT)
-        .with_context(|| format!("config bundle has no '{FINDER_PROMPT}' prompt"))?;
-    let full = build_trigger(prompt, from, to);
+    let job = config
+        .job(FINDER_JOB)
+        .with_context(|| format!("config bundle has no '{FINDER_JOB}' job"))?;
+    let full = build_trigger(&job.prompt, from, to);
 
     let claude_res = runner.run(&full).await;
 

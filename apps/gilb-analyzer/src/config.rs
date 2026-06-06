@@ -1,10 +1,10 @@
-//! Fetch the analyzer config (prompts + cadence) from gilb-web.
+//! Fetch the analyzer config (the list of analysis jobs) from gilb-web.
 //!
 //! gilb-web is the control plane: after the employee authenticates (bearer
-//! token in [`gilb_config::Credentials`]), Shannon pulls the prompt texts and
-//! cadence from `GET /api/v1/analyzer/config`. The prompts live on the server
-//! (not in this public repo, not in env vars) and can be iterated without
-//! shipping a new binary.
+//! token in [`gilb_config::Credentials`]), Shannon pulls the jobs — each a
+//! prompt + trigger + destination — from `GET /api/v1/analyzer/config`. The
+//! prompts live on the server (not in this public repo, not in env vars) and
+//! can be iterated without shipping a new binary.
 //!
 //! **The prompt is never written to disk.** The config — including the private
 //! prompt text — is held only in process memory. The daemon keeps the last good
@@ -14,22 +14,55 @@
 //! prior cache and so always fetches fresh.
 
 use anyhow::{bail, Context, Result};
-use gilb_config::{AnalyzerConfig, Credentials};
+use gilb_config::{AnalyzerConfig, Credentials, Job, Trigger};
 use reqwest::header::{ETAG, IF_NONE_MATCH};
 use serde::Deserialize;
-use std::collections::BTreeMap;
 
 const CONFIG_PATH: &str = "/api/v1/analyzer/config";
 
 /// Wire body of `GET /api/v1/analyzer/config`. `etag` on [`AnalyzerConfig`] is
-/// observed from the response header, not the body — kept as a separate struct
-/// so the wire shape can evolve independently of the in-memory type.
+/// observed from the response header, not the body — kept as separate structs so
+/// the wire shape can evolve independently of the in-memory types.
 #[derive(Debug, Deserialize)]
 struct WireConfig {
     version: i64,
-    prompts: BTreeMap<String, String>,
-    #[serde(default)]
-    analyze_interval_secs: Option<u64>,
+    jobs: Vec<WireJob>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireJob {
+    name: String,
+    prompt: String,
+    trigger: WireTrigger,
+    post_to: String,
+}
+
+/// `{"on":"interval","secs":3600}` | `{"on":"meeting_end"}`.
+#[derive(Debug, Deserialize)]
+#[serde(tag = "on", rename_all = "snake_case")]
+enum WireTrigger {
+    Interval { secs: u64 },
+    MeetingEnd,
+}
+
+impl From<WireTrigger> for Trigger {
+    fn from(w: WireTrigger) -> Self {
+        match w {
+            WireTrigger::Interval { secs } => Trigger::Interval { secs },
+            WireTrigger::MeetingEnd => Trigger::MeetingEnd,
+        }
+    }
+}
+
+impl From<WireJob> for Job {
+    fn from(w: WireJob) -> Self {
+        Job {
+            name: w.name,
+            prompt: w.prompt,
+            trigger: w.trigger.into(),
+            post_to: w.post_to,
+        }
+    }
 }
 
 /// Returned when the server rejects the token — surfaced as a hard failure so
@@ -42,8 +75,7 @@ struct Unauthorized(u16);
 fn build(wire: WireConfig, etag: Option<String>) -> AnalyzerConfig {
     AnalyzerConfig {
         version: wire.version,
-        prompts: wire.prompts,
-        analyze_interval_secs: wire.analyze_interval_secs,
+        jobs: wire.jobs.into_iter().map(Job::from).collect(),
         etag,
     }
 }
@@ -147,26 +179,36 @@ mod tests {
     }
 
     #[test]
-    fn build_maps_wire_and_observed_etag() {
-        let mut prompts = BTreeMap::new();
-        prompts.insert("therblig-finder".to_string(), "find".to_string());
-        let wire = WireConfig {
-            version: 7,
-            prompts,
-            analyze_interval_secs: Some(1800),
-        };
+    fn build_maps_wire_jobs_and_observed_etag() {
+        let body = r#"{
+            "version": 7,
+            "jobs": [
+              {"name":"therblig-finder","prompt":"find","trigger":{"on":"interval","secs":1800},"post_to":"/api/v1/therbligs"},
+              {"name":"meeting-facts","prompt":"extract","trigger":{"on":"meeting_end"},"post_to":"/api/v1/meeting_facts"}
+            ]
+        }"#;
+        let wire: WireConfig = serde_json::from_str(body).unwrap();
         let cfg = build(wire, Some("\"e1\"".to_string()));
+
         assert_eq!(cfg.version, 7);
-        assert_eq!(cfg.prompt("therblig-finder"), Some("find"));
-        assert_eq!(cfg.interval_secs(), 1800);
         assert_eq!(cfg.etag.as_deref(), Some("\"e1\""));
+        let finder = cfg.job("therblig-finder").unwrap();
+        assert_eq!(finder.prompt, "find");
+        assert_eq!(finder.interval_secs(), 1800);
+        assert_eq!(finder.post_to, "/api/v1/therbligs");
+        assert_eq!(
+            cfg.job("meeting-facts").unwrap().trigger,
+            Trigger::MeetingEnd
+        );
     }
 
     #[test]
-    fn wire_parses_without_optional_cadence() {
-        let wire: WireConfig =
-            serde_json::from_str(r#"{"version":3,"prompts":{"therblig-finder":"x"}}"#).unwrap();
+    fn wire_parses_meeting_end_trigger() {
+        let wire: WireConfig = serde_json::from_str(
+            r#"{"version":3,"jobs":[{"name":"m","prompt":"p","trigger":{"on":"meeting_end"},"post_to":"/x"}]}"#,
+        )
+        .unwrap();
         assert_eq!(wire.version, 3);
-        assert!(wire.analyze_interval_secs.is_none());
+        assert!(matches!(wire.jobs[0].trigger, WireTrigger::MeetingEnd));
     }
 }
