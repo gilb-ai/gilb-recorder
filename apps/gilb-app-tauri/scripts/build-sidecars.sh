@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
-# Build the gilb-mcp sidecar and stage it under the name Tauri expects
-# for `bundle.externalBin` (binaries/<base>-<target-triple>).
+# Build the sidecar CLIs (gilb-mcp, gilb-analyzer) and stage them under the
+# names Tauri expects for `bundle.externalBin` (binaries/<base>-<target-triple>).
+#
+# Both ship inside the .app so a DMG install carries the whole local pipeline:
+#   <App>.app/Contents/MacOS/gilb-mcp       — read-only MCP over the recorder DB
+#   <App>.app/Contents/MacOS/gilb-analyzer  — Shannon (slice / find / run)
+# The operator runs the analyzer from there (it spawns `claude -p`, which must be
+# installed + signed in separately, and points --mcp-config at the bundled mcp).
 #
 # Target detection — TAURI_ENV_TARGET_TRIPLE is set by `tauri build`
 # when invoked with `--target`. For plain host builds (no flag) we
@@ -34,26 +40,33 @@ case "$TARGET" in
   *) EXE="" ;;
 esac
 
+# Sidecar crates to build + stage. Each is its own workspace bin.
+SIDECARS=(gilb-mcp gilb-analyzer)
+
 build_one() {
   cd "$WORKSPACE_ROOT"
-  cargo build --release --target "$1" -p gilb-mcp
+  cargo build --release --target "$1" -p gilb-mcp -p gilb-analyzer
 }
 
 case "$TARGET" in
   universal-apple-darwin)
     build_one aarch64-apple-darwin
     build_one x86_64-apple-darwin
-    cp "$WORKSPACE_ROOT/target/aarch64-apple-darwin/release/gilb-mcp" \
-       "$BINARIES_DIR/gilb-mcp-aarch64-apple-darwin"
-    cp "$WORKSPACE_ROOT/target/x86_64-apple-darwin/release/gilb-mcp" \
-       "$BINARIES_DIR/gilb-mcp-x86_64-apple-darwin"
-    lipo -create -output "$BINARIES_DIR/gilb-mcp-$TARGET" \
-      "$WORKSPACE_ROOT/target/aarch64-apple-darwin/release/gilb-mcp" \
-      "$WORKSPACE_ROOT/target/x86_64-apple-darwin/release/gilb-mcp"
+    for bin in "${SIDECARS[@]}"; do
+      cp "$WORKSPACE_ROOT/target/aarch64-apple-darwin/release/$bin" \
+         "$BINARIES_DIR/$bin-aarch64-apple-darwin"
+      cp "$WORKSPACE_ROOT/target/x86_64-apple-darwin/release/$bin" \
+         "$BINARIES_DIR/$bin-x86_64-apple-darwin"
+      lipo -create -output "$BINARIES_DIR/$bin-$TARGET" \
+        "$WORKSPACE_ROOT/target/aarch64-apple-darwin/release/$bin" \
+        "$WORKSPACE_ROOT/target/x86_64-apple-darwin/release/$bin"
+    done
     ;;
   *)
     build_one "$TARGET"
-    cp "$WORKSPACE_ROOT/target/$TARGET/release/gilb-mcp$EXE" \
-       "$BINARIES_DIR/gilb-mcp-$TARGET$EXE"
+    for bin in "${SIDECARS[@]}"; do
+      cp "$WORKSPACE_ROOT/target/$TARGET/release/$bin$EXE" \
+         "$BINARIES_DIR/$bin-$TARGET$EXE"
+    done
     ;;
 esac
