@@ -2,10 +2,11 @@
 //!
 //! - `slice` — reduce + redact recent activity into a de-identified slice (the
 //!   original Layer-1 dry-run; works fully local).
-//! - `find` — Phase 1: run the therblig-finder prompt as `claude -p` over
-//!   gilb-mcp, parse the emitted Therbligs, dedup, push to gilb-web, record the
-//!   run. `--dry-run` does all of it except touch the network.
-//! - `run` — loop `find` on the server-controlled cadence (in-process daemon).
+//! - `find` — run the therblig-finder job's prompt as `claude -p` over gilb-mcp,
+//!   parse the emitted findings, POST each to the job's endpoint, record the run.
+//!   `--dry-run` does all of it except touch the network. (gilb-web validates +
+//!   dedups per kind.)
+//! - `run` — loop the job on its server-controlled cadence (in-process daemon).
 //!
 //! Everything but `slice` needs enterprise credentials
 //! (`gilb_config::load_credentials`); without them only `slice` is available
@@ -19,7 +20,7 @@ use clap::{Parser, Subcommand};
 
 use gilb_analyzer::claude::ClaudeRunner;
 use gilb_analyzer::config::ensure_config;
-use gilb_analyzer::pipeline::{run_find, FindSummary, Window};
+use gilb_analyzer::pipeline::{run_job, FindSummary, Window};
 use gilb_analyzer::web::Web;
 use gilb_analyzer::{db, redact};
 
@@ -49,7 +50,7 @@ enum Command {
         #[arg(long)]
         pretty: bool,
     },
-    /// Phase 1: find Therbligs in a window and push them to gilb-web.
+    /// Run the analysis job over a window and POST findings to gilb-web.
     Find {
         /// DB path (default: ~/.gilb/db.sqlite).
         #[arg(long)]
@@ -57,7 +58,7 @@ enum Command {
         /// Window start (default: now - cadence).
         #[arg(long)]
         since: Option<String>,
-        /// Build + analyze + parse, but touch no network (no dedup, no push).
+        /// Build + analyze + parse, but touch no network (no push).
         #[arg(long)]
         dry_run: bool,
     },
@@ -141,18 +142,17 @@ async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> 
     let runner = runner_from_env();
     let web = Web::new(&creds.gilb_web_url, &creds.token);
 
-    let interval = config
+    let job = config
         .job("therblig-finder")
-        .map(|j| j.interval_secs())
-        .unwrap_or(gilb_config::DEFAULT_ANALYZE_INTERVAL_SECS);
-    let since = since.unwrap_or_else(|| default_since(interval));
+        .context("config bundle has no 'therblig-finder' job")?;
+    let since = since.unwrap_or_else(|| default_since(job.interval_secs()));
     let to = chrono::Utc::now().to_rfc3339();
 
     let window = Window {
         from: &since,
         to: &to,
     };
-    let summary = run_find(&pool, &config, &runner, &web, window, dry_run).await?;
+    let summary = run_job(&pool, config.version, job, &runner, &web, window, dry_run).await?;
     print_summary(&summary, dry_run);
     Ok(())
 }
@@ -179,10 +179,15 @@ async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
             }
         };
         cached = Some(config.clone());
-        let interval = config
-            .job("therblig-finder")
-            .map(|j| j.interval_secs())
-            .unwrap_or(gilb_config::DEFAULT_ANALYZE_INTERVAL_SECS);
+        let Some(job) = config.job("therblig-finder") else {
+            tracing::error!("config has no 'therblig-finder' job; skipping tick");
+            tokio::time::sleep(Duration::from_secs(
+                gilb_config::DEFAULT_ANALYZE_INTERVAL_SECS,
+            ))
+            .await;
+            continue;
+        };
+        let interval = job.interval_secs();
         let to = chrono::Utc::now().to_rfc3339();
         let from = default_since(interval);
         let window = Window {
@@ -190,13 +195,14 @@ async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
             to: &to,
         };
 
-        match run_find(&pool, &config, &runner, &web, window, false).await {
+        match run_job(&pool, config.version, job, &runner, &web, window, false).await {
             Ok(summary) => tracing::info!(
-                "tick: outcome={:?} created={} deduped={} failed={}",
+                "tick: job={} outcome={:?} created={} deduped={} failed={}",
+                summary.run.job,
                 summary.run.outcome,
-                summary.run.therbligs_created.len(),
-                summary.run.therbligs_deduped,
-                summary.run.therbligs_failed,
+                summary.run.findings_created,
+                summary.run.findings_deduped,
+                summary.run.findings_failed,
             ),
             Err(e) => tracing::error!("tick failed: {e:#}"),
         }
@@ -215,24 +221,25 @@ fn print_summary(summary: &FindSummary, dry_run: bool) {
     let run = &summary.run;
     if dry_run {
         // No network was touched; show what would be pushed.
-        match serde_json::to_string_pretty(&summary.new_therbligs) {
+        match serde_json::to_string_pretty(&summary.findings) {
             Ok(json) => println!("{json}"),
-            Err(e) => eprintln!("failed to render therbligs: {e}"),
+            Err(e) => eprintln!("failed to render findings: {e}"),
         }
         eprintln!(
-            "[dry-run] outcome={:?} would_push={} deduped={} input_tokens={}",
+            "[dry-run] job={} outcome={:?} would_push={} input_tokens={}",
+            run.job,
             run.outcome,
-            summary.new_therbligs.len(),
-            run.therbligs_deduped,
+            summary.findings.len(),
             run.usage.input_tokens,
         );
     } else {
         eprintln!(
-            "outcome={:?} created={} deduped={} failed={} input_tokens={} cost_usd={:?}",
+            "job={} outcome={:?} created={} deduped={} failed={} input_tokens={} cost_usd={:?}",
+            run.job,
             run.outcome,
-            run.therbligs_created.len(),
-            run.therbligs_deduped,
-            run.therbligs_failed,
+            run.findings_created,
+            run.findings_deduped,
+            run.findings_failed,
             run.usage.input_tokens,
             run.total_cost_usd,
         );

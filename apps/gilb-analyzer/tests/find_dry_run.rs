@@ -7,7 +7,7 @@
 use std::os::unix::fs::PermissionsExt;
 
 use gilb_analyzer::claude::ClaudeRunner;
-use gilb_analyzer::pipeline::{run_find, Window};
+use gilb_analyzer::pipeline::{run_job, Window};
 use gilb_analyzer::run::Outcome;
 use gilb_analyzer::web::Web;
 use gilb_config::{AnalyzerConfig, Job, Trigger};
@@ -89,14 +89,17 @@ async fn find_dry_run_parses_and_accounts_without_network() {
     // Unreachable on purpose; dry-run must not touch it.
     let web = Web::new("http://127.0.0.1:0", "token");
 
+    let cfg = config();
+    let job = cfg.job("therblig-finder").unwrap();
     let window = Window { from: FROM, to: TO };
-    let summary = run_find(&pool, &config(), &runner, &web, window, true)
+    let summary = run_job(&pool, cfg.version, job, &runner, &web, window, true)
         .await
         .expect("find dry-run");
 
-    assert_eq!(summary.new_therbligs.len(), 1);
-    assert_eq!(summary.new_therbligs[0].title, "Investor research");
+    assert_eq!(summary.findings.len(), 1);
+    assert_eq!(summary.findings[0]["title"], "Investor research");
     assert_eq!(summary.run.outcome, Outcome::Produced);
+    assert_eq!(summary.run.job, "therblig-finder");
 
     // Run accounting: usage from claude, volume from the DB window.
     assert_eq!(summary.run.usage.input_tokens, 1234);
@@ -106,8 +109,8 @@ async fn find_dry_run_parses_and_accounts_without_network() {
     assert_eq!(summary.run.input.source.actions_total, 3);
     assert_eq!(summary.run.input.source.segments, 1); // one focus_change segment
                                                       // dry-run pushed nothing.
-    assert!(summary.run.therbligs_created.is_empty());
-    // a run_id is always generated (links Therbligs ↔ run for cost).
+    assert_eq!(summary.run.findings_created, 1); // would-create (dry-run)
+                                                 // a run_id is always generated (links findings ↔ run for cost).
     assert!(!summary.run.run_id.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);

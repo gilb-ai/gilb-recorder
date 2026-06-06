@@ -1,94 +1,41 @@
 //! gilb-web client — the one outbound path to the vendor.
 //!
-//! Only derived abstractions cross this boundary: Phase 1 fetches the titles
-//! already pushed in the window (dedup) and POSTs each new Therblig. Status
-//! handling follows the therblig-finder contract: `201` is success, `429`
-//! aborts the whole run, any other non-2xx is logged and the run *continues*
-//! (Phase 1 semantics — distinct from Phase 2, which stops on any failure).
+//! Only derived findings cross this boundary. The recorder is kind-agnostic: it
+//! POSTs each emitted finding as `{ "run_id", "item" }` to the job's `post_to`
+//! endpoint; gilb-web validates + dedups + stores per kind. Status handling:
+//! `2xx` = created, `409` = duplicate (server already had it), `429` = stop the
+//! run, any other non-2xx = log + continue to the next finding.
 //!
-//! HTTP methods need a server; the pure helpers (status mapping, dedup key,
-//! id/ref parsing) carry the logic and are unit-tested.
+//! HTTP needs a server; `post_status` carries the mapping and is unit-tested.
 
 use anyhow::{Context, Result};
-use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::run::RunRecord;
-use crate::therblig::Therblig;
 
-/// Minimal view of an already-pushed Therblig, for dedup.
-#[derive(Debug, Clone, Deserialize)]
-pub struct TherbligRef {
-    #[serde(default)]
-    pub id: Option<i64>,
-    pub title: String,
-}
-
-/// Outcome of a single Therblig POST.
+/// Outcome of a single finding POST.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PostOutcome {
-    /// 2xx — created; server-assigned id if we could read it.
-    Created { id: Option<i64> },
+    /// 2xx — server accepted a new finding.
+    Created,
+    /// 409 — server already had it (its dedup).
+    Duplicate,
     /// 429 — caller must stop the whole run.
     RateLimited,
-    /// Other non-2xx — caller logs and continues to the next Therblig.
+    /// Other non-2xx — caller logs and continues to the next finding.
     Failed { status: u16, body: String },
 }
 
-/// How to treat a POST status under Phase 1 semantics.
-#[derive(Debug, PartialEq, Eq)]
-enum PostStatus {
-    Created,
-    RateLimited,
-    Failed,
-}
-
-fn post_status(code: u16) -> PostStatus {
+fn post_status(code: u16) -> PostOutcome {
     match code {
-        200..=299 => PostStatus::Created,
-        429 => PostStatus::RateLimited,
-        _ => PostStatus::Failed,
-    }
-}
-
-/// Normalize a title into a dedup key: trimmed, case-insensitive
-/// (per therblig-finder's dedup contract).
-pub fn dedup_key(title: &str) -> String {
-    title.trim().to_lowercase()
-}
-
-/// Pull a server-assigned id out of a create response, accepting either a
-/// top-level `id` or a nested `{"therblig": {"id": …}}`.
-fn parse_created_id(body: &str) -> Option<i64> {
-    let v: serde_json::Value = serde_json::from_str(body).ok()?;
-    v.get("id").and_then(serde_json::Value::as_i64).or_else(|| {
-        v.get("therblig")
-            .and_then(|t| t.get("id"))
-            .and_then(serde_json::Value::as_i64)
-    })
-}
-
-/// Parse the dedup-list response, accepting a bare array or a
-/// `{"therbligs": [...]}` wrapper.
-fn parse_refs(body: &str) -> Result<Vec<TherbligRef>> {
-    let v: serde_json::Value =
-        serde_json::from_str(body).context("therbligs list is not valid JSON")?;
-    let arr = match v {
-        serde_json::Value::Array(a) => a,
-        serde_json::Value::Object(mut m) => match m.remove("therbligs") {
-            Some(serde_json::Value::Array(a)) => a,
-            _ => return Ok(Vec::new()),
+        200..=299 => PostOutcome::Created,
+        409 => PostOutcome::Duplicate,
+        429 => PostOutcome::RateLimited,
+        _ => PostOutcome::Failed {
+            status: code,
+            body: String::new(),
         },
-        _ => return Ok(Vec::new()),
-    };
-    let mut out = Vec::with_capacity(arr.len());
-    for item in arr {
-        // Skip entries without a title rather than failing the whole list.
-        if let Ok(r) = serde_json::from_value::<TherbligRef>(item) {
-            out.push(r);
-        }
     }
-    Ok(out)
 }
 
 /// Authenticated client for one gilb-web instance.
@@ -121,55 +68,36 @@ impl Web {
         format!("{}{}", self.base_url, path)
     }
 
-    /// GET the Therbligs already pushed in `[from, to]` (for dedup by title).
-    pub async fn list_therbligs(&self, from: &str, to: &str) -> Result<Vec<TherbligRef>> {
-        let url = self.url("/api/v1/therbligs");
-        let resp = self
-            .client
-            .get(&url)
-            .bearer_auth(&self.token)
-            .query(&[("from", from), ("to", to)])
-            .send()
-            .await
-            .with_context(|| format!("GET {url} failed"))?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if !status.is_success() {
-            anyhow::bail!("GET {url} returned HTTP {status}");
-        }
-        parse_refs(&body)
-    }
-
-    /// POST one Therblig (`{"therblig": …, "run_id": …}`). One object per
-    /// request; `run_id` links it to the run that produced it (for cost).
-    pub async fn post_therblig(&self, therblig: &Therblig, run_id: &str) -> Result<PostOutcome> {
-        let url = self.url("/api/v1/therbligs");
+    /// POST one finding to `post_to` as `{ "run_id", "item" }`. One object per
+    /// request; the server validates/dedups/stores it per its kind, and `run_id`
+    /// links it to the run that produced it (for cost).
+    pub async fn post_finding(
+        &self,
+        post_to: &str,
+        item: &Value,
+        run_id: &str,
+    ) -> Result<PostOutcome> {
+        let url = self.url(post_to);
         let resp = self
             .client
             .post(&url)
             .bearer_auth(&self.token)
-            .json(&json!({ "therblig": therblig, "run_id": run_id }))
+            .json(&json!({ "run_id": run_id, "item": item }))
             .send()
             .await
             .with_context(|| format!("POST {url} failed"))?;
         let code = resp.status().as_u16();
         match post_status(code) {
-            PostStatus::RateLimited => Ok(PostOutcome::RateLimited),
-            PostStatus::Created => {
+            PostOutcome::Failed { status, .. } => {
                 let body = resp.text().await.unwrap_or_default();
-                Ok(PostOutcome::Created {
-                    id: parse_created_id(&body),
-                })
+                Ok(PostOutcome::Failed { status, body })
             }
-            PostStatus::Failed => {
-                let body = resp.text().await.unwrap_or_default();
-                Ok(PostOutcome::Failed { status: code, body })
-            }
+            other => Ok(other),
         }
     }
 
-    /// POST one run-accounting record (`{"run": …}`). Lower-stakes than Therblig
-    /// push — the caller logs on failure rather than aborting.
+    /// POST one run-accounting record (`{"run": …}`). Lower-stakes than a finding
+    /// — the caller logs on failure rather than aborting.
     pub async fn post_run(&self, run: &RunRecord) -> Result<()> {
         let url = self.url("/api/v1/analyzer/runs");
         let resp = self
@@ -193,55 +121,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn status_mapping_follows_phase1_rules() {
-        assert_eq!(post_status(201), PostStatus::Created);
-        assert_eq!(post_status(200), PostStatus::Created);
-        assert_eq!(post_status(429), PostStatus::RateLimited);
-        assert_eq!(post_status(500), PostStatus::Failed);
-        assert_eq!(post_status(400), PostStatus::Failed);
-        assert_eq!(post_status(403), PostStatus::Failed);
-    }
-
-    #[test]
-    fn dedup_key_is_trimmed_and_lowercased() {
-        assert_eq!(dedup_key("  Investor Research  "), "investor research");
-        assert_eq!(dedup_key("investor research"), "investor research");
-    }
-
-    #[test]
-    fn created_id_top_level() {
-        assert_eq!(parse_created_id(r#"{"id": 42}"#), Some(42));
-    }
-
-    #[test]
-    fn created_id_nested() {
-        assert_eq!(parse_created_id(r#"{"therblig": {"id": 7}}"#), Some(7));
-    }
-
-    #[test]
-    fn created_id_absent() {
-        assert_eq!(parse_created_id(r#"{"ok": true}"#), None);
-        assert_eq!(parse_created_id("not json"), None);
-    }
-
-    #[test]
-    fn refs_from_bare_array() {
-        let refs = parse_refs(r#"[{"id":1,"title":"A"},{"title":"B"}]"#).unwrap();
-        assert_eq!(refs.len(), 2);
-        assert_eq!(refs[0].id, Some(1));
-        assert_eq!(refs[1].title, "B");
-    }
-
-    #[test]
-    fn refs_from_wrapper() {
-        let refs = parse_refs(r#"{"therbligs":[{"id":1,"title":"A"}]}"#).unwrap();
-        assert_eq!(refs.len(), 1);
-    }
-
-    #[test]
-    fn refs_skip_untitled_entries() {
-        let refs = parse_refs(r#"[{"id":1},{"id":2,"title":"ok"}]"#).unwrap();
-        assert_eq!(refs.len(), 1);
-        assert_eq!(refs[0].title, "ok");
+    fn status_mapping() {
+        assert_eq!(post_status(201), PostOutcome::Created);
+        assert_eq!(post_status(200), PostOutcome::Created);
+        assert_eq!(post_status(409), PostOutcome::Duplicate);
+        assert_eq!(post_status(429), PostOutcome::RateLimited);
+        assert!(matches!(
+            post_status(500),
+            PostOutcome::Failed { status: 500, .. }
+        ));
+        assert!(matches!(
+            post_status(400),
+            PostOutcome::Failed { status: 400, .. }
+        ));
     }
 }

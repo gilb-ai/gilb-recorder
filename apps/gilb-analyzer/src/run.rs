@@ -1,8 +1,9 @@
-//! Per-run accounting. Every `find` tick — whether it produced Therbligs, none,
-//! or errored — is recorded to gilb-web (`POST /api/v1/analyzer/runs`) with the
+//! Per-run accounting. Every job tick — whether it produced findings, none, or
+//! errored — is recorded to gilb-web (`POST /api/v1/analyzer/runs`) with the
 //! token usage Claude Code reported and the volume that was available to
-//! analyze. Token cost is per *run* (one agentic run yields 0..N Therbligs
-//! together); the server divides by the linked Therbligs to get cost-per-one.
+//! analyze. Token cost is per *run* (one agentic run yields 0..N findings
+//! together); the server divides by the linked findings (same `run_id`) to get
+//! cost-per-one. `job` tags which analysis kind this run was.
 
 use serde::Serialize;
 
@@ -23,7 +24,7 @@ pub enum Outcome {
 }
 
 /// Classify a run from what happened. `errored` wins (e.g. claude failed or the
-/// output didn't parse); otherwise `produced` if any Therblig was created, else
+/// output didn't parse); otherwise `produced` if any finding was created, else
 /// `empty`.
 pub fn classify_outcome(errored: bool, created: usize) -> Outcome {
     if errored {
@@ -47,10 +48,11 @@ pub struct InputBlock {
 /// One row of run accounting — serialized as `{"run": …}` for the endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunRecord {
-    /// Client-generated id linking this run to the Therbligs it produced (each
-    /// is POSTed with the same `run_id`). Lets a Therblig show its token cost
-    /// directly: run cost ÷ the run's Therbligs.
+    /// Client-generated id linking this run to the findings it produced (each is
+    /// POSTed with the same `run_id`) — lets a finding show its token cost.
     pub run_id: String,
+    /// Which job/kind this run was, e.g. `"therblig-finder"`.
+    pub job: String,
     pub started_at: String,
     pub finished_at: String,
     pub window_from: String,
@@ -67,9 +69,12 @@ pub struct RunRecord {
     pub total_cost_usd: Option<f64>,
     pub outcome: Outcome,
     pub input: InputBlock,
-    pub therbligs_created: Vec<i64>,
-    pub therbligs_deduped: i64,
-    pub therbligs_failed: i64,
+    /// How many findings the server accepted as new (201).
+    pub findings_created: i64,
+    /// How many were duplicates the server already had (409).
+    pub findings_deduped: i64,
+    /// How many failed to POST (non-2xx, non-409).
+    pub findings_failed: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
@@ -77,6 +82,7 @@ pub struct RunRecord {
 /// Inputs to assemble a [`RunRecord`] — keeps the constructor call readable.
 pub struct RunInputs<'a> {
     pub run_id: String,
+    pub job: String,
     pub started_at: String,
     pub finished_at: String,
     pub window_from: &'a str,
@@ -85,11 +91,8 @@ pub struct RunInputs<'a> {
     pub config_version: i64,
     pub source: SourceCounts,
     pub claude: Option<&'a ClaudeResult>,
-    /// Server-assigned ids of created Therbligs (those whose id we could read).
-    pub created: Vec<i64>,
-    /// How many Therbligs were created (or, in a dry run, *would* be) — drives
-    /// the outcome. May exceed `created.len()` when the server omits an id.
-    pub created_count: usize,
+    /// Findings created (or, in a dry run, *would* be) — drives the outcome.
+    pub created: i64,
     pub deduped: i64,
     pub failed: i64,
     pub error: Option<String>,
@@ -104,6 +107,7 @@ impl RunRecord {
         let llm_input_tokens = usage.input_tokens;
         RunRecord {
             run_id: inp.run_id,
+            job: inp.job,
             started_at: inp.started_at,
             finished_at: inp.finished_at,
             window_from: inp.window_from.to_string(),
@@ -114,15 +118,15 @@ impl RunRecord {
             duration_ms: inp.claude.and_then(|c| c.duration_ms),
             usage,
             total_cost_usd: inp.claude.and_then(|c| c.total_cost_usd),
-            outcome: classify_outcome(errored, inp.created_count),
+            outcome: classify_outcome(errored, inp.created.max(0) as usize),
             input: InputBlock {
                 window_secs: inp.window_secs,
                 source: inp.source,
                 llm_input_tokens,
             },
-            therbligs_created: inp.created,
-            therbligs_deduped: inp.deduped,
-            therbligs_failed: inp.failed,
+            findings_created: inp.created,
+            findings_deduped: inp.deduped,
+            findings_failed: inp.failed,
             error: inp.error,
         }
     }
@@ -156,9 +160,10 @@ mod tests {
         }
     }
 
-    fn inputs<'a>(c: Option<&'a ClaudeResult>, created: Vec<i64>) -> RunInputs<'a> {
+    fn inputs(c: Option<&ClaudeResult>, created: i64) -> RunInputs<'_> {
         RunInputs {
             run_id: "test-run-id".to_string(),
+            job: "therblig-finder".to_string(),
             started_at: "2026-06-06T00:00:00Z".to_string(),
             finished_at: "2026-06-06T00:01:00Z".to_string(),
             window_from: "2026-06-06T00:00:00Z",
@@ -167,7 +172,6 @@ mod tests {
             config_version: 7,
             source: SourceCounts::default(),
             claude: c,
-            created_count: created.len(),
             created,
             deduped: 0,
             failed: 0,
@@ -178,25 +182,26 @@ mod tests {
     #[test]
     fn assembles_produced_run_with_usage() {
         let c = claude(48211, false);
-        let rec = RunRecord::assemble(inputs(Some(&c), vec![12, 13]));
+        let rec = RunRecord::assemble(inputs(Some(&c), 2));
         assert_eq!(rec.outcome, Outcome::Produced);
         assert_eq!(rec.usage.input_tokens, 48211);
         assert_eq!(rec.input.llm_input_tokens, 48211);
-        assert_eq!(rec.therbligs_created, vec![12, 13]);
+        assert_eq!(rec.findings_created, 2);
+        assert_eq!(rec.job, "therblig-finder");
         assert_eq!(rec.model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
     fn empty_run_still_records_usage() {
         let c = claude(5000, false);
-        let rec = RunRecord::assemble(inputs(Some(&c), vec![]));
+        let rec = RunRecord::assemble(inputs(Some(&c), 0));
         assert_eq!(rec.outcome, Outcome::Empty);
         assert_eq!(rec.usage.input_tokens, 5000);
     }
 
     #[test]
     fn errored_run_without_claude_has_zero_usage() {
-        let mut inp = inputs(None, vec![]);
+        let mut inp = inputs(None, 0);
         inp.error = Some("claude timed out".to_string());
         let rec = RunRecord::assemble(inp);
         assert_eq!(rec.outcome, Outcome::Error);
@@ -207,12 +212,13 @@ mod tests {
     #[test]
     fn serializes_under_run_key_shape() {
         let c = claude(100, false);
-        let rec = RunRecord::assemble(inputs(Some(&c), vec![1]));
+        let rec = RunRecord::assemble(inputs(Some(&c), 1));
         let v = serde_json::to_value(&rec).unwrap();
         assert_eq!(v["run_id"], "test-run-id");
+        assert_eq!(v["job"], "therblig-finder");
         assert_eq!(v["outcome"], "produced");
+        assert_eq!(v["findings_created"], 1);
         assert_eq!(v["input"]["llm_input_tokens"], 100);
         assert_eq!(v["usage"]["input_tokens"], 100);
-        assert!(v["input"].get("mcp").is_none());
     }
 }
