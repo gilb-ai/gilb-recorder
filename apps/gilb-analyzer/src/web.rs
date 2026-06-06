@@ -140,14 +140,15 @@ impl Web {
         parse_refs(&body)
     }
 
-    /// POST one Therblig (`{"therblig": …}`). One object per request.
-    pub async fn post_therblig(&self, therblig: &Therblig) -> Result<PostOutcome> {
+    /// POST one Therblig (`{"therblig": …, "run_id": …}`). One object per
+    /// request; `run_id` links it to the run that produced it (for cost).
+    pub async fn post_therblig(&self, therblig: &Therblig, run_id: &str) -> Result<PostOutcome> {
         let url = self.url("/api/v1/therbligs");
         let resp = self
             .client
             .post(&url)
             .bearer_auth(&self.token)
-            .json(&json!({ "therblig": therblig }))
+            .json(&json!({ "therblig": therblig, "run_id": run_id }))
             .send()
             .await
             .with_context(|| format!("POST {url} failed"))?;

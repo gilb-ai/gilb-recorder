@@ -83,6 +83,7 @@ pub async fn run_find(
     dry_run: bool,
 ) -> Result<FindSummary> {
     let Window { from, to } = window;
+    let run_id = uuid::Uuid::new_v4().to_string();
     let started_at = chrono::Utc::now().to_rfc3339();
 
     // Volume available in the window (form A) — computed independently of the LLM.
@@ -125,7 +126,7 @@ pub async fn run_find(
                     if dry_run {
                         created_count = new.len();
                     } else {
-                        let (ids, cnt, f, rate_limited) = push_all(web, &new).await;
+                        let (ids, cnt, f, rate_limited) = push_all(web, &new, &run_id).await;
                         created_ids = ids;
                         created_count = cnt;
                         failed = f;
@@ -153,6 +154,7 @@ pub async fn run_find(
     };
 
     let run = RunRecord::assemble(RunInputs {
+        run_id,
         started_at,
         finished_at,
         window_from: from,
@@ -189,14 +191,15 @@ async fn fetch_existing_keys(web: &Web, from: &str, to: &str) -> HashSet<String>
     }
 }
 
-/// Push each new Therblig one at a time. Returns (created ids, created count,
-/// failed count, rate_limited). Stops on 429; logs and continues on other errors.
-async fn push_all(web: &Web, new: &[Therblig]) -> (Vec<i64>, usize, i64, bool) {
+/// Push each new Therblig one at a time, stamping `run_id` so each links to its
+/// run. Returns (created ids, created count, failed count, rate_limited). Stops
+/// on 429; logs and continues on other errors.
+async fn push_all(web: &Web, new: &[Therblig], run_id: &str) -> (Vec<i64>, usize, i64, bool) {
     let mut ids = Vec::new();
     let mut created = 0usize;
     let mut failed = 0i64;
     for t in new {
-        match web.post_therblig(t).await {
+        match web.post_therblig(t, run_id).await {
             Ok(PostOutcome::Created { id }) => {
                 created += 1;
                 if let Some(id) = id {

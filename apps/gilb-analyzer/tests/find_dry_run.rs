@@ -107,6 +107,8 @@ async fn find_dry_run_parses_and_accounts_without_network() {
     assert_eq!(summary.run.input.source.segments, 1); // one focus_change segment
                                                       // dry-run pushed nothing.
     assert!(summary.run.therbligs_created.is_empty());
+    // a run_id is always generated (links Therbligs ↔ run for cost).
+    assert!(!summary.run.run_id.is_empty());
 
     let _ = std::fs::remove_dir_all(&dir);
 }

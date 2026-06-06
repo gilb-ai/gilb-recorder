@@ -47,6 +47,10 @@ pub struct InputBlock {
 /// One row of run accounting — serialized as `{"run": …}` for the endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunRecord {
+    /// Client-generated id linking this run to the Therbligs it produced (each
+    /// is POSTed with the same `run_id`). Lets a Therblig show its token cost
+    /// directly: run cost ÷ the run's Therbligs.
+    pub run_id: String,
     pub started_at: String,
     pub finished_at: String,
     pub window_from: String,
@@ -72,6 +76,7 @@ pub struct RunRecord {
 
 /// Inputs to assemble a [`RunRecord`] — keeps the constructor call readable.
 pub struct RunInputs<'a> {
+    pub run_id: String,
     pub started_at: String,
     pub finished_at: String,
     pub window_from: &'a str,
@@ -98,6 +103,7 @@ impl RunRecord {
         let usage = inp.claude.map(|c| c.usage.clone()).unwrap_or_default();
         let llm_input_tokens = usage.input_tokens;
         RunRecord {
+            run_id: inp.run_id,
             started_at: inp.started_at,
             finished_at: inp.finished_at,
             window_from: inp.window_from.to_string(),
@@ -152,6 +158,7 @@ mod tests {
 
     fn inputs<'a>(c: Option<&'a ClaudeResult>, created: Vec<i64>) -> RunInputs<'a> {
         RunInputs {
+            run_id: "test-run-id".to_string(),
             started_at: "2026-06-06T00:00:00Z".to_string(),
             finished_at: "2026-06-06T00:01:00Z".to_string(),
             window_from: "2026-06-06T00:00:00Z",
@@ -202,6 +209,7 @@ mod tests {
         let c = claude(100, false);
         let rec = RunRecord::assemble(inputs(Some(&c), vec![1]));
         let v = serde_json::to_value(&rec).unwrap();
+        assert_eq!(v["run_id"], "test-run-id");
         assert_eq!(v["outcome"], "produced");
         assert_eq!(v["input"]["llm_input_tokens"], 100);
         assert_eq!(v["usage"]["input_tokens"], 100);
