@@ -8,23 +8,36 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use sqlx::{Row, SqlitePool};
 
-use crate::redact::ActionRow;
+/// One row of the `actions` table, as the analyzer reads it for volume counts.
+#[derive(Debug, Clone, Default)]
+pub struct ActionRow {
+    pub captured_at: String,
+    pub kind: String,
+    pub app_name: Option<String>,
+    pub app_bundle_id: Option<String>,
+    pub window_title: Option<String>,
+    pub browser_url: Option<String>,
+    pub element_role: Option<String>,
+    pub element_name: Option<String>,
+    pub element_value: Option<String>,
+    pub text_content: Option<String>,
+    pub password_flag: bool,
+    pub extra_json: Option<serde_json::Value>,
+}
 
 /// Counts describing how much was available to analyze in the window — the
-/// denominator for "tokens spent per Therblig". Sizes/counts only, never
-/// content, so it is safe to report to gilb-web.
+/// denominator for "tokens spent per finding". Sizes/counts only, never content,
+/// so it is safe to report to gilb-web.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct SourceCounts {
     pub actions_total: i64,
     pub actions_by_kind: BTreeMap<String, i64>,
     pub apps_distinct: i64,
     pub tree_snapshots: i64,
-    pub segments: i64,
     pub approx_raw_bytes: i64,
 }
 
-/// Load action rows in `[from, to)` ordered by time. `to` may be an upper bound
-/// far in the future to mean "until now".
+/// Load action rows in `[from, to)` ordered by time.
 pub async fn load_rows(db: &SqlitePool, from: &str, to: &str) -> Result<Vec<ActionRow>> {
     let rows = sqlx::query(
         r#"
@@ -77,9 +90,9 @@ pub async fn count_tree_snapshots(db: &SqlitePool, from: &str, to: &str) -> Resu
     Ok(row.try_get::<i64, _>("n").unwrap_or(0))
 }
 
-/// Compute the window's source counts from already-loaded rows + the segment
-/// count from `redact()` + the tree-snapshot count. Pure (no IO) for testing.
-pub fn source_counts(rows: &[ActionRow], segments: usize, tree_snapshots: i64) -> SourceCounts {
+/// Compute the window's source counts from already-loaded rows + the
+/// tree-snapshot count. Pure (no IO) for testing.
+pub fn source_counts(rows: &[ActionRow], tree_snapshots: i64) -> SourceCounts {
     let mut by_kind: BTreeMap<String, i64> = BTreeMap::new();
     let mut apps: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     let mut approx_raw_bytes: i64 = 0;
@@ -99,7 +112,6 @@ pub fn source_counts(rows: &[ActionRow], segments: usize, tree_snapshots: i64) -
         actions_by_kind: by_kind,
         apps_distinct: apps.len() as i64,
         tree_snapshots,
-        segments: segments as i64,
         approx_raw_bytes,
     }
 }
@@ -126,13 +138,12 @@ mod tests {
             row("text", Some("Notion"), Some("worldwide")),
             row("focus_change", None, None),
         ];
-        let c = source_counts(&rows, 2, 5);
+        let c = source_counts(&rows, 5);
         assert_eq!(c.actions_total, 4);
         assert_eq!(c.actions_by_kind.get("text"), Some(&2));
         assert_eq!(c.actions_by_kind.get("click"), Some(&1));
         assert_eq!(c.apps_distinct, 2);
         assert_eq!(c.tree_snapshots, 5);
-        assert_eq!(c.segments, 2);
         assert_eq!(
             c.approx_raw_bytes,
             ("hello".len() + "worldwide".len()) as i64

@@ -1,16 +1,13 @@
 //! Shannon CLI.
 //!
-//! - `slice` — reduce + redact recent activity into a de-identified slice (the
-//!   original Layer-1 dry-run; works fully local).
 //! - `find` — run the therblig-finder job's prompt as `claude -p` over gilb-mcp,
 //!   parse the emitted findings, POST each to the job's endpoint, record the run.
 //!   `--dry-run` does all of it except touch the network. (gilb-web validates +
 //!   dedups per kind.)
 //! - `run` — loop the job on its server-controlled cadence (in-process daemon).
 //!
-//! Everything but `slice` needs enterprise credentials
-//! (`gilb_config::load_credentials`); without them only `slice` is available
-//! (Tier-1, local-only).
+//! Both need enterprise credentials (`gilb_config::load_credentials`); without
+//! them the analyzer is inert (Tier-1, local-only capture continues elsewhere).
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -22,14 +19,11 @@ use gilb_analyzer::claude::ClaudeRunner;
 use gilb_analyzer::config::ensure_config;
 use gilb_analyzer::pipeline::{run_job, FindSummary, Window};
 use gilb_analyzer::web::Web;
-use gilb_analyzer::{db, redact};
-
-const FAR_FUTURE: &str = "9999-12-31T23:59:59Z";
 
 #[derive(Parser, Debug)]
 #[command(
     name = "gilb-analyzer",
-    about = "Shannon — reduce/redact activity and find Therbligs"
+    about = "Shannon — find Therbligs via claude over gilb-mcp"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -38,18 +32,6 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Reduce + redact recent activity into a de-identified slice (local).
-    Slice {
-        /// DB path (default: ~/.gilb/db.sqlite).
-        #[arg(long)]
-        db: Option<PathBuf>,
-        /// Only actions at/after this ISO8601 time (default: last 1h).
-        #[arg(long)]
-        since: Option<String>,
-        /// Pretty-print the slice JSON.
-        #[arg(long)]
-        pretty: bool,
-    },
     /// Run the analysis job over a window and POST findings to gilb-web.
     Find {
         /// DB path (default: ~/.gilb/db.sqlite).
@@ -82,7 +64,6 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     match cli.cmd {
-        Command::Slice { db, since, pretty } => cmd_slice(db, since, pretty).await,
         Command::Find { db, since, dry_run } => cmd_find(db, since, dry_run).await,
         Command::Run { db } => cmd_run(db).await,
     }
@@ -102,20 +83,6 @@ fn default_since(secs: u64) -> String {
     (chrono::Utc::now() - chrono::Duration::seconds(secs as i64)).to_rfc3339()
 }
 
-async fn cmd_slice(db: Option<PathBuf>, since: Option<String>, pretty: bool) -> Result<()> {
-    let pool = open_db(db).await?;
-    let since = since.unwrap_or_else(|| default_since(3600));
-    let rows = db::load_rows(&pool, &since, FAR_FUTURE).await?;
-    let slice = redact(&rows);
-    let json = if pretty {
-        serde_json::to_string_pretty(&slice)?
-    } else {
-        serde_json::to_string(&slice)?
-    };
-    println!("{json}");
-    Ok(())
-}
-
 /// Build a runner from env: `GILB_CLAUDE_BIN` (default `claude`),
 /// `GILB_MCP_CONFIG` (path to the gilb-mcp MCP config), `GILB_CLAUDE_MODEL`.
 fn runner_from_env() -> ClaudeRunner {
@@ -132,7 +99,7 @@ fn runner_from_env() -> ClaudeRunner {
 
 async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> Result<()> {
     let Some(creds) = gilb_config::load_credentials()? else {
-        eprintln!("not enterprise-configured (no credentials); only `slice` is available locally");
+        eprintln!("not enterprise-configured (no credentials); the analyzer is inactive");
         return Ok(());
     };
     let pool = open_db(db).await?;

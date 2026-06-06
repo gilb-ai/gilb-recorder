@@ -12,7 +12,6 @@ use serde_json::Value;
 use crate::claude::{ClaudeResult, ClaudeRunner};
 use crate::db;
 use crate::findings::parse_findings;
-use crate::redact::redact;
 use crate::run::{RunInputs, RunRecord};
 use crate::web::{PostOutcome, Web};
 
@@ -66,9 +65,8 @@ pub async fn run_job(
 
     // Volume available in the window (form A) — computed independently of the LLM.
     let rows = db::load_rows(db, from, to).await?;
-    let segments = redact(&rows).segments.len();
     let trees = db::count_tree_snapshots(db, from, to).await.unwrap_or(0);
-    let source = db::source_counts(&rows, segments, trees);
+    let source = db::source_counts(&rows, trees);
 
     let full = build_trigger(&job.prompt, from, to);
     let claude_res = runner.run(&full).await;

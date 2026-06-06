@@ -107,8 +107,6 @@ async fn find_dry_run_parses_and_accounts_without_network() {
     assert_eq!(summary.run.config_version, 9);
     assert_eq!(summary.run.input.window_secs, 3600);
     assert_eq!(summary.run.input.source.actions_total, 3);
-    assert_eq!(summary.run.input.source.segments, 1); // one focus_change segment
-                                                      // dry-run pushed nothing.
     assert_eq!(summary.run.findings_created, 1); // would-create (dry-run)
                                                  // a run_id is always generated (links findings ↔ run for cost).
     assert!(!summary.run.run_id.is_empty());
