@@ -18,6 +18,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 
+mod logging;
+
 use gilb_analyzer::claude::ClaudeRunner;
 use gilb_analyzer::config::ensure_config;
 use gilb_analyzer::pipeline::{run_job, FindSummary, Window};
@@ -79,13 +81,8 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+    // Held until the process exits so the file appender flushes on shutdown.
+    let _log_guard = logging::init_tracing();
 
     let cli = Cli::parse();
     match cli.cmd {
