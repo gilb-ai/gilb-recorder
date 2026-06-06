@@ -9,6 +9,9 @@ use serde::Serialize;
 use crate::claude::{ClaudeResult, Usage};
 use crate::db::SourceCounts;
 
+// Token usage is reported with the same field names Claude Code emits, so
+// [`crate::claude::Usage`] doubles as the wire shape — no separate type needed.
+
 /// What a run produced — recorded so empty/error runs (their tokens "spent for
 /// nothing") are visible too.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -32,42 +35,13 @@ pub fn classify_outcome(errored: bool, created: usize) -> Outcome {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct UsageOut {
-    pub input_tokens: i64,
-    pub output_tokens: i64,
-    pub cache_read_tokens: i64,
-    pub cache_creation_tokens: i64,
-}
-
-impl From<&Usage> for UsageOut {
-    fn from(u: &Usage) -> Self {
-        Self {
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            cache_read_tokens: u.cache_read_tokens,
-            cache_creation_tokens: u.cache_creation_tokens,
-        }
-    }
-}
-
-/// MCP tool I/O (volume form C) — populated later from stream-json. `None` for
-/// the PoC.
-#[derive(Debug, Clone, Serialize)]
-pub struct McpCounts {
-    pub tool_calls: i64,
-    pub rows_returned: i64,
-    pub approx_bytes_returned: i64,
-}
-
-/// The `input` block: how much data the run had / used.
+/// The `input` block: how much data the run had / used. (Form C — MCP tool I/O
+/// from stream-json — lands here later; omitted for now.)
 #[derive(Debug, Clone, Serialize)]
 pub struct InputBlock {
     pub window_secs: i64,
     pub source: SourceCounts,
     pub llm_input_tokens: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<McpCounts>,
 }
 
 /// One row of run accounting — serialized as `{"run": …}` for the endpoint.
@@ -84,7 +58,7 @@ pub struct RunRecord {
     pub num_turns: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<i64>,
-    pub usage: UsageOut,
+    pub usage: Usage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_cost_usd: Option<f64>,
     pub outcome: Outcome,
@@ -121,15 +95,7 @@ impl RunRecord {
     /// subprocess itself failed (no usage available).
     pub fn assemble(inp: RunInputs<'_>) -> Self {
         let errored = inp.error.is_some() || inp.claude.map(|c| c.is_error).unwrap_or(false);
-        let usage = inp
-            .claude
-            .map(|c| UsageOut::from(&c.usage))
-            .unwrap_or(UsageOut {
-                input_tokens: 0,
-                output_tokens: 0,
-                cache_read_tokens: 0,
-                cache_creation_tokens: 0,
-            });
+        let usage = inp.claude.map(|c| c.usage.clone()).unwrap_or_default();
         let llm_input_tokens = usage.input_tokens;
         RunRecord {
             started_at: inp.started_at,
@@ -147,7 +113,6 @@ impl RunRecord {
                 window_secs: inp.window_secs,
                 source: inp.source,
                 llm_input_tokens,
-                mcp: None,
             },
             therbligs_created: inp.created,
             therbligs_deduped: inp.deduped,

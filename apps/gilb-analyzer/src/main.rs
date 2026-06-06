@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 
 use gilb_analyzer::claude::ClaudeRunner;
 use gilb_analyzer::config::ensure_config;
-use gilb_analyzer::pipeline::{run_find, FindSummary};
+use gilb_analyzer::pipeline::{run_find, FindSummary, Window};
 use gilb_analyzer::web::Web;
 use gilb_analyzer::{db, redact};
 
@@ -142,7 +142,11 @@ async fn cmd_find(db: Option<PathBuf>, since: Option<String>, dry_run: bool) -> 
     let since = since.unwrap_or_else(|| default_since(config.interval_secs()));
     let to = chrono::Utc::now().to_rfc3339();
 
-    let summary = run_find(&pool, &config, &runner, &web, &since, &to, dry_run).await?;
+    let window = Window {
+        from: &since,
+        to: &to,
+    };
+    let summary = run_find(&pool, &config, &runner, &web, window, dry_run).await?;
     print_summary(&summary, dry_run);
     Ok(())
 }
@@ -168,8 +172,12 @@ async fn cmd_run(db: Option<PathBuf>) -> Result<()> {
         let interval = config.interval_secs();
         let to = chrono::Utc::now().to_rfc3339();
         let from = default_since(interval);
+        let window = Window {
+            from: &from,
+            to: &to,
+        };
 
-        match run_find(&pool, &config, &runner, &web, &from, &to, false).await {
+        match run_find(&pool, &config, &runner, &web, window, false).await {
             Ok(summary) => tracing::info!(
                 "tick: outcome={:?} created={} deduped={} failed={}",
                 summary.run.outcome,

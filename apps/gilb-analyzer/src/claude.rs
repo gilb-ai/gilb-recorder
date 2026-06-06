@@ -16,14 +16,15 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Default wall-clock cap for one agentic run.
 pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Token usage for one run, normalized from Claude Code's `usage` block.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// Token usage for one run, normalized from Claude Code's `usage` block. Field
+/// names double as the gilb-web run-record wire shape (see `run`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct Usage {
     pub input_tokens: i64,
     pub output_tokens: i64,
@@ -32,7 +33,7 @@ pub struct Usage {
 }
 
 /// Parsed outcome of a `claude -p --output-format json` invocation.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ClaudeResult {
     /// The model's text answer (the `result` field) — fed to `parse_therbligs`.
     pub text: String,
@@ -108,7 +109,7 @@ pub fn parse_result(stdout: &str) -> Result<ClaudeResult> {
 /// Spawns `claude -p` and captures its result. Configurable so an integration
 /// test can point `bin` at a fake; in production `bin` defaults to `claude` on
 /// `PATH`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ClaudeRunner {
     bin: String,
     mcp_config: Option<PathBuf>,
@@ -156,11 +157,6 @@ impl ClaudeRunner {
 
     pub fn skip_permissions(mut self, skip: bool) -> Self {
         self.skip_permissions = skip;
-        self
-    }
-
-    pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
         self
     }
 

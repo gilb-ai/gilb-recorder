@@ -92,11 +92,20 @@ fn parse_refs(body: &str) -> Result<Vec<TherbligRef>> {
 }
 
 /// Authenticated client for one gilb-web instance.
-#[derive(Debug, Clone)]
 pub struct Web {
     client: reqwest::Client,
     base_url: String,
     token: String,
+}
+
+// Manual Debug so the bearer token never lands in logs.
+impl std::fmt::Debug for Web {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Web")
+            .field("base_url", &self.base_url)
+            .field("token", &"<redacted>")
+            .finish()
+    }
 }
 
 impl Web {

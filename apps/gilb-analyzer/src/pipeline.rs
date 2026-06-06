@@ -56,6 +56,13 @@ pub struct FindSummary {
     pub new_therbligs: Vec<Therblig>,
 }
 
+/// The RFC3339 `[from, to]` time window a `find` run analyzes.
+#[derive(Debug, Clone, Copy)]
+pub struct Window<'a> {
+    pub from: &'a str,
+    pub to: &'a str,
+}
+
 fn window_secs(from: &str, to: &str) -> i64 {
     let parse = |s: &str| chrono::DateTime::parse_from_rfc3339(s).ok();
     match (parse(from), parse(to)) {
@@ -64,19 +71,18 @@ fn window_secs(from: &str, to: &str) -> i64 {
     }
 }
 
-/// Run Phase 1 over `[from, to]`. In `dry_run` no network is touched: dedup-fetch
+/// Run Phase 1 over the window. In `dry_run` no network is touched: dedup-fetch
 /// and pushes are skipped and the run is not posted; the summary shows what would
 /// have happened.
-#[allow(clippy::too_many_arguments)]
 pub async fn run_find(
     db: &sqlx::SqlitePool,
     config: &AnalyzerConfig,
     runner: &ClaudeRunner,
     web: &Web,
-    from: &str,
-    to: &str,
+    window: Window<'_>,
     dry_run: bool,
 ) -> Result<FindSummary> {
+    let Window { from, to } = window;
     let started_at = chrono::Utc::now().to_rfc3339();
 
     // Volume available in the window (form A) — computed independently of the LLM.

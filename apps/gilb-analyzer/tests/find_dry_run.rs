@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 
 use gilb_analyzer::claude::ClaudeRunner;
-use gilb_analyzer::pipeline::run_find;
+use gilb_analyzer::pipeline::{run_find, Window};
 use gilb_analyzer::run::Outcome;
 use gilb_analyzer::web::Web;
 use gilb_config::AnalyzerConfig;
@@ -89,7 +89,8 @@ async fn find_dry_run_parses_and_accounts_without_network() {
     // Unreachable on purpose; dry-run must not touch it.
     let web = Web::new("http://127.0.0.1:0", "token");
 
-    let summary = run_find(&pool, &config(), &runner, &web, FROM, TO, true)
+    let window = Window { from: FROM, to: TO };
+    let summary = run_find(&pool, &config(), &runner, &web, window, true)
         .await
         .expect("find dry-run");
 
