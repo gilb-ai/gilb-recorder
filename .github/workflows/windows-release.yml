@@ -1,8 +1,10 @@
 name: Windows release (signed)
 
-# Signed Windows build. Imports the code-signing PFX from secrets, derives its
-# thumbprint, and builds + signs the .exe and .msi. Runs on tags (v*) or
-# manual dispatch — NOT on every push, so secrets aren't exposed to PR builds.
+# Signed Windows build via a local PFX cert. Manual-dispatch ONLY: the tagged
+# "Release" workflow already builds and signs Windows (SSL.com eSigner), so this
+# is an opt-in alternative — run it by hand once WINDOWS_CERT_* secrets are set.
+# It is intentionally NOT tag-triggered, so it doesn't fail every release while
+# the PFX secrets are unset.
 #
 # Required repo secrets:
 #   WINDOWS_CERT_PFX_BASE64  base64 of the .pfx (Convert.ToBase64String of the file bytes)
@@ -10,8 +12,6 @@ name: Windows release (signed)
 
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
 
 jobs:
   build:
