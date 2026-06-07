@@ -1,0 +1,7 @@
+# Build ggml (via whisper-rs-sys) WITHOUT `-march/-mcpu=native` so the bundled
+# whisper.cpp is portable: it compiles on the M1 CI runner (no i8mm) and runs on
+# every Apple Silicon / x86 baseline, instead of baking in host-only CPU
+# instructions that break the build on M1 and would crash on older CPUs.
+# whisper-rs-sys 0.15+ forwards GGML_* env vars to its CMake build.
+[env]
+GGML_NATIVE = "OFF"

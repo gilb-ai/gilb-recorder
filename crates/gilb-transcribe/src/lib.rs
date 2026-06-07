@@ -303,11 +303,9 @@ mod local {
     impl LocalTranscriber {
         /// Load `model_path` (a ggml model) for transcription in `language`.
         pub fn new(model_path: &Path, language: impl Into<String>) -> Result<Self> {
-            let ctx = WhisperContext::new_with_params(
-                &model_path.to_string_lossy(),
-                WhisperContextParameters::default(),
-            )
-            .with_context(|| format!("load whisper model {}", model_path.display()))?;
+            let ctx =
+                WhisperContext::new_with_params(model_path, WhisperContextParameters::default())
+                    .with_context(|| format!("load whisper model {}", model_path.display()))?;
             Ok(Self {
                 ctx: Arc::new(ctx),
                 language: language.into(),
@@ -343,17 +341,21 @@ mod local {
         params.set_print_timestamps(false);
         state.full(params, samples).context("whisper full")?;
 
-        let n = state.full_n_segments().context("n segments")?;
-        let mut out = Vec::with_capacity(n as usize);
+        // whisper-rs 0.16: segment access is via WhisperSegment objects.
+        let n = state.full_n_segments();
+        let mut out = Vec::with_capacity(n.max(0) as usize);
         for i in 0..n {
-            let text = state
-                .full_get_segment_text(i)
-                .unwrap_or_default()
-                .trim()
-                .to_string();
+            let Some(seg) = state.get_segment(i) else {
+                continue;
+            };
+            let text = seg
+                .to_str_lossy()
+                .map(|s| s.trim().to_string())
+                .unwrap_or_default();
+            // Timestamps are in centiseconds (10ms units) → seconds.
             out.push(Utterance {
-                t0: state.full_get_segment_t0(i).unwrap_or(0) as f32 / 100.0,
-                t1: state.full_get_segment_t1(i).unwrap_or(0) as f32 / 100.0,
+                t0: seg.start_timestamp() as f32 / 100.0,
+                t1: seg.end_timestamp() as f32 / 100.0,
                 text,
             });
         }

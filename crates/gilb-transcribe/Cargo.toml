@@ -23,10 +23,13 @@ async-trait = "0.1"
 hound = { version = "3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-whisper-rs = { version = "0.14", optional = true, features = ["metal"] }
+# 0.16 pulls whisper-rs-sys 0.15, whose build script forwards GGML_* env vars to
+# the ggml CMake build — letting the release set GGML_NATIVE=OFF for a portable
+# (no-i8mm) binary that compiles on the M1 CI runner and runs on all Apple Silicon.
+whisper-rs = { version = "0.16", optional = true, features = ["metal"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-whisper-rs = { version = "0.14", optional = true }
+whisper-rs = { version = "0.16", optional = true }
 
 [features]
 local-whisper = ["dep:whisper-rs", "dep:hound"]
