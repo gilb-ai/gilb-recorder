@@ -103,7 +103,6 @@ async fn find_dry_run_parses_and_accounts_without_network() {
 
     // Run accounting: usage from claude, volume from the DB window.
     assert_eq!(summary.run.usage.input_tokens, 1234);
-    assert_eq!(summary.run.input.llm_input_tokens, 1234);
     assert_eq!(summary.run.config_version, 9);
     assert_eq!(summary.run.input.window_secs, 3600);
     assert_eq!(summary.run.input.source.actions_total, 3);

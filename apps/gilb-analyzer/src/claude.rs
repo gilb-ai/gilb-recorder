@@ -48,10 +48,7 @@ pub struct ModelUsage {
     pub output_tokens: i64,
     pub cache_read_tokens: i64,
     pub cache_creation_tokens: i64,
-    pub web_search_requests: i64,
     pub cost_usd: f64,
-    pub context_window: i64,
-    pub max_output_tokens: i64,
 }
 
 /// Parsed outcome of a `claude -p --output-format json` invocation.
@@ -108,7 +105,9 @@ struct WireUsage {
     cache_creation_input_tokens: i64,
 }
 
-/// One `modelUsage` entry as Claude Code emits it (camelCase).
+/// One `modelUsage` entry as Claude Code emits it (camelCase). Claude also
+/// reports `webSearchRequests`, `contextWindow`, `maxOutputTokens` per model;
+/// we don't track those (not token usage), so they're ignored on deserialize.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct WireModelUsage {
@@ -120,14 +119,8 @@ struct WireModelUsage {
     cache_read_input_tokens: i64,
     #[serde(default)]
     cache_creation_input_tokens: i64,
-    #[serde(default)]
-    web_search_requests: i64,
     #[serde(default, rename = "costUSD")]
     cost_usd: f64,
-    #[serde(default)]
-    context_window: i64,
-    #[serde(default)]
-    max_output_tokens: i64,
 }
 
 impl From<WireModelUsage> for ModelUsage {
@@ -137,10 +130,7 @@ impl From<WireModelUsage> for ModelUsage {
             output_tokens: w.output_tokens,
             cache_read_tokens: w.cache_read_input_tokens,
             cache_creation_tokens: w.cache_creation_input_tokens,
-            web_search_requests: w.web_search_requests,
             cost_usd: w.cost_usd,
-            context_window: w.context_window,
-            max_output_tokens: w.max_output_tokens,
         }
     }
 }
@@ -440,7 +430,6 @@ mod tests {
         assert_eq!(opus.cache_read_tokens, 15821);
         assert_eq!(opus.cache_creation_tokens, 2275);
         assert_eq!(opus.cost_usd, 0.0349);
-        assert_eq!(opus.context_window, 1_000_000);
         // Primary model = the entry with the most tokens (opus, via cache reads).
         assert_eq!(r.model.as_deref(), Some("claude-opus-4-8[1m]"));
     }

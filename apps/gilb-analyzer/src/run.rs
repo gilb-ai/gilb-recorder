@@ -39,12 +39,12 @@ pub fn classify_outcome(errored: bool, created: usize) -> Outcome {
 }
 
 /// The `input` block: how much data the run had / used. (Form C — MCP tool I/O
-/// from stream-json — lands here later; omitted for now.)
+/// from stream-json — lands here later; omitted for now.) Token counts live in
+/// `usage` / `model_usage`, not here.
 #[derive(Debug, Clone, Serialize)]
 pub struct InputBlock {
     pub window_secs: i64,
     pub source: SourceCounts,
-    pub llm_input_tokens: i64,
 }
 
 /// One row of run accounting — serialized as `{"run": …}` for the endpoint.
@@ -110,7 +110,6 @@ impl RunRecord {
     pub fn assemble(inp: RunInputs<'_>) -> Self {
         let errored = inp.error.is_some() || inp.claude.map(|c| c.is_error).unwrap_or(false);
         let usage = inp.claude.map(|c| c.usage.clone()).unwrap_or_default();
-        let llm_input_tokens = usage.input_tokens;
         RunRecord {
             run_id: inp.run_id,
             job: inp.job,
@@ -132,7 +131,6 @@ impl RunRecord {
             input: InputBlock {
                 window_secs: inp.window_secs,
                 source: inp.source,
-                llm_input_tokens,
             },
             findings_created: inp.created,
             findings_deduped: inp.deduped,
@@ -205,7 +203,6 @@ mod tests {
         let rec = RunRecord::assemble(inputs(Some(&c), 2));
         assert_eq!(rec.outcome, Outcome::Produced);
         assert_eq!(rec.usage.input_tokens, 48211);
-        assert_eq!(rec.input.llm_input_tokens, 48211);
         assert_eq!(rec.findings_created, 2);
         assert_eq!(rec.job, "therblig-finder");
         assert_eq!(rec.model.as_deref(), Some("claude-opus-4-8"));
@@ -238,7 +235,6 @@ mod tests {
         assert_eq!(v["job"], "therblig-finder");
         assert_eq!(v["outcome"], "produced");
         assert_eq!(v["findings_created"], 1);
-        assert_eq!(v["input"]["llm_input_tokens"], 100);
         assert_eq!(v["usage"]["input_tokens"], 100);
         assert_eq!(v["model_usage"]["claude-opus-4-8"]["input_tokens"], 100);
         assert_eq!(v["model_usage"]["claude-opus-4-8"]["output_tokens"], 10);

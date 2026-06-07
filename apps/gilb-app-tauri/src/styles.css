@@ -147,15 +147,6 @@ button:disabled {
   color: #6b7280;
   line-height: 1.5;
 }
-.auth-input {
-  flex: 1 1 auto;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  padding: 8px 10px;
-  font-size: 13px;
-  color: #1f2330;
-  background: white;
-}
 #btn-connect { background: #2563eb; color: white; border-color: #1d4ed8; }
 #btn-connect:hover:not(:disabled) { background: #1d4ed8; }
 .auth-signed-line { margin: 0 0 4px; font-size: 14px; }
@@ -723,7 +714,6 @@ body.countdown-window {
   .settings-gear { background: none; color: #6b7280; }
   .appbar .settings-gear:hover:not(:disabled) { background: #2c2f3a; color: #d1d5db; }
   .card h2, .subtitle { color: #9ca3af; }
-  .auth-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
 
   .splash { background: rgba(0, 0, 0, 0.65); }
   .splash-card { background: #1a1c24; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5); }
