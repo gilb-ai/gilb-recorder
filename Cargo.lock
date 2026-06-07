@@ -1980,14 +1980,17 @@ dependencies = [
  "clap",
  "gilb-config",
  "gilb-db",
- "once_cell",
- "regex",
+ "libc",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sqlx",
+ "thiserror 1.0.69",
  "tokio",
  "tracing",
+ "tracing-appender",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -2007,6 +2010,7 @@ dependencies = [
  "gilb-meeting",
  "gilb-record",
  "gilb-transcribe",
+ "libc",
  "parking_lot",
  "reqwest 0.12.28",
  "serde",

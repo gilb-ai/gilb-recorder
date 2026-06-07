@@ -1,5 +1,6 @@
 //! gilb Tauri shell — wires the UI to `gilb-engine`.
 
+mod analyzer_supervisor;
 mod commands;
 mod events;
 mod logging;
@@ -113,11 +114,22 @@ pub fn run() {
             commands::auth::auth_status,
             commands::auth::sign_out,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!());
 
-    if let Err(err) = result {
-        error!(?err, "tauri runtime error");
-        // No app handle to dialog from at this point — log + non-zero exit.
-        std::process::exit(1);
+    match result {
+        Ok(app) => app.run(|handle, event| {
+            // On quit, ask the analyzer supervisor to stop the daemon (best
+            // effort — the daemon's own parent-death guard is the hard backstop).
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Some(state) = handle.try_state::<state::AppState>() {
+                    state.analyzer.set_active(false);
+                }
+            }
+        }),
+        Err(err) => {
+            error!(?err, "tauri build/runtime error");
+            // No app handle to dialog from at this point — log + non-zero exit.
+            std::process::exit(1);
+        }
     }
 }

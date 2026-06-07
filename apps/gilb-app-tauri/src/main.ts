@@ -8,6 +8,14 @@ import { getVersion } from "@tauri-apps/api/app";
 // How often to poll for updates while the app is running.
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
 
+// Default gilb-web workspace URL prefilled in the Connect field, baked in per
+// build: dev builds point at the local server, release builds at the hosted
+// workspace. Set via Vite env (.env.development / .env.production); falls back
+// to localhost in dev and an empty field in release if unset.
+const DEFAULT_WORKSPACE_URL =
+  import.meta.env.VITE_GILB_WEB_URL ??
+  (import.meta.env.DEV ? "http://localhost:3000" : "");
+
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
 // explicitly stopped.
@@ -253,14 +261,10 @@ async function refreshAuth() {
 }
 
 async function connect() {
-  const input = $<HTMLInputElement>("auth-url");
-  const url = input?.value.trim();
-  if (!url) {
-    setMessage("Enter your gilb-web URL first", "error");
-    return;
-  }
+  // URL is baked in per build (DEFAULT_WORKSPACE_URL); the backend may further
+  // override it via the GILB_WEB_URL env var. No field to read.
   try {
-    await invoke("start_login", { gilbWebUrl: url });
+    await invoke("start_login", { gilbWebUrl: DEFAULT_WORKSPACE_URL });
     setMessage("Continue sign-in in your browser…");
   } catch (err) {
     setMessage(`sign-in error: ${String(err)}`, "error");

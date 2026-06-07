@@ -46,6 +46,10 @@ gilb-meeting = { workspace = true }
 gilb-record = { workspace = true }
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 
+[target.'cfg(unix)'.dependencies]
+# SIGTERM the analyzer daemon for a graceful stop (see analyzer_supervisor).
+libc = "0.2"
+
 [dev-dependencies]
 # Construct MeetingEvent timestamps in the meeting-bridge mapping tests.
 chrono = { workspace = true }

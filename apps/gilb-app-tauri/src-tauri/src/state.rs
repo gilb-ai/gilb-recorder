@@ -14,6 +14,8 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::info;
 
+use crate::analyzer_supervisor::AnalyzerSupervisor;
+
 /// In-flight recorder→gilb-web login. Set by `start_login`, consumed by the
 /// `gilb://auth/callback` deep-link handler, which checks `state` matches the
 /// callback before trusting it (the callback must belong to a login this
@@ -26,6 +28,8 @@ pub struct PendingAuth {
 pub struct AppState {
     pub engine: Arc<Engine>,
     pub pending_auth: Mutex<Option<PendingAuth>>,
+    /// Drives the bundled `gilb-analyzer run` daemon: active while capture runs.
+    pub analyzer: AnalyzerSupervisor,
 }
 
 /// Open the SQLite database and build [`AppState`]. Pulled out of `setup()` so
@@ -38,6 +42,7 @@ pub fn build_app_state() -> Result<AppState> {
     Ok(AppState {
         engine: Arc::new(engine),
         pending_auth: Mutex::new(None),
+        analyzer: AnalyzerSupervisor::spawn(),
     })
 }
 

@@ -17,9 +17,16 @@ tracing = { workspace = true }
 async-trait = "0.1"
 
 # Local Whisper (whisper.cpp via whisper-rs), gated behind `local-whisper` so the
-# heavy C++/Metal build stays opt-in. `hound` reads the 16 kHz mono i16 wav.
-whisper-rs = { version = "0.14", optional = true, features = ["metal"] }
+# heavy C++/GPU build stays opt-in. `hound` reads the 16 kHz mono i16 wav.
+# `metal` is Apple-only, so it is enabled only on macOS; other platforms build
+# the CPU backend (whisper.cpp still needs a C/C++ toolchain + CMake present).
 hound = { version = "3", optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+whisper-rs = { version = "0.14", optional = true, features = ["metal"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+whisper-rs = { version = "0.14", optional = true }
 
 [features]
 local-whisper = ["dep:whisper-rs", "dep:hound"]

@@ -13,15 +13,20 @@ use crate::state::AppState;
 #[tauri::command]
 pub async fn start_capture(state: tauri::State<'_, AppState>) -> Result<i64, String> {
     let settings = RecordingSettings::from_env();
-    state
+    let session = state
         .engine
         .start_capture(settings)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    // Capture is on → let the analyzer daemon run alongside it (Tier-2 only).
+    state.analyzer.set_active(true);
+    Ok(session)
 }
 
 #[tauri::command]
 pub async fn stop_capture(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    // Stop analysis first so it isn't reading a session we're about to close.
+    state.analyzer.set_active(false);
     state
         .engine
         .stop_capture("user-stop")

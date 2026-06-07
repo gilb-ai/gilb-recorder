@@ -228,6 +228,66 @@ pub fn clear_credentials() -> Result<()> {
     }
 }
 
+/// When an analyzer job fires.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Trigger {
+    /// Run on a rolling window every `secs` seconds.
+    Interval { secs: u64 },
+    /// Run once per finished meeting (event-driven).
+    MeetingEnd,
+}
+
+/// One analysis job served by gilb-web: a prompt, when to run it, and where to
+/// post the findings. The recorder runs `name`'s prompt as `claude -p` over
+/// gilb-mcp and forwards what it emits to `post_to`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Job {
+    /// Stable id, e.g. `"therblig-finder"` / `"meeting-facts"`.
+    pub name: String,
+    /// Emit-only prompt body (the recorder appends the window/params trigger).
+    pub prompt: String,
+    pub trigger: Trigger,
+    /// gilb-web endpoint findings are POSTed to (e.g. `/api/v1/therbligs`).
+    pub post_to: String,
+}
+
+impl Job {
+    /// Cadence for an interval job; hourly default otherwise.
+    pub fn interval_secs(&self) -> u64 {
+        match self.trigger {
+            Trigger::Interval { secs } => secs,
+            _ => DEFAULT_ANALYZE_INTERVAL_SECS,
+        }
+    }
+}
+
+/// Server-delivered analyzer configuration fetched from gilb-web
+/// (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon").
+///
+/// **Deliberately not persisted.** Prompts are private, so the config is never
+/// written to the filesystem — it lives only in process memory for the lifetime
+/// of a run (the daemon keeps the last good copy in-memory across ticks and uses
+/// `etag` for a conditional refresh). `version`/`jobs` mirror the wire body;
+/// `etag` is the cache validator echoed back as `If-None-Match`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnalyzerConfig {
+    /// Monotonic server version — logged next to each produced finding so we
+    /// know which config generation made it.
+    pub version: i64,
+    /// The analysis jobs to run (prompt + trigger + destination each).
+    pub jobs: Vec<Job>,
+    /// ETag of the last response, sent back as `If-None-Match` to get a cheap
+    /// `304 Not Modified` when the config is unchanged.
+    pub etag: Option<String>,
+}
+
+impl AnalyzerConfig {
+    /// Look up a job by name (e.g. `"therblig-finder"`).
+    pub fn job(&self, name: &str) -> Option<&Job> {
+        self.jobs.iter().find(|j| j.name == name)
+    }
+}
+
 /// On-disk shape of `$HOME/.gilb/prefs.json` — persisted UI preferences that
 /// survive restarts. Not secret, so no `0600`. `#[serde(default)]` lets new
 /// fields land later without breaking older files.
@@ -318,5 +378,39 @@ mod tests {
     #[test]
     fn preferences_default_language_is_auto() {
         assert_eq!(Preferences::default().transcription_language, "auto");
+    }
+
+    #[test]
+    fn analyzer_config_job_lookup_and_interval() {
+        let cfg = AnalyzerConfig {
+            version: 1,
+            jobs: vec![
+                Job {
+                    name: "therblig-finder".to_string(),
+                    prompt: "find them".to_string(),
+                    trigger: Trigger::Interval { secs: 900 },
+                    post_to: "/api/v1/therbligs".to_string(),
+                },
+                Job {
+                    name: "meeting-facts".to_string(),
+                    prompt: "extract".to_string(),
+                    trigger: Trigger::MeetingEnd,
+                    post_to: "/api/v1/meeting_facts".to_string(),
+                },
+            ],
+            etag: None,
+        };
+
+        let finder = cfg.job("therblig-finder").unwrap();
+        assert_eq!(finder.prompt, "find them");
+        assert_eq!(finder.interval_secs(), 900);
+        assert_eq!(finder.post_to, "/api/v1/therbligs");
+
+        // MeetingEnd has no interval → hourly default.
+        assert_eq!(
+            cfg.job("meeting-facts").unwrap().interval_secs(),
+            DEFAULT_ANALYZE_INTERVAL_SECS
+        );
+        assert!(cfg.job("nope").is_none());
     }
 }

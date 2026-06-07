@@ -38,7 +38,11 @@ pub async fn start_login(
     state: tauri::State<'_, AppState>,
     gilb_web_url: String,
 ) -> Result<(), String> {
-    let base = gilb_web_url.trim().trim_end_matches('/');
+    // The workspace URL is baked into the build (the UI shows only a Connect
+    // button), but a `GILB_WEB_URL` in the app's environment overrides it — a
+    // hidden escape hatch for QA / staging without a separate build.
+    let requested = std::env::var("GILB_WEB_URL").unwrap_or(gilb_web_url);
+    let base = requested.trim().trim_end_matches('/');
     if !(base.starts_with("http://") || base.starts_with("https://")) {
         return Err("Enter a full gilb-web URL (https://…)".to_string());
     }
