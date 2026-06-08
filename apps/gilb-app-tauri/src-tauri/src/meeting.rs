@@ -40,10 +40,10 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(target_os = "macos")]
 use gilb_meeting::MacosDetector;
-#[cfg(target_os = "windows")]
-use gilb_meeting::WindowsDetector;
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use gilb_meeting::MockDetector;
+#[cfg(target_os = "windows")]
+use gilb_meeting::WindowsDetector;
 
 use crate::commands::countdown::{open_countdown_window, open_stop_countdown_window};
 
