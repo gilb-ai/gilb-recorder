@@ -16,11 +16,11 @@
 //!   `meeting-recording` indicator the main window renders.
 //! - `AppsChanged` / `HealthDegraded` → logged only.
 //!
-//! The detector is the live macOS unified-log detector on macOS; elsewhere a
-//! [`MockDetector`] stands in (it never fires on its own), so the app builds and
-//! runs on every platform while the real flow is macOS-only. The event→action
-//! mapping ([`plan_action`]) and app selection ([`pick_app`]) are pure so they
-//! unit-test without a detector, recorder, or windows.
+//! The detector is the live macOS unified-log detector on macOS and the WASAPI
+//! audio-session detector on Windows; on any other platform a [`MockDetector`]
+//! stands in (it never fires on its own) so the app still builds. The
+//! event→action mapping ([`plan_action`]) and app selection ([`pick_app`]) are
+//! pure so they unit-test without a detector, recorder, or windows.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -40,7 +40,9 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(target_os = "macos")]
 use gilb_meeting::MacosDetector;
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+use gilb_meeting::WindowsDetector;
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 use gilb_meeting::MockDetector;
 
 use crate::commands::countdown::{open_countdown_window, open_stop_countdown_window};
@@ -251,7 +253,9 @@ pub fn spawn_meeting_pipeline(app: AppHandle, bus: EventBus, db: Db, data_dir: P
 
         #[cfg(target_os = "macos")]
         let detector = MacosDetector::new();
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(target_os = "windows")]
+        let detector = WindowsDetector::new();
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
         let detector = MockDetector::new();
 
         // The detector lives in its own supervisor so detection can be toggled at

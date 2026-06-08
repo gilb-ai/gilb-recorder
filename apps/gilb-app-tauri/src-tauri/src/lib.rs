@@ -51,8 +51,8 @@ pub fn run() {
 
                     // Start the meeting flow: detector + recorder + countdown
                     // bridge. Pull the bus/db off the engine before `manage` moves
-                    // the state in. The detector is the live macOS path; elsewhere
-                    // it's a no-op stand-in (see `meeting`).
+                    // the state in. The detector is live on macOS (unified log)
+                    // and Windows (WASAPI); a no-op stand-in elsewhere (see `meeting`).
                     let bus = s.engine.event_bus().clone();
                     let db = s.engine.db().clone();
                     app.manage(s);
