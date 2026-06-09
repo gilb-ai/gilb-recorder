@@ -1981,7 +1981,6 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
- "chrono",
  "directories",
  "gilb-a11y",
  "gilb-config",
@@ -1989,8 +1988,7 @@ dependencies = [
  "gilb-db",
  "gilb-engine",
  "gilb-events",
- "gilb-meeting",
- "gilb-record",
+ "gilb-pipeline",
  "gilb-transcribe",
  "libc",
  "parking_lot",
@@ -2127,6 +2125,21 @@ dependencies = [
  "tracing",
  "windows 0.58.0",
  "windows-core 0.58.0",
+]
+
+[[package]]
+name = "gilb-pipeline"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "gilb-db",
+ "gilb-events",
+ "gilb-meeting",
+ "gilb-record",
+ "serde",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

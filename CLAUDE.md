@@ -21,6 +21,12 @@ implemented:
   chars, body wraps ~72 cols. Match the style of recent commits.
 - **User-visible strings: English** — HTML, TypeScript messages,
   Rust dialog/error text, `Info.plist` usage descriptions, READMEs.
+  Frontend strings live in `apps/gilb-app-tauri/src/i18n.ts` (en + ru
+  dictionaries; static markup carries `data-i18n` attributes). The
+  locale and product name are baked in per build via `VITE_LOCALE` /
+  `VITE_BRAND_NAME` (default: en / Gilb) so differently-branded builds
+  reuse this frontend without forking. New user-facing strings go
+  through `t()` / `data-i18n`, with both dictionary entries filled.
 - **CLAUDE.md and any other docs read by an agent as instructions:
   English.**
 - **UI/UX: follow `docs/ui-design.md`.** Single main window with in-app
@@ -89,9 +95,17 @@ gilb-helper ─► gilb-config
 gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum
                + in-memory MockDetector; native detectors land later)
 
+gilb-pipeline ► gilb-db, gilb-events, gilb-meeting, gilb-record
+              (app-agnostic meeting bridge: detector → recorder → meetings
+               rows, driven through the MeetingUi trait the shell implements;
+               returns PipelineHandles for the stop-countdown / detection
+               toggle channels)
+
 apps/gilb-app-tauri/src-tauri ─► gilb-engine + gilb-config + gilb-events
+              + gilb-pipeline
               (Tauri commands: start_capture/stop_capture/status/
-               open_privacy_pane; AppState holds an Arc<Engine>)
+               open_privacy_pane; AppState holds an Arc<Engine>;
+               meeting.rs is the Tauri MeetingUi adapter over gilb-pipeline)
 
 apps/gilb-mcp ─► gilb-core + gilb-config + gilb-db
               (read-only MCP server over ~/.gilb/db.sqlite, stdio

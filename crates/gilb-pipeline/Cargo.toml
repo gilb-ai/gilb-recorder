@@ -1,0 +1,19 @@
+[package]
+name = "gilb-pipeline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+gilb-db = { workspace = true }
+gilb-events = { workspace = true }
+gilb-meeting = { workspace = true }
+gilb-record = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
