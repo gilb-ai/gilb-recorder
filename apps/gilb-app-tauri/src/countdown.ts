@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { applyI18n, t } from "./i18n";
 
 // Pre-record countdown popup. Created from Rust as a second OS window with
 // `countdown.html?app=&meeting_id=&seconds=`. The Record button doubles as a
@@ -7,7 +8,7 @@ import { invoke } from "@tauri-apps/api/core";
 // Every path funnels through one `resolve_countdown` call.
 
 const params = new URLSearchParams(window.location.search);
-const appName = params.get("app") ?? "this meeting";
+const appName = params.get("app") ?? t("capture.thisMeeting");
 const meetingId = Number(params.get("meeting_id"));
 const seconds = Number(params.get("seconds")) || 5;
 
@@ -34,6 +35,7 @@ async function resolve(armed: boolean) {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  applyI18n();
   $("countdown-app")!.textContent = appName;
 
   const record = $<HTMLButtonElement>("btn-record");

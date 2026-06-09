@@ -10,8 +10,8 @@
   <body>
     <div id="splash" class="splash" hidden>
       <div class="splash-card">
-        <h1>macOS permissions needed</h1>
-        <p class="splash-lead">
+        <h1 data-i18n="splash.title">macOS permissions needed</h1>
+        <p class="splash-lead" data-i18n="splash.lead">
           Gilb records your activity via the Accessibility API and captures
           meetings (screen + microphone). Grant the permissions below in
           System Settings → Privacy &amp; Security.
@@ -20,23 +20,24 @@
           <li id="splash-step-ax">
             <span class="dot" id="splash-ax-dot"></span>
             <div class="splash-step-text">
-              <strong>Accessibility</strong>
-              <span class="splash-status" id="splash-ax-status">checking…</span>
+              <strong data-i18n="splash.accessibility">Accessibility</strong>
+              <span class="splash-status" id="splash-ax-status" data-i18n="splash.checking">checking…</span>
             </div>
-            <button type="button" class="splash-btn" data-pane="accessibility">
+            <button type="button" class="splash-btn" data-pane="accessibility" data-i18n="splash.openAccessibility">
               Open Accessibility
             </button>
           </li>
           <li id="splash-step-screen">
             <span class="dot" id="splash-screen-dot"></span>
             <div class="splash-step-text">
-              <strong>Screen Recording</strong>
-              <span class="splash-status" id="splash-screen-status">checking…</span>
+              <strong data-i18n="splash.screenRecording">Screen Recording</strong>
+              <span class="splash-status" id="splash-screen-status" data-i18n="splash.checking">checking…</span>
             </div>
             <button
               type="button"
               class="splash-btn"
               data-pane="screen-recording"
+              data-i18n="splash.openScreenRecording"
             >
               Open Screen Recording
             </button>
@@ -44,15 +45,15 @@
           <li id="splash-step-mic">
             <span class="dot" id="splash-mic-dot"></span>
             <div class="splash-step-text">
-              <strong>Microphone</strong>
-              <span class="splash-status" id="splash-mic-status">checking…</span>
+              <strong data-i18n="splash.microphone">Microphone</strong>
+              <span class="splash-status" id="splash-mic-status" data-i18n="splash.checking">checking…</span>
             </div>
-            <button type="button" class="splash-btn" data-pane="microphone">
+            <button type="button" class="splash-btn" data-pane="microphone" data-i18n="splash.openMicrophone">
               Open Microphone
             </button>
           </li>
         </ol>
-        <p class="splash-hint">
+        <p class="splash-hint" data-i18n="splash.hint">
           The window updates automatically once you grant each toggle. If
           the status doesn't change after granting, restart the app.
         </p>
@@ -68,15 +69,15 @@
       hidden
     >
       <div class="settings-card">
-        <h1 class="settings-title" id="settings-title">Settings</h1>
+        <h1 class="settings-title" id="settings-title" data-i18n="settings.title">Settings</h1>
 
         <div class="settings-body">
           <div class="settings-row">
             <div class="settings-row-text">
-              <span class="settings-row-label" id="meeting-label">
+              <span class="settings-row-label" id="meeting-label" data-i18n="settings.meetingLabel">
                 Enable meeting detection
               </span>
-              <span class="settings-row-desc">
+              <span class="settings-row-desc" data-i18n="settings.meetingDesc">
                 We'll catch the start of every call and offer to record.
               </span>
             </div>
@@ -94,8 +95,8 @@
 
           <div class="settings-row settings-row-stacked">
             <div class="settings-row-text">
-              <span class="settings-row-label">Transcription</span>
-              <span class="settings-row-desc">
+              <span class="settings-row-label" data-i18n="settings.transcription">Transcription</span>
+              <span class="settings-row-desc" data-i18n="settings.transcriptionDesc">
                 Runs on this Mac — audio never leaves your device. Transcription
                 turns on automatically once the model is downloaded.
               </span>
@@ -104,16 +105,16 @@
             <div class="model-row">
               <div class="model-info">
                 <span class="model-name">Whisper Large</span>
-                <span id="model-status" class="key-status">Not downloaded</span>
+                <span id="model-status" class="key-status" data-i18n="model.notDownloaded">Not downloaded</span>
               </div>
               <div class="key-actions">
-                <button id="btn-model-download" class="key-btn key-btn-primary" type="button">
+                <button id="btn-model-download" class="key-btn key-btn-primary" type="button" data-i18n="model.download">
                   Download
                 </button>
-                <button id="btn-model-cancel" class="key-btn" type="button" hidden>
+                <button id="btn-model-cancel" class="key-btn" type="button" hidden data-i18n="model.cancel">
                   Cancel
                 </button>
-                <button id="btn-model-delete" class="key-btn" type="button" hidden>
+                <button id="btn-model-delete" class="key-btn" type="button" hidden data-i18n="model.delete">
                   Delete
                 </button>
               </div>
@@ -123,21 +124,21 @@
             </div>
 
             <label class="model-lang">
-              <span class="settings-row-label">Language</span>
+              <span class="settings-row-label" data-i18n="settings.language">Language</span>
               <select id="select-language" class="key-input">
-                <option value="auto">Auto-detect</option>
-                <option value="ru">Russian</option>
-                <option value="en">English</option>
+                <option value="auto" data-i18n="settings.langAuto">Auto-detect</option>
+                <option value="ru" data-i18n="settings.langRu">Russian</option>
+                <option value="en" data-i18n="settings.langEn">English</option>
               </select>
             </label>
           </div>
         </div>
 
         <div class="settings-actions">
-          <button id="btn-settings-cancel" class="key-btn" type="button">
+          <button id="btn-settings-cancel" class="key-btn" type="button" data-i18n="settings.cancel">
             Cancel
           </button>
-          <button id="btn-settings-save" class="key-btn key-btn-primary" type="button">
+          <button id="btn-settings-save" class="key-btn key-btn-primary" type="button" data-i18n="settings.save">
             Save
           </button>
         </div>
@@ -147,7 +148,7 @@
     <main class="container">
       <section class="card capture">
         <div class="capture-head">
-          <h2>Capture</h2>
+          <h2 data-i18n="capture.title">Capture</h2>
         </div>
 
         <div
@@ -159,20 +160,20 @@
         >
           <span class="track-state">
             <span class="track-dot rec-dot" aria-hidden="true"></span>
-            <span>Recording meeting — <strong id="rec-app">this meeting</strong></span>
+            <span><span data-i18n="capture.recordingMeeting">Recording meeting — </span><strong id="rec-app" data-i18n="capture.thisMeeting">this meeting</strong></span>
           </span>
           <span class="rec-right">
             <span class="rec-timer" id="rec-timer">00:00</span>
-            <button id="btn-rec-stop" class="rec-stop" type="button">Stop</button>
+            <button id="btn-rec-stop" class="rec-stop" type="button" data-i18n="capture.stop">Stop</button>
           </span>
         </div>
 
         <div class="track">
           <span class="track-state">
             <span class="track-dot" id="track-dot" aria-hidden="true"></span>
-            <span id="track-label">Activity tracking</span>
+            <span id="track-label" data-i18n="capture.trackingLabel">Activity tracking</span>
           </span>
-          <button id="btn-track-toggle" class="track-btn" type="button">
+          <button id="btn-track-toggle" class="track-btn" type="button" data-i18n="capture.pause">
             Pause
           </button>
         </div>
@@ -182,24 +183,24 @@
 
       <section class="card auth" id="auth-card">
         <div id="auth-signed-out">
-          <p class="auth-lead">
+          <p class="auth-lead" data-i18n="auth.lead">
             Connect this recorder to your Gilb workspace to enable
             Enterprise features.
           </p>
           <!-- The workspace URL is baked in per build (VITE_GILB_WEB_URL; see
                main.ts / .env.{development,production}); no field to fill in. -->
           <div class="row">
-            <button id="btn-connect" type="button">Connect</button>
+            <button id="btn-connect" type="button" data-i18n="auth.connect">Connect</button>
           </div>
         </div>
         <div id="auth-signed-in" hidden>
-          <p class="auth-signed-line">
-            Connected to your <strong>Gilb workspace</strong>
+          <p class="auth-signed-line" data-i18n="auth.connectedLine">
+            Connected to your Gilb workspace
           </p>
           <p class="auth-url-display">
             <span id="auth-employee"></span> · <span id="auth-ws-url"></span>
           </p>
-          <button id="btn-signout" type="button">Sign out</button>
+          <button id="btn-signout" type="button" data-i18n="auth.signOut">Sign out</button>
         </div>
       </section>
 

@@ -4,6 +4,7 @@ import { enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tau
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { getVersion } from "@tauri-apps/api/app";
+import { applyI18n, t } from "./i18n";
 
 // How often to poll for updates while the app is running.
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6h
@@ -115,7 +116,7 @@ function updateRecIndicator(st: MeetingRecording | undefined) {
     recMeetingId = st.meeting_id;
     const stopBtn = $<HTMLButtonElement>("btn-rec-stop");
     if (stopBtn) stopBtn.disabled = false;
-    setText("rec-app", st.app ?? "this meeting");
+    setText("rec-app", st.app ?? t("capture.thisMeeting"));
     recStartMs = st.started_at_ms ?? Date.now();
     tickRecTimer();
     el.hidden = false;
@@ -138,7 +139,7 @@ async function stopMeetingRecording() {
   try {
     await invoke("stop_meeting_recording", { meetingId: recMeetingId });
   } catch (err) {
-    setMessage(`stop recording error: ${String(err)}`, "error");
+    setMessage(t("capture.stopError", { error: String(err) }), "error");
     if (btn) btn.disabled = false;
   }
 }
@@ -190,7 +191,7 @@ function updateSplash(perms: Permissions, platform: string) {
   for (const { key, dot, status, step } of SPLASH_STEPS) {
     const granted = perms[key];
     setDot(dot, granted);
-    setText(status, granted ? "granted" : "not granted");
+    setText(status, granted ? t("splash.granted") : t("splash.notGranted"));
     const el = $(step);
     if (el) el.classList.toggle("granted", granted);
   }
@@ -209,21 +210,21 @@ async function refresh() {
     s = await invoke<EngineStatus>("status");
   } catch (err) {
     if (mySeq !== refreshSeq) return;
-    setMessage(`status error: ${String(err)}`, "error");
+    setMessage(t("capture.statusError", { error: String(err) }), "error");
     return;
   }
   if (mySeq !== refreshSeq) return;
 
   // Activity tracking (subsystem A): calm status + Pause/Resume. Never "recording".
   tracking = s.recording;
-  setText("track-label", tracking ? "Activity tracking — on" : "Activity tracking — paused");
+  setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
   const dot = $("track-dot");
   if (dot) {
     dot.classList.toggle("on", tracking);
     dot.classList.toggle("paused", !tracking);
   }
   const toggleBtn = $<HTMLButtonElement>("btn-track-toggle");
-  if (toggleBtn) toggleBtn.textContent = tracking ? "Pause" : "Resume";
+  if (toggleBtn) toggleBtn.textContent = tracking ? t("capture.pause") : t("capture.resume");
 
   updateSplash(s.permissions, s.platform);
 
@@ -255,7 +256,7 @@ async function refreshAuth() {
   if (signedOut) signedOut.hidden = s.signed_in;
   if (signedIn) signedIn.hidden = !s.signed_in;
   if (s.signed_in) {
-    setText("auth-employee", s.employee ?? "this device");
+    setText("auth-employee", s.employee ?? t("auth.thisDevice"));
     setText("auth-ws-url", s.gilb_web_url ?? "");
   }
 }
@@ -265,18 +266,18 @@ async function connect() {
   // override it via the GILB_WEB_URL env var. No field to read.
   try {
     await invoke("start_login", { gilbWebUrl: DEFAULT_WORKSPACE_URL });
-    setMessage("Continue sign-in in your browser…");
+    setMessage(t("auth.continueInBrowser"));
   } catch (err) {
-    setMessage(`sign-in error: ${String(err)}`, "error");
+    setMessage(t("auth.signInError", { error: String(err) }), "error");
   }
 }
 
 async function signOut() {
   try {
     await invoke("sign_out");
-    setMessage("Signed out");
+    setMessage(t("auth.signedOut"));
   } catch (err) {
-    setMessage(`sign-out error: ${String(err)}`, "error");
+    setMessage(t("auth.signOutError", { error: String(err) }), "error");
   }
   refreshAuth();
 }
@@ -380,12 +381,12 @@ function renderModelState(downloaded: boolean) {
   if (downloaded) {
     dl?.setAttribute("hidden", "");
     del?.removeAttribute("hidden");
-    setModelStatus("Ready", "ok");
+    setModelStatus(t("model.ready"), "ok");
   } else {
     del?.setAttribute("hidden", "");
     dl?.removeAttribute("hidden");
-    if (dl) dl.textContent = "Download";
-    setModelStatus("Not downloaded");
+    if (dl) dl.textContent = t("model.download");
+    setModelStatus(t("model.notDownloaded"));
   }
 }
 
@@ -405,7 +406,7 @@ function setProgressBar(downloaded: number, total: number) {
   const bar = $("model-progress-bar");
   const pct = total > 0 ? Math.min(100, Math.round((downloaded / total) * 100)) : 0;
   if (bar) bar.style.width = `${pct}%`;
-  setModelStatus(total > 0 ? `Downloading… ${pct}%` : "Downloading…");
+  setModelStatus(total > 0 ? t("model.downloadingPct", { pct }) : t("model.downloading"));
 }
 
 async function downloadModel() {
@@ -449,7 +450,7 @@ async function openPrivacyPane(pane: PrivacyPane) {
   try {
     await invoke("open_privacy_pane", { pane });
   } catch (err) {
-    setMessage(`open_privacy_pane error: ${String(err)}`, "error");
+    setMessage(`open_privacy_pane: ${String(err)}`, "error");
   }
 }
 
@@ -460,7 +461,7 @@ async function applyStart(): Promise<boolean> {
     await invoke<number>("start_capture");
     return true;
   } catch (err) {
-    setMessage(`Couldn't resume tracking: ${String(err)}`, "error");
+    setMessage(t("capture.cantResume", { error: String(err) }), "error");
     return false;
   }
 }
@@ -470,7 +471,7 @@ async function applyStop(): Promise<boolean> {
     await invoke("stop_capture");
     return true;
   } catch (err) {
-    setMessage(`Couldn't pause tracking: ${String(err)}`, "error");
+    setMessage(t("capture.cantPause", { error: String(err) }), "error");
     return false;
   }
 }
@@ -491,12 +492,12 @@ async function toggleTracking() {
   if (tracking) {
     if (await applyStop()) {
       await persistPaused(true);
-      setMessage("Activity tracking paused");
+      setMessage(t("capture.trackingPausedMsg"));
     }
   } else {
     if (await applyStart()) {
       await persistPaused(false);
-      setMessage("Activity tracking on");
+      setMessage(t("capture.trackingOnMsg"));
     }
   }
   if (btn) btn.disabled = false;
@@ -527,7 +528,7 @@ async function checkForUpdates() {
     } catch (err) {
       console.warn("pre-update stop_capture failed", err);
     }
-    setMessage(`Installing update ${update.version}…`);
+    setMessage(t("update.installing", { version: update.version }));
     await update.downloadAndInstall();
     await relaunch();
   } catch (err) {
@@ -537,6 +538,7 @@ async function checkForUpdates() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  applyI18n();
   $("btn-track-toggle")?.addEventListener("click", toggleTracking);
   $("btn-rec-stop")?.addEventListener("click", stopMeetingRecording);
   $("btn-connect")?.addEventListener("click", connect);
@@ -589,8 +591,11 @@ window.addEventListener("DOMContentLoaded", () => {
     } else {
       renderModelState(false);
       const btn = $("btn-model-download");
-      if (btn) btn.textContent = "Retry";
-      setModelStatus(p.error ? `Download failed — ${p.error}` : "Download failed", "error");
+      if (btn) btn.textContent = t("model.retry");
+      setModelStatus(
+        p.error ? t("model.failedWith", { error: p.error }) : t("model.failed"),
+        "error",
+      );
     }
   });
   // Meeting capture arm/stop drives the in-app recording indicator.
@@ -601,7 +606,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // Clear the "continue in your browser" message with the outcome.
   listen<AuthStatus>("auth", (e) => {
     setMessage(
-      e.payload?.signed_in ? "Connected to your Gilb workspace" : "Sign-in failed",
+      e.payload?.signed_in ? t("auth.connectedLine") : t("auth.signInFailed"),
       e.payload?.signed_in ? "info" : "error",
     );
     refreshAuth();
@@ -621,7 +626,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Show the app version in the footer.
   getVersion()
-    .then((v) => setText("app-version", `Gilb v${v}`))
+    .then((v) => setText("app-version", t("app.version", { version: v })))
     .catch(() => {});
 
   // Load the persisted pause flag before the first status refresh so the
