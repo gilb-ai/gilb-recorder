@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { applyI18n, t } from "./i18n";
 
 // Stop-countdown popup, the mirror of countdown.ts. Created from Rust as a
 // second OS window with `stop-countdown.html?app=&meeting_id=&seconds=` when a
@@ -9,7 +10,7 @@ import { invoke } from "@tauri-apps/api/core";
 // one `resolve_stop_countdown` call.
 
 const params = new URLSearchParams(window.location.search);
-const appName = params.get("app") ?? "this meeting";
+const appName = params.get("app") ?? t("capture.thisMeeting");
 const meetingId = Number(params.get("meeting_id"));
 const seconds = Number(params.get("seconds")) || 5;
 
@@ -37,6 +38,7 @@ async function resolve(keep: boolean) {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
+  applyI18n();
   $("countdown-app")!.textContent = appName;
 
   const stop = $<HTMLButtonElement>("btn-stop");

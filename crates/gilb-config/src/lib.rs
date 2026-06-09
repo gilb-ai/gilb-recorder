@@ -4,6 +4,7 @@
 //! lists land in Phase 4.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -89,8 +90,25 @@ fn env_bool(name: &str) -> Option<bool> {
     }
 }
 
-/// `$HOME/.gilb/` — the per-user data directory for gilb.
+static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Override the per-user data directory for this process. Every path helper in
+/// this crate derives from [`data_dir`], so a downstream app built on the gilb
+/// crates can keep its data under its own directory (e.g. `$HOME/.myapp`) by
+/// calling this once at startup, before any other gilb API.
+///
+/// First write wins: returns `Err` with the rejected path if an override is
+/// already in place. When never called, [`data_dir`] resolves to `$HOME/.gilb`.
+pub fn set_data_dir(dir: impl Into<PathBuf>) -> std::result::Result<(), PathBuf> {
+    DATA_DIR_OVERRIDE.set(dir.into())
+}
+
+/// The per-user data directory: the [`set_data_dir`] override when one was
+/// installed, otherwise `$HOME/.gilb/`.
 pub fn data_dir() -> Result<PathBuf> {
+    if let Some(dir) = DATA_DIR_OVERRIDE.get() {
+        return Ok(dir.clone());
+    }
     let home = directories::BaseDirs::new()
         .context("could not determine the user's home directory")?
         .home_dir()
@@ -373,6 +391,31 @@ mod tests {
         let s = RecordingSettings::from_env();
         std::env::remove_var("GILB_COUNTDOWN_SECONDS");
         assert_eq!(s.countdown_seconds, 12);
+    }
+
+    // The override is process-global (first write wins), so this is the only
+    // test in the crate allowed to touch data_dir-derived paths.
+    #[test]
+    fn data_dir_override_flows_into_every_path() {
+        set_data_dir("/tmp/gilb-config-test-ns").expect("override must be unset at test start");
+        assert!(
+            set_data_dir("/tmp/other").is_err(),
+            "second set must be rejected"
+        );
+
+        let base = Path::new("/tmp/gilb-config-test-ns");
+        assert_eq!(data_dir().unwrap(), base);
+        assert_eq!(db_path().unwrap(), base.join(DB_FILE_NAME));
+        assert_eq!(logs_dir().unwrap(), base.join(LOGS_DIR_NAME));
+        assert_eq!(models_dir().unwrap(), base.join(MODELS_DIR_NAME));
+        assert_eq!(
+            credentials_path().unwrap(),
+            base.join(CREDENTIALS_FILE_NAME)
+        );
+        assert_eq!(
+            preferences_path().unwrap(),
+            base.join(PREFERENCES_FILE_NAME)
+        );
     }
 
     #[test]
