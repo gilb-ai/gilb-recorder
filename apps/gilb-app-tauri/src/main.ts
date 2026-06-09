@@ -527,6 +527,10 @@ async function toggleTracking() {
 let updateInProgress = false;
 async function checkForUpdates() {
   if (updateInProgress) return;
+  // Never install + relaunch while a meeting is being recorded — that would
+  // kill the capture mid-write (unfinalized video, recording lost). The next
+  // periodic check (or the next launch) picks the update up instead.
+  if (recMeetingId !== null) return;
   let update;
   try {
     update = await check();
@@ -654,11 +658,14 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Load the persisted pause flag before the first status refresh so the
   // auto-resume decision honours a deliberate pause from a previous session.
+  // Meetings-only shells don't register the tracking commands at all.
   (async () => {
-    try {
-      trackingPaused = await invoke<boolean>("get_tracking_paused");
-    } catch (err) {
-      console.warn("get_tracking_paused failed", err);
+    if (FEATURE_TRACKING) {
+      try {
+        trackingPaused = await invoke<boolean>("get_tracking_paused");
+      } catch (err) {
+        console.warn("get_tracking_paused failed", err);
+      }
     }
     refresh();
   })();

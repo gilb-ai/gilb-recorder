@@ -176,12 +176,13 @@ const STRINGS: Record<MessageKey, string> = LOCALE === "ru" ? ru : en;
 
 /** Translate `key`, substituting `{placeholders}` from `params` (+ `{brand}`). */
 export function t(key: MessageKey, params?: Record<string, string | number>): string {
-  let s = STRINGS[key] ?? key;
-  const all = { brand: BRAND, ...params };
-  for (const [name, value] of Object.entries(all)) {
-    s = s.split(`{${name}}`).join(String(value));
-  }
-  return s;
+  const s = STRINGS[key] ?? key;
+  const all: Record<string, string | number> = { brand: BRAND, ...params };
+  // Single pass: a substituted value that itself contains `{...}` (e.g. a
+  // backend error echoed into a message) must never be re-substituted.
+  return s.replace(/\{(\w+)\}/g, (match, name) =>
+    name in all ? String(all[name]) : match,
+  );
 }
 
 /**

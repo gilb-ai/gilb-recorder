@@ -363,17 +363,32 @@ async fn run_bridge(
             rec = rec_rx.recv(), if bus_open => match rec {
                 Ok(msg) => match msg.payload {
                     RecordingEvent::Armed { meeting_id } => {
-                        let name = state
-                            .app_names
-                            .get(&meeting_id)
-                            .cloned()
-                            .unwrap_or_else(|| "this meeting".to_string());
-                        state.recording = Some((meeting_id, name.clone()));
+                        // The recorder ignores an arm while another capture is
+                        // active — mirror that here, or the bridge would track
+                        // meeting B while the recorder keeps capturing A, and a
+                        // later stop would finalize A but report B to the shell.
+                        if let Some((active, _)) = &state.recording {
+                            if *active != meeting_id {
+                                warn!(
+                                    meeting_id,
+                                    active, "arm ignored: another meeting is recording"
+                                );
+                                continue;
+                            }
+                        }
+                        // `None` when the app is unknown (e.g. a shell arming a
+                        // manual recording) — the shell/frontend picks its own
+                        // localized fallback label.
+                        let name = state.app_names.get(&meeting_id).cloned();
+                        state.recording = Some((
+                            meeting_id,
+                            name.clone().unwrap_or_else(|| "this meeting".to_string()),
+                        ));
                         state.cap_deadline = Some(Instant::now() + MAX_RECORDING);
                         ui.recording_status(&RecordingStatus {
                             recording: true,
                             meeting_id: Some(meeting_id),
-                            app: Some(name),
+                            app: name,
                             started_at_ms: Some(now_ms()),
                         });
                     }
@@ -434,6 +449,20 @@ async fn stop_recording(
     meeting_id: i64,
     state: &mut BridgeState,
 ) {
+    // A stale resolution (an old popup or a queued indicator stop) must not
+    // kill a different meeting's capture: the recorder stops whatever is
+    // active, so gate on the bridge's view of what that is.
+    if state
+        .recording
+        .as_ref()
+        .is_none_or(|(id, _)| *id != meeting_id)
+    {
+        warn!(
+            meeting_id,
+            "stop requested for a meeting that isn't recording; ignoring"
+        );
+        return;
+    }
     state.cap_deadline = None;
     if let Err(err) = recorder.stop(RecordingOutcome::Completed).await {
         warn!(meeting_id, error = %err, "failed to stop recorder");
