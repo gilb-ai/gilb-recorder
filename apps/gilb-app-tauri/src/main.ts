@@ -17,6 +17,12 @@ const DEFAULT_WORKSPACE_URL =
   import.meta.env.VITE_GILB_WEB_URL ??
   (import.meta.env.DEV ? "http://localhost:3000" : "");
 
+// Build-time feature switches (default on; set to "0" to drop a subsystem).
+// A meetings-only shell hides activity tracking (and its Accessibility splash
+// step) and/or the transcription section, and never auto-starts the engine.
+const FEATURE_TRACKING = import.meta.env.VITE_FEATURE_TRACKING !== "0";
+const FEATURE_TRANSCRIPTION = import.meta.env.VITE_FEATURE_TRANSCRIPTION !== "0";
+
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
 // explicitly stopped.
@@ -144,19 +150,25 @@ async function stopMeetingRecording() {
   }
 }
 
-// The macOS TCC permissions Gilb needs, all required before tracking starts.
+// The macOS TCC permissions this build needs, all required before capture
+// starts. Accessibility is only needed by activity tracking, so a
+// meetings-only build drops that step (its <li> is hidden on load too).
 const SPLASH_STEPS: {
   key: "accessibility" | "screen_recording" | "microphone";
   dot: string;
   status: string;
   step: string;
 }[] = [
-  {
-    key: "accessibility",
-    dot: "splash-ax-dot",
-    status: "splash-ax-status",
-    step: "splash-step-ax",
-  },
+  ...(FEATURE_TRACKING
+    ? [
+        {
+          key: "accessibility" as const,
+          dot: "splash-ax-dot",
+          status: "splash-ax-status",
+          step: "splash-step-ax",
+        },
+      ]
+    : []),
   {
     key: "screen_recording",
     dot: "splash-screen-dot",
@@ -215,22 +227,26 @@ async function refresh() {
   }
   if (mySeq !== refreshSeq) return;
 
-  // Activity tracking (subsystem A): calm status + Pause/Resume. Never "recording".
-  tracking = s.recording;
-  setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
-  const dot = $("track-dot");
-  if (dot) {
-    dot.classList.toggle("on", tracking);
-    dot.classList.toggle("paused", !tracking);
+  // Activity tracking (subsystem A): calm status + Pause/Resume. Never
+  // "recording". A meetings-only build hides the row and never auto-starts.
+  if (FEATURE_TRACKING) {
+    tracking = s.recording;
+    setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
+    const dot = $("track-dot");
+    if (dot) {
+      dot.classList.toggle("on", tracking);
+      dot.classList.toggle("paused", !tracking);
+    }
+    const toggleBtn = $<HTMLButtonElement>("btn-track-toggle");
+    if (toggleBtn) toggleBtn.textContent = tracking ? t("capture.pause") : t("capture.resume");
   }
-  const toggleBtn = $<HTMLButtonElement>("btn-track-toggle");
-  if (toggleBtn) toggleBtn.textContent = tracking ? t("capture.pause") : t("capture.resume");
 
   updateSplash(s.permissions, s.platform);
 
   // Auto-resume on launch only if the user hasn't deliberately paused, and
   // only once every required permission is granted.
   if (
+    FEATURE_TRACKING &&
     !hasAutoStarted &&
     !s.recording &&
     allPermissionsGranted(s.permissions) &&
@@ -301,7 +317,7 @@ async function openSettings() {
     }
   }
   settingsToggleSnapshot = toggle?.getAttribute("aria-checked") === "true";
-  await loadTranscription();
+  if (FEATURE_TRANSCRIPTION) await loadTranscription();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
@@ -539,6 +555,13 @@ async function checkForUpdates() {
 
 window.addEventListener("DOMContentLoaded", () => {
   applyI18n();
+  if (!FEATURE_TRACKING) {
+    $("track-row")?.setAttribute("hidden", "");
+    $("splash-step-ax")?.setAttribute("hidden", "");
+  }
+  if (!FEATURE_TRANSCRIPTION) {
+    $("transcription-row")?.setAttribute("hidden", "");
+  }
   $("btn-track-toggle")?.addEventListener("click", toggleTracking);
   $("btn-rec-stop")?.addEventListener("click", stopMeetingRecording);
   $("btn-connect")?.addEventListener("click", connect);

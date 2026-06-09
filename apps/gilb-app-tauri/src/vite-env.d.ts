@@ -17,6 +17,15 @@ interface ImportMetaEnv {
    * differently-branded build reuse this frontend without forking it.
    */
   readonly VITE_BRAND_NAME?: string;
+  /**
+   * Set to "0" to build a meetings-only shell: hides the activity-tracking
+   * row (and its Accessibility splash step) and skips the engine auto-start.
+   */
+  readonly VITE_FEATURE_TRACKING?: string;
+  /**
+   * Set to "0" to hide the on-device transcription section in Settings.
+   */
+  readonly VITE_FEATURE_TRANSCRIPTION?: string;
 }
 
 interface ImportMeta {
