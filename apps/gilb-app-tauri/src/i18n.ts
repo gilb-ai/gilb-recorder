@@ -56,6 +56,7 @@ const en = {
 
   "capture.title": "Capture",
   "capture.recordingMeeting": "Recording meeting — ",
+  "capture.recordingManual": "Recording screen",
   "capture.thisMeeting": "this meeting",
   "capture.stop": "Stop",
   "capture.trackingLabel": "Activity tracking",
@@ -134,6 +135,7 @@ const ru: typeof en = {
 
   "capture.title": "Запись",
   "capture.recordingMeeting": "Идёт запись встречи — ",
+  "capture.recordingManual": "Идёт запись экрана",
   "capture.thisMeeting": "эта встреча",
   "capture.stop": "Остановить",
   "capture.trackingLabel": "Отслеживание активности",
