@@ -113,6 +113,9 @@ button:disabled {
   gap: 8px;
   font-size: 13px;
 }
+/* `.track` sets display:flex, which would otherwise beat the UA
+   `[hidden]{display:none}`. Meetings-only builds hide the tracking row. */
+.track[hidden] { display: none; }
 /* Capture card header: just the "Capture" caption. App-level Settings lives in
    the footer (.appbar), not in this card. */
 .capture-head {
