@@ -7,16 +7,16 @@
 //! shape are the contract referenced by `research/07-meeting-detection.md`
 //! §5 — keep them in sync with that document.
 //!
-//! The macOS [`MacosDetector`] and Windows [`WindowsDetector`] (WASAPI session
-//! events) detectors live here.
+//! The in-memory [`MockDetector`], the macOS [`MacosDetector`], and the
+//! Windows [`WindowsDetector`] (WASAPI session events) live here.
 
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Mutex};
 
 pub mod allowlist;
 mod macos;
@@ -30,7 +30,6 @@ pub use wasapi::{SessionEvent, SessionTracker};
 #[cfg(target_os = "windows")]
 pub use wasapi::WindowsDetector;
 
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 const EVENT_CHANNEL_CAPACITY: usize = 64;
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -67,4 +66,50 @@ pub trait MeetingDetector: Send + Sync {
 
     /// Stop the detector and release any platform resources it owns.
     async fn stop(&self) -> Result<()>;
+}
+
+/// In-memory detector for tests and bring-up of downstream consumers.
+///
+/// `start` opens an mpsc channel and stashes the sender; [`MockDetector::fire`]
+/// pushes synthetic events onto it. `stop` drops the sender, which closes
+/// the receiver end.
+#[derive(Default)]
+pub struct MockDetector {
+    sender: Mutex<Option<mpsc::Sender<MeetingEvent>>>,
+}
+
+impl MockDetector {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Push a synthetic event to the receiver returned by [`start`].
+    pub async fn fire(&self, event: MeetingEvent) -> Result<()> {
+        let guard = self.sender.lock().await;
+        let tx = guard
+            .as_ref()
+            .ok_or_else(|| anyhow!("MockDetector::fire called before start"))?;
+        tx.send(event)
+            .await
+            .map_err(|_| anyhow!("MockDetector receiver dropped"))
+    }
+}
+
+#[async_trait]
+impl MeetingDetector for MockDetector {
+    async fn start(&self) -> Result<mpsc::Receiver<MeetingEvent>> {
+        let mut guard = self.sender.lock().await;
+        if guard.is_some() {
+            return Err(anyhow!("MockDetector already started"));
+        }
+        let (tx, rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
+        *guard = Some(tx);
+        Ok(rx)
+    }
+
+    async fn stop(&self) -> Result<()> {
+        let mut guard = self.sender.lock().await;
+        *guard = None;
+        Ok(())
+    }
 }
