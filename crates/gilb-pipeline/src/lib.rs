@@ -25,8 +25,8 @@
 //! - `AppsChanged` / `HealthDegraded` → logged only.
 //!
 //! The detector is the live macOS unified-log detector on macOS and the WASAPI
-//! audio-session detector on Windows; on any other platform a [`MockDetector`]
-//! stands in (it never fires on its own) so shells still build. The
+//! audio-session detector on Windows; meeting detection is supported on those
+//! two platforms only (other targets fail to compile by design). The
 //! event→action mapping ([`plan_action`]) and app selection ([`pick_app`]) are
 //! pure so they unit-test without a detector, recorder, or UI.
 
@@ -47,8 +47,6 @@ use tracing::{debug, error, info, warn};
 
 #[cfg(target_os = "macos")]
 use gilb_meeting::MacosDetector;
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-use gilb_meeting::MockDetector;
 #[cfg(target_os = "windows")]
 use gilb_meeting::WindowsDetector;
 
@@ -294,12 +292,12 @@ async fn run_bridge(
     let mut rec_rx = bus.subscribe_recording();
     let recorder = spawn_recorder(bus, db.clone(), data_dir);
 
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    compile_error!("meeting detection is implemented for macOS and Windows only");
     #[cfg(target_os = "macos")]
     let detector = MacosDetector::new();
     #[cfg(target_os = "windows")]
     let detector = WindowsDetector::new();
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    let detector = MockDetector::new();
 
     // The detector lives in its own supervisor so detection can be toggled at
     // runtime; the bridge just consumes the forwarded events.
