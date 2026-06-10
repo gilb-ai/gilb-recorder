@@ -117,14 +117,29 @@ pub fn run() {
         .build(tauri::generate_context!());
 
     match result {
-        Ok(app) => app.run(|handle, event| {
+        Ok(app) => app.run(|handle, event| match event {
             // On quit, ask the analyzer supervisor to stop the daemon (best
             // effort — the daemon's own parent-death guard is the hard backstop).
-            if let tauri::RunEvent::ExitRequested { .. } = event {
+            tauri::RunEvent::ExitRequested { .. } => {
                 if let Some(state) = handle.try_state::<state::AppState>() {
                     state.analyzer.set_active(false);
                 }
             }
+            // Hard-exit once the event loop has fully stopped, skipping the libc
+            // atexit / C++ static-destructor phase. whisper.cpp keeps a global
+            // ggml Metal device whose static destructor frees its residency sets
+            // (`ggml_metal_rsets_free`); at process exit that aborts because
+            // model buffers are still live, and it races a background residency
+            // heartbeat thread — a SIGABRT on essentially every quit. The process
+            // is already terminating and SQLite commits are durable (WAL +
+            // synchronous=NORMAL fsync), so bypassing atexit teardown is safe.
+            #[cfg(target_os = "macos")]
+            tauri::RunEvent::Exit => {
+                // SAFETY: `_exit` is async-signal-safe and allocation-free; we are
+                // past all Tauri teardown and intentionally skip atexit handlers.
+                unsafe { libc::_exit(0) }
+            }
+            _ => {}
         }),
         Err(err) => {
             error!(?err, "tauri build/runtime error");
