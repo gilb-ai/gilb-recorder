@@ -122,7 +122,17 @@ function updateRecIndicator(st: MeetingRecording | undefined) {
     recMeetingId = st.meeting_id;
     const stopBtn = $<HTMLButtonElement>("btn-rec-stop");
     if (stopBtn) stopBtn.disabled = false;
-    setText("rec-app", st.app ?? t("capture.thisMeeting"));
+    // A detected meeting carries its app name; a manual recording has none
+    // (the pipeline sends app=null), so it gets a standalone "recording
+    // screen" label instead of the "recording meeting — {app}" form.
+    const prefix = $("rec-prefix");
+    if (st.app) {
+      if (prefix) prefix.textContent = t("capture.recordingMeeting");
+      setText("rec-app", st.app);
+    } else {
+      if (prefix) prefix.textContent = t("capture.recordingManual");
+      setText("rec-app", "");
+    }
     recStartMs = st.started_at_ms ?? Date.now();
     tickRecTimer();
     el.hidden = false;
