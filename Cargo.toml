@@ -14,6 +14,7 @@ members = [
     "crates/gilb-meeting",
     "crates/gilb-pipeline",
     "crates/gilb-record",
+    "crates/gilb-shell-tauri",
     "crates/gilb-transcribe",
 ]
 
@@ -102,6 +103,7 @@ gilb-helper = { path = "crates/gilb-helper" }
 gilb-meeting = { path = "crates/gilb-meeting" }
 gilb-pipeline = { path = "crates/gilb-pipeline" }
 gilb-record = { path = "crates/gilb-record" }
+gilb-shell-tauri = { path = "crates/gilb-shell-tauri" }
 gilb-transcribe = { path = "crates/gilb-transcribe" }
 
 [profile.release]

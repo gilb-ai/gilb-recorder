@@ -1,0 +1,22 @@
+[package]
+name = "gilb-shell-tauri"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Reusable Tauri meeting-flow glue (countdown windows, settings/privacy commands, MeetingUi) for gilb-based shells"
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+url = "2"
+tracing = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+parking_lot = { workspace = true }
+
+gilb-config = { workspace = true }
+gilb-events = { workspace = true }
+gilb-pipeline = { workspace = true }
+gilb-a11y = { workspace = true }
+gilb-db = { workspace = true }
