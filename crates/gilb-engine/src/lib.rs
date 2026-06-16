@@ -35,7 +35,7 @@ const WRITER_BATCH_MAX: usize = 256;
 
 /// Flush a non-empty writer buffer at least this often even if it hasn't
 /// filled, so the latency from capture to a queryable row stays bounded during
-/// light activity (e.g. the UI's `actions_today` counter).
+/// light activity.
 const WRITER_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 
 #[derive(Clone)]
@@ -63,7 +63,6 @@ pub struct EngineStatus {
     pub recording: bool,
     pub session_id: Option<SessionId>,
     pub permissions: Permissions,
-    pub actions_today: i64,
     pub platform: &'static str,
 }
 
@@ -92,7 +91,6 @@ impl Engine {
 
     pub async fn status(&self) -> Result<EngineStatus> {
         let permissions = self.inner.platform.permissions().await;
-        let actions_today = actions::count_today(&self.inner.db).await?;
         let (recording, session_id) = match self.inner.state.lock().as_ref() {
             Some(s) => (true, Some(s.session_id)),
             None => (false, None),
@@ -101,7 +99,6 @@ impl Engine {
             recording,
             session_id,
             permissions,
-            actions_today,
             platform: self.inner.platform.name(),
         })
     }
