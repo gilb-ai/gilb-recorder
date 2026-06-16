@@ -225,12 +225,53 @@ pub fn save_credentials(creds: &Credentials) -> Result<()> {
     ensure_data_dir()?;
     let path = credentials_path()?;
     let json = serde_json::to_vec_pretty(creds).context("failed to serialize credentials")?;
-    std::fs::write(&path, &json).with_context(|| format!("failed to write {}", path.display()))?;
+    write_secret_file(&path, &json)
+}
+
+/// Atomically write `bytes` to `path` as an owner-only (`0600`) file: create a
+/// fresh sibling temp file, fsync it, then `rename` it over `path`. `rename` is
+/// atomic on a single filesystem, so a reader never observes a partial file and
+/// a crash mid-write can never truncate the destination — the previous file
+/// survives intact. For on-disk secrets (credentials, auth tokens). The parent
+/// directory must already exist.
+pub fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let dir = path
+        .parent()
+        .with_context(|| format!("{} has no parent directory", path.display()))?;
+    // Unique temp sibling: the same dir keeps the rename atomic (no cross-fs
+    // copy); pid + counter keep concurrent writers from clobbering each other.
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("secret");
+    let tmp = dir.join(format!(
+        ".{stem}.{}.{}.tmp",
+        std::process::id(),
+        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .with_context(|| format!("failed to chmod 600 {}", path.display()))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts
+        .open(&tmp)
+        .with_context(|| format!("failed to create temp {}", tmp.display()))?;
+
+    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e).with_context(|| format!("failed to write temp {}", tmp.display()));
+    }
+    drop(file);
+
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e)
+            .with_context(|| format!("failed to rename {} -> {}", tmp.display(), path.display()));
     }
     Ok(())
 }
@@ -421,6 +462,39 @@ mod tests {
     #[test]
     fn preferences_default_language_is_auto() {
         assert_eq!(Preferences::default().transcription_language, "auto");
+    }
+
+    #[test]
+    fn write_secret_file_is_atomic_and_owner_only() {
+        let dir = std::env::temp_dir().join(format!("gilb-secret-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.json");
+
+        write_secret_file(&path, b"first").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"first");
+
+        // Overwriting replaces the contents wholesale (no leftover bytes from a
+        // longer previous write) and never leaves a partial file.
+        write_secret_file(&path, b"second-and-much-longer").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"second-and-much-longer");
+        write_secret_file(&path, b"x").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"x");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "secret file must be owner-only");
+        }
+
+        // No temp siblings left behind after a successful write.
+        let leftover = std::fs::read_dir(&dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| e.file_name().to_string_lossy().ends_with(".tmp"));
+        assert!(!leftover, "temp files must be cleaned up");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
