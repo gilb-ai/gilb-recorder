@@ -2,7 +2,4 @@
 
 pub mod auth;
 pub mod capture;
-pub mod countdown;
-pub mod privacy;
-pub mod settings;
 pub mod transcription;
