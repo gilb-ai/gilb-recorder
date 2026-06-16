@@ -43,6 +43,7 @@ gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
 gilb-pipeline = { workspace = true }
+gilb-shell-tauri = { workspace = true }
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 
 [target.'cfg(unix)'.dependencies]

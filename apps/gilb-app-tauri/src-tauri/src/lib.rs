@@ -56,6 +56,10 @@ pub fn run() {
                     let bus = s.engine.event_bus().clone();
                     let db = s.engine.db().clone();
                     app.manage(s);
+                    // The countdown popup windows read their title from this.
+                    app.manage(gilb_shell_tauri::ShellConfig {
+                        window_title: "gilb".into(),
+                    });
                     // Cancel flag shared between download_model / cancel_model_download.
                     app.manage(commands::transcription::DownloadCancel::default());
                     // Background transcription worker + its queue. Spawned before
@@ -98,13 +102,13 @@ pub fn run() {
             commands::capture::status,
             commands::capture::get_tracking_paused,
             commands::capture::set_tracking_paused,
-            commands::privacy::open_privacy_pane,
-            commands::countdown::show_countdown,
-            commands::countdown::resolve_countdown,
-            commands::countdown::resolve_stop_countdown,
-            commands::countdown::stop_meeting_recording,
-            commands::settings::get_meeting_detection,
-            commands::settings::set_meeting_detection,
+            gilb_shell_tauri::open_privacy_pane,
+            gilb_shell_tauri::show_countdown,
+            gilb_shell_tauri::resolve_countdown,
+            gilb_shell_tauri::resolve_stop_countdown,
+            gilb_shell_tauri::stop_meeting_recording,
+            gilb_shell_tauri::get_meeting_detection,
+            gilb_shell_tauri::set_meeting_detection,
             commands::transcription::get_transcription_status,
             commands::transcription::set_transcription_language,
             commands::transcription::download_model,

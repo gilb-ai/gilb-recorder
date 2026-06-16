@@ -1,23 +1,46 @@
-//! Pre-record countdown popup window + its resolution command.
+//! Pre-record / stop countdown popup windows + their resolution commands.
 //!
 //! `show_countdown` spawns a borderless, always-on-top, screen-centered second
 //! OS window (label `countdown`) that floats over other apps and fills a single
 //! Record button over `countdown_seconds`. `resolve_countdown` is the one exit
 //! point: it publishes `RecordingArmed`/`RecordingCancelled` on the EventBus,
-//! logs the outcome, and tears the window down. Nothing consumes those events
-//! yet — the trigger wiring (MeetingEvent::Started -> show_countdown) is a
-//! separate card.
+//! logs the outcome, and tears the window down. The matching stop-countdown
+//! pair hands the user's choice to the meeting bridge over [`StopCountdownTx`].
+//!
+//! The window title is read from the [`ShellConfig`] managed state, so
+//! differently-branded shells reuse these windows without forking.
 
 use gilb_config::RecordingSettings;
-use gilb_events::RecordingEvent;
+use gilb_events::{EventBus, RecordingEvent};
+use gilb_pipeline::StopResolution;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
 
-use crate::meeting::{StopCountdownTx, StopResolution};
-use crate::state::AppState;
+use crate::ShellConfig;
 
 const COUNTDOWN_LABEL: &str = "countdown";
 const STOP_COUNTDOWN_LABEL: &str = "stop-countdown";
+
+/// Fallback window title when no [`ShellConfig`] is managed (shells are expected
+/// to manage one — see [`crate::spawn_meeting_pipeline`]).
+const DEFAULT_TITLE: &str = "Gilb";
+
+/// Managed Tauri state holding the sender half of the pipeline's stop-countdown
+/// resolution channel, so the `resolve_stop_countdown` command can hand the
+/// user's choice back to the bridge task.
+pub struct StopCountdownTx(pub tokio::sync::mpsc::Sender<StopResolution>);
+
+/// Resolve the countdown window title from the optionally-managed
+/// [`ShellConfig`], falling back to [`DEFAULT_TITLE`]. Pure so the threading is
+/// unit-testable without a running Tauri app.
+fn shell_title(cfg: Option<&ShellConfig>) -> String {
+    cfg.map(|c| c.window_title.clone())
+        .unwrap_or_else(|| DEFAULT_TITLE.to_string())
+}
+
+fn window_title(app: &AppHandle) -> String {
+    shell_title(app.try_state::<ShellConfig>().as_deref())
+}
 
 /// Open the borderless, centered, always-on-top countdown window for
 /// `meeting_id`. Shared by the `show_countdown` command (invoked from the UI)
@@ -36,7 +59,7 @@ pub(crate) fn open_countdown_window(
     let url = WebviewUrl::App(format!("countdown.html?{query}").into());
 
     WebviewWindowBuilder::new(app, COUNTDOWN_LABEL, url)
-        .title("Gilb")
+        .title(window_title(app))
         .inner_size(380.0, 220.0)
         .resizable(false)
         .decorations(false)
@@ -63,14 +86,9 @@ pub async fn show_countdown(
         .map_err(|e| format!("failed to open countdown window: {e}"))
 }
 
-#[tauri::command]
-pub async fn resolve_countdown(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-    meeting_id: i64,
-    armed: bool,
-) -> Result<(), String> {
-    let bus = state.engine.event_bus();
+/// Publish the countdown outcome on the recording bus. Pure over the bus so the
+/// `armed -> Armed` / `!armed -> Cancelled` mapping is unit-testable.
+fn publish_resolution(bus: &EventBus, meeting_id: i64, armed: bool) {
     if armed {
         info!(meeting_id, "RecordingArmed");
         bus.publish_recording(RecordingEvent::Armed { meeting_id });
@@ -78,6 +96,16 @@ pub async fn resolve_countdown(
         info!(meeting_id, "RecordingCancelled");
         bus.publish_recording(RecordingEvent::Cancelled { meeting_id });
     }
+}
+
+#[tauri::command]
+pub async fn resolve_countdown(
+    app: tauri::AppHandle,
+    bus: tauri::State<'_, EventBus>,
+    meeting_id: i64,
+    armed: bool,
+) -> Result<(), String> {
+    publish_resolution(&bus, meeting_id, armed);
 
     if let Some(win) = app.get_webview_window(COUNTDOWN_LABEL) {
         let _ = win.close();
@@ -103,7 +131,7 @@ pub(crate) fn open_stop_countdown_window(
     let url = WebviewUrl::App(format!("stop-countdown.html?{query}").into());
 
     WebviewWindowBuilder::new(app, STOP_COUNTDOWN_LABEL, url)
-        .title("Gilb")
+        .title(window_title(app))
         .inner_size(380.0, 220.0)
         .resizable(false)
         .decorations(false)
@@ -161,4 +189,47 @@ pub async fn stop_meeting_recording(
         })
         .await
         .map_err(|_| "meeting bridge is gone".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gilb_events::RecordingEvent;
+
+    #[test]
+    fn shell_title_uses_config_when_present() {
+        let cfg = ShellConfig {
+            window_title: "gilb".to_string(),
+        };
+        assert_eq!(shell_title(Some(&cfg)), "gilb");
+    }
+
+    #[test]
+    fn shell_title_falls_back_without_config() {
+        assert_eq!(shell_title(None), DEFAULT_TITLE);
+    }
+
+    #[tokio::test]
+    async fn resolve_countdown_armed_publishes_armed() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe_recording();
+        publish_resolution(&bus, 42, true);
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(
+            msg.payload,
+            RecordingEvent::Armed { meeting_id: 42 }
+        ));
+    }
+
+    #[tokio::test]
+    async fn resolve_countdown_not_armed_publishes_cancelled() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe_recording();
+        publish_resolution(&bus, 7, false);
+        let msg = rx.recv().await.unwrap();
+        assert!(matches!(
+            msg.payload,
+            RecordingEvent::Cancelled { meeting_id: 7 }
+        ));
+    }
 }

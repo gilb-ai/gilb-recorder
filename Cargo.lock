@@ -1989,6 +1989,7 @@ dependencies = [
  "gilb-engine",
  "gilb-events",
  "gilb-pipeline",
+ "gilb-shell-tauri",
  "gilb-transcribe",
  "libc",
  "parking_lot",
@@ -2167,6 +2168,24 @@ dependencies = [
  "uuid",
  "windows 0.58.0",
  "windows-core 0.58.0",
+]
+
+[[package]]
+name = "gilb-shell-tauri"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "gilb-a11y",
+ "gilb-config",
+ "gilb-db",
+ "gilb-events",
+ "gilb-pipeline",
+ "parking_lot",
+ "tauri",
+ "tauri-plugin-opener",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
