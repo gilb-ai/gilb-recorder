@@ -243,7 +243,10 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
     // Unique temp sibling: the same dir keeps the rename atomic (no cross-fs
     // copy); pid + counter keep concurrent writers from clobbering each other.
     static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let stem = path.file_name().and_then(|s| s.to_str()).unwrap_or("secret");
+    let stem = path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("secret");
     let tmp = dir.join(format!(
         ".{stem}.{}.{}.tmp",
         std::process::id(),
