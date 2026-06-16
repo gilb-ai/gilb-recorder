@@ -63,17 +63,6 @@ where
     Ok(res.last_insert_rowid())
 }
 
-/// Count of actions inserted within the current calendar day (UTC).
-pub async fn count_today(db: &Db) -> Result<i64> {
-    let today = chrono::Utc::now().date_naive().to_string();
-    let row: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM actions WHERE substr(captured_at, 1, 10) = ?")
-            .bind(&today)
-            .fetch_one(db)
-            .await?;
-    Ok(row.0)
-}
-
 /// Count of actions in the given session.
 pub async fn count_in_session(db: &Db, session_id: SessionId) -> Result<i64> {
     let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM actions WHERE session_id = ?")

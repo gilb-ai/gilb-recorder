@@ -54,7 +54,6 @@ type EngineStatus = {
   recording: boolean;
   session_id: number | null;
   permissions: Permissions;
-  actions_today: number;
   platform: string;
 };
 
@@ -609,8 +608,8 @@ window.addEventListener("DOMContentLoaded", () => {
 
   // Backend proxies EventBus events here — permission/health messages
   // trigger refresh() immediately. Permissions, recording state and
-  // session_id update via events; the slow 5-second poll is only for the
-  // actions_today counter and as a fallback for a missed broadcast.
+  // session_id update via events; the slow 5-second poll is only a fallback
+  // for a missed broadcast.
   listen("permission", () => refresh());
   listen("health", () => refresh());
   // Local model download progress + terminal state (driven by download_model).
