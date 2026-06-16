@@ -4,7 +4,7 @@
 //! lists land in Phase 4.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -411,6 +411,24 @@ pub fn load_preferences() -> Preferences {
 /// Persist preferences to `$HOME/.gilb/prefs.json`.
 pub fn save_preferences(prefs: &Preferences) -> Result<()> {
     save_preferences_to(&preferences_path()?, prefs)
+}
+
+/// Serializes writes to `prefs.json` so concurrent single-field updates can't
+/// lose each other's change.
+static PREFERENCES_LOCK: Mutex<()> = Mutex::new(());
+
+/// Read-modify-write the preferences file under a process-global lock. Without
+/// this, two commands that each load → mutate one field → save (e.g. the
+/// tracking-pause toggle and the meeting-detection switch) can interleave and
+/// the second save clobbers the first field's change. `update` mutates a fresh
+/// load and the write happens while the lock is held, so updates compose.
+/// Returns the persisted preferences.
+pub fn update_preferences(update: impl FnOnce(&mut Preferences)) -> Result<Preferences> {
+    let _guard = PREFERENCES_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut prefs = load_preferences();
+    update(&mut prefs);
+    save_preferences(&prefs)?;
+    Ok(prefs)
 }
 
 #[cfg(test)]
