@@ -22,6 +22,9 @@ const DEFAULT_WORKSPACE_URL =
 // step) and/or the transcription section, and never auto-starts the engine.
 const FEATURE_TRACKING = import.meta.env.VITE_FEATURE_TRACKING !== "0";
 const FEATURE_TRANSCRIPTION = import.meta.env.VITE_FEATURE_TRANSCRIPTION !== "0";
+// Set to "0" to drop the Settings screen: hide the footer gear and never open
+// the overlay. For shells with nothing user-tunable to show.
+const FEATURE_SETTINGS = import.meta.env.VITE_FEATURE_SETTINGS !== "0";
 // Hide the tracking *UI* (status row + Pause/Resume) but keep the engine. A
 // headless-tracking brand sets this to "0": capture still auto-starts (gated on
 // FEATURE_TRACKING) and the Accessibility splash step stays, but the user sees
@@ -346,7 +349,7 @@ function navigateTray(target: string) {
   const overlay = $("settings-overlay");
   switch (target) {
     case "settings":
-      void openSettings();
+      if (FEATURE_SETTINGS) void openSettings();
       break;
     case "permissions": {
       if (overlay && !overlay.hidden) void closeSettings(false);
@@ -619,11 +622,17 @@ window.addEventListener("DOMContentLoaded", () => {
   if (!FEATURE_TRANSCRIPTION) {
     $("transcription-row")?.setAttribute("hidden", "");
   }
+  if (!FEATURE_SETTINGS) {
+    // No Settings screen: hide the footer gear so there's nothing to open.
+    $("btn-settings")?.setAttribute("hidden", "");
+  }
   $("btn-track-toggle")?.addEventListener("click", toggleTracking);
   $("btn-rec-stop")?.addEventListener("click", stopMeetingRecording);
   $("btn-connect")?.addEventListener("click", connect);
   $("btn-signout")?.addEventListener("click", signOut);
-  $("btn-settings")?.addEventListener("click", openSettings);
+  if (FEATURE_SETTINGS) {
+    $("btn-settings")?.addEventListener("click", openSettings);
+  }
   $("btn-settings-save")?.addEventListener("click", () => closeSettings(true));
   $("btn-settings-cancel")?.addEventListener("click", () => closeSettings(false));
   $("btn-model-download")?.addEventListener("click", downloadModel);
