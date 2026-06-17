@@ -26,3 +26,5 @@ Thumbs.db
 # Local runner state (worktrees, session logs, worker output).
 # Used by external workflow tooling; safe to leave alone.
 .gilb/
+
+.claude/

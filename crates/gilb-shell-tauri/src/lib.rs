@@ -20,6 +20,7 @@ mod countdown;
 mod meeting;
 mod privacy;
 mod settings;
+pub mod tray;
 
 use std::path::PathBuf;
 

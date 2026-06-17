@@ -7,7 +7,7 @@ publish.workspace = true
 description = "Reusable Tauri meeting-flow glue (countdown windows, settings/privacy commands, MeetingUi) for gilb-based shells"
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
 url = "2"
 tracing = { workspace = true }
