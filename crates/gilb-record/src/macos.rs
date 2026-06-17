@@ -51,6 +51,11 @@ use crate::{mix_to_mono_16k_dual, write_wav_16k_mono, ScreenAudioCapturer};
 /// mic. Both streams are resampled to 16 kHz by [`mix_to_mono_16k`] on stop.
 const CAPTURE_SAMPLE_RATE: u32 = 48_000;
 
+/// Capture frame rate cap. ScreenCaptureKit defaults to ~60 fps; meetings are
+/// low-motion, so cap to 15 (parity with the Windows backend) to roughly halve
+/// the recording size. Applied via `minimumFrameInterval` = 1/`VIDEO_FPS`.
+const VIDEO_FPS: i32 = 15;
+
 /// Shared, interleaved-to-mono PCM accumulators for the two audio sources.
 #[derive(Default)]
 struct AudioBuffers {
@@ -306,6 +311,15 @@ fn make_capture_config(w: u32, h: u32) -> Result<SCStreamConfiguration> {
         .map_err(|e| anyhow!("set capture width: {e}"))?
         .set_height(h)
         .map_err(|e| anyhow!("set capture height: {e}"))?
+        // Cap to VIDEO_FPS (SCK defaults to ~60). minimumFrameInterval is the
+        // minimum spacing between frames, i.e. 1/fps.
+        .set_minimum_frame_interval(&core_media_rs::cm_time::CMTime {
+            value: 1,
+            timescale: VIDEO_FPS,
+            flags: 1,
+            epoch: 0,
+        })
+        .map_err(|e| anyhow!("set minimum frame interval: {e}"))?
         .set_captures_audio(true)
         .map_err(|e| anyhow!("enable audio capture: {e}"))?
         .set_sample_rate(CAPTURE_SAMPLE_RATE)
