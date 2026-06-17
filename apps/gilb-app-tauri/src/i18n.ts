@@ -16,8 +16,6 @@ const LOCALE = import.meta.env.VITE_LOCALE === "ru" ? "ru" : "en";
 
 const en = {
   "splash.title": "macOS permissions needed",
-  "splash.lead":
-    "{brand} records your activity via the Accessibility API and captures meetings (screen + microphone). Grant the permissions below in System Settings → Privacy & Security.",
   "splash.accessibility": "Accessibility",
   "splash.screenRecording": "Screen Recording",
   "splash.microphone": "Microphone",
@@ -95,8 +93,6 @@ const en = {
 
 const ru: typeof en = {
   "splash.title": "Нужны разрешения macOS",
-  "splash.lead":
-    "{brand} записывает вашу активность через Accessibility API и захватывает встречи (экран + микрофон). Выдайте разрешения ниже в Системных настройках → Конфиденциальность и безопасность.",
   "splash.accessibility": "Универсальный доступ",
   "splash.screenRecording": "Запись экрана",
   "splash.microphone": "Микрофон",
