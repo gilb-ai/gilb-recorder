@@ -204,12 +204,14 @@ pub fn setup<C: TrayController>(
     Ok(())
 }
 
-/// Last rendered (recording, status, extra items) — skip native menu/icon churn
-/// when nothing visible changed (refresh can fire per status tick). The extra
-/// items are part of the key so a state-driven change (e.g. "Sign in" appearing)
-/// still re-renders even when recording/status are unchanged.
-static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Option<String>, Vec<(String, String)>)>> =
-    Mutex::new(None);
+/// Dedup key for [`refresh`]: `(recording, account, status, extra items)`. The
+/// extra items are `(id, label)` pairs so a state-driven change (e.g. a "Sign
+/// in" item appearing) is part of the key.
+type RenderKey = (bool, Option<String>, Option<String>, Vec<(String, String)>);
+
+/// Last rendered [`RenderKey`] — skip native menu/icon churn when nothing
+/// visible changed (refresh can fire per status tick).
+static LAST_RENDERED: Mutex<Option<RenderKey>> = Mutex::new(None);
 
 /// Re-render the tray (icon + menu) from the [`TrayController`]. A no-op until
 /// [`setup`] has run.
@@ -233,7 +235,14 @@ pub fn refresh(app: &AppHandle) {
 
     let mut last = LAST_RENDERED.lock();
     let icon_changed = last.as_ref().map(|(r, ..)| *r) != Some(recording);
-    if last.as_ref() == Some(&(recording, account.clone(), status.clone(), extra_key.clone())) {
+    if last.as_ref()
+        == Some(&(
+            recording,
+            account.clone(),
+            status.clone(),
+            extra_key.clone(),
+        ))
+    {
         return;
     }
     *last = Some((recording, account.clone(), status.clone(), extra_key));
@@ -293,7 +302,10 @@ pub fn refresh(app: &AppHandle) {
         }
         let render_ms = started.elapsed().as_millis() as u64;
         if waited_ms > 250 || render_ms > 100 {
-            warn!(waited_ms, render_ms, "slow tray render — main thread was busy");
+            warn!(
+                waited_ms,
+                render_ms, "slow tray render — main thread was busy"
+            );
         }
     };
     if let Err(err) = app.run_on_main_thread(render) {
