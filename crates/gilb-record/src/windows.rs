@@ -96,14 +96,24 @@ use crate::{mix_to_mono_16k_dual, write_wav_16k_mono, ScreenAudioCapturer};
 const CAPTURE_SAMPLE_RATE: u32 = 48_000;
 
 /// Target H.264 frame rate for the WGC -> SinkWriter pipeline.
-const VIDEO_FPS: u32 = 30;
+/// Target H.264 frame rate. WGC delivers frames at the display refresh rate
+/// (often 60 Hz); [`on_frame`] drops frames closer than [`MIN_FRAME_INTERVAL_100NS`]
+/// so a low-motion meeting is encoded at ~this rate, not 60 fps. 15 fps is plenty
+/// for "slides + faces" and roughly halves the file vs 30.
+const VIDEO_FPS: u32 = 15;
 
 /// Nominal per-frame duration in 100 ns units (used for sample durations;
 /// presentation times come from each frame's `SystemRelativeTime`).
 const FRAME_DURATION_100NS: i64 = 10_000_000 / VIDEO_FPS as i64;
 
-/// Average target bitrate for the H.264 stream (8 Mbit/s).
-const VIDEO_BITRATE: u32 = 8_000_000;
+/// Minimum spacing between emitted frames (100 ns). Frames arriving sooner are
+/// dropped to enforce [`VIDEO_FPS`]. The 9/10 margin keeps the rate near the
+/// target instead of halving it when the source cadence nearly matches.
+const MIN_FRAME_INTERVAL_100NS: i64 = FRAME_DURATION_100NS * 9 / 10;
+
+/// Average target bitrate for the H.264 stream (3 Mbit/s) — a ceiling for busy
+/// scenes; static screen content stays well below it.
+const VIDEO_BITRATE: u32 = 3_000_000;
 
 /// WASAPI shared-mode buffer duration in 100 ns units (1 s).
 const AUDIO_BUFFER_DURATION_100NS: i64 = 10_000_000;
@@ -521,6 +531,9 @@ unsafe fn capture_video_inner(
     let (frame_tx, frame_rx) = std_mpsc::channel::<VideoFrame>();
     let staging: Arc<StdMutex<Option<StagingTex>>> = Arc::new(StdMutex::new(None));
     let start_time: Arc<StdMutex<Option<i64>>> = Arc::new(StdMutex::new(None));
+    // Presentation time of the last frame forwarded to the encoder, for the
+    // frame-rate limiter in `on_frame`. Shared so it survives watcher re-targets.
+    let last_emit: Arc<StdMutex<Option<i64>>> = Arc::new(StdMutex::new(None));
 
     // `Option` so the watcher can `take()` it to stop the old capture before
     // rebuilding (LiveCapture::stop consumes self), without leaving a moved value.
@@ -531,6 +544,7 @@ unsafe fn capture_video_inner(
         &item,
         &staging,
         &start_time,
+        &last_emit,
         &frame_tx,
         out_w,
         out_h,
@@ -571,6 +585,7 @@ unsafe fn capture_video_inner(
                                 &new_item,
                                 &staging,
                                 &start_time,
+                                &last_emit,
                                 &frame_tx,
                                 out_w,
                                 out_h,
@@ -663,6 +678,7 @@ unsafe fn start_capture_for_item(
     item: &GraphicsCaptureItem,
     staging: &Arc<StdMutex<Option<StagingTex>>>,
     start_time: &Arc<StdMutex<Option<i64>>>,
+    last_emit: &Arc<StdMutex<Option<i64>>>,
     frame_tx: &std_mpsc::Sender<VideoFrame>,
     out_w: u32,
     out_h: u32,
@@ -682,6 +698,7 @@ unsafe fn start_capture_for_item(
         let context = context.clone();
         let staging = staging.clone();
         let start_time = start_time.clone();
+        let last_emit = last_emit.clone();
         let frame_tx = frame_tx.clone();
         move |_sender, _args| -> WinResult<()> {
             // Errors inside the callback are logged, not propagated, so a single
@@ -692,6 +709,7 @@ unsafe fn start_capture_for_item(
                 &context,
                 &staging,
                 &start_time,
+                &last_emit,
                 &frame_tx,
                 out_w,
                 out_h,
@@ -823,11 +841,36 @@ unsafe fn on_frame(
     context: &ID3D11DeviceContext,
     staging: &Arc<StdMutex<Option<StagingTex>>>,
     start_time: &Arc<StdMutex<Option<i64>>>,
+    last_emit: &Arc<StdMutex<Option<i64>>>,
     frame_tx: &std_mpsc::Sender<VideoFrame>,
     out_w: u32,
     out_h: u32,
 ) -> Result<()> {
     let frame = pool.TryGetNextFrame().context("TryGetNextFrame")?;
+
+    // Frame-rate limit before any copy/scale work: WGC fires at the display
+    // refresh rate, so drop frames that arrive sooner than MIN_FRAME_INTERVAL
+    // after the last forwarded one. `SystemRelativeTime` is available up front,
+    // so dropped frames cost only a `TryGetNextFrame` + `Close`.
+    let sample_time = {
+        let t = frame
+            .SystemRelativeTime()
+            .context("Direct3D11CaptureFrame::SystemRelativeTime")?
+            .Duration;
+        let mut start = start_time.lock().unwrap();
+        t - *start.get_or_insert(t)
+    };
+    {
+        let mut last = last_emit.lock().unwrap();
+        if let Some(prev) = *last {
+            if sample_time - prev < MIN_FRAME_INTERVAL_100NS {
+                let _ = frame.Close();
+                return Ok(());
+            }
+        }
+        *last = Some(sample_time);
+    }
+
     let surface = frame.Surface().context("Direct3D11CaptureFrame::Surface")?;
     let access: IDirect3DDxgiInterfaceAccess = surface
         .cast()
@@ -900,15 +943,6 @@ unsafe fn on_frame(
         out_w as usize,
         out_h as usize,
     );
-
-    let t = frame
-        .SystemRelativeTime()
-        .context("Direct3D11CaptureFrame::SystemRelativeTime")?
-        .Duration;
-    let sample_time = {
-        let mut start = start_time.lock().unwrap();
-        t - *start.get_or_insert(t)
-    };
 
     let _ = frame.Close();
     let _ = frame_tx.send((data, sample_time));
