@@ -21,8 +21,14 @@ use accessibility_sys::{
     kAXValueAttribute, AXError, AXUIElementCopyAttributeValue, AXUIElementCopyElementAtPosition,
     AXUIElementCreateSystemWide, AXUIElementRef, AXUIElementSetMessagingTimeout,
 };
-use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
+use core_foundation::base::{CFGetTypeID, CFRelease, CFType, CFTypeRef, TCFType};
+use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
+use core_graphics::window::{
+    copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListOptionOnScreenOnly,
+    kCGWindowOwnerPID,
+};
 use crossbeam_channel as cc;
 use parking_lot::Mutex;
 use tracing::debug;
@@ -139,7 +145,18 @@ fn element_at(
     y: f64,
     focus: &FocusState,
 ) -> Option<ElementContext> {
-    // SAFETY: Apple's AX functions are documented thread-safe.
+    // An AX hit-test is a cross-process call serviced on the *target* app's
+    // main thread — EXCEPT when the point lands on our OWN UI (the tray status
+    // item or our window). Then AppKit short-circuits and runs
+    // `accessibilityHitTest:` in-process on THIS worker thread; NSAccessibility
+    // is main-thread-only and corrupts memory (observed: a pointer-auth trap
+    // inside CFDictionarySetValue when the cursor is over the menu-bar status
+    // item). Skip points over our own windows — we lose only the element
+    // context for clicks on our own chrome; cross-process queries are unaffected.
+    if point_over_own_window(x, y) {
+        return None;
+    }
+
     let mut element: AXUIElementRef = ptr::null_mut();
     let res = unsafe { AXUIElementCopyElementAtPosition(system, x as f32, y as f32, &mut element) };
     if res != kAXErrorSuccess as AXError || element.is_null() {
@@ -170,6 +187,70 @@ fn element_at(
         identifier,
         frame: None,
     })
+}
+
+/// True when the global point `(x, y)` lies over a window owned by our own
+/// process. Uses CoreGraphics window enumeration only (no AppKit), so it is
+/// safe on the worker thread — unlike the AX hit-test it guards.
+///
+/// Conservative: if one of our windows underlaps the point we return `true`
+/// even when another app's window is in front. That costs only an occasional
+/// dropped element-context sample, never a recorded event; the dangerous case
+/// (our window actually on top, e.g. the tray status item) is always caught.
+fn point_over_own_window(x: f64, y: f64) -> bool {
+    let our_pid = std::process::id() as i64;
+    let Some(windows) = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) else {
+        return false;
+    };
+    // SAFETY: reading the framework's CFString key globals.
+    let pid_key = unsafe { CFString::wrap_under_get_rule(kCGWindowOwnerPID) };
+    let bounds_key = unsafe { CFString::wrap_under_get_rule(kCGWindowBounds) };
+
+    for item in windows.iter() {
+        // SAFETY: each array element is a CFDictionary; borrow it (get rule) so
+        // the wrapper balances the array's retain on drop.
+        let dict = unsafe {
+            CFDictionary::<CFString, CFType>::wrap_under_get_rule(*item as CFDictionaryRef)
+        };
+
+        let owner = dict
+            .find(&pid_key)
+            .and_then(|v| v.downcast::<CFNumber>())
+            .and_then(|n| n.to_i64());
+        if owner != Some(our_pid) {
+            continue;
+        }
+
+        let Some(bounds) = dict.find(&bounds_key) else {
+            continue;
+        };
+        // SAFETY: kCGWindowBounds is always a CFDictionary (X/Y/Width/Height).
+        let bounds = unsafe {
+            CFDictionary::<CFString, CFType>::wrap_under_get_rule(
+                bounds.as_CFTypeRef() as CFDictionaryRef
+            )
+        };
+        if rect_contains(&bounds, x, y) {
+            return true;
+        }
+    }
+    false
+}
+
+/// Point-in-rect against a `kCGWindowBounds` dictionary. CGWindow bounds use a
+/// top-left origin — the same space as the CGEvent location the event tap hands
+/// us — so no flipping is needed.
+fn rect_contains(bounds: &CFDictionary<CFString, CFType>, x: f64, y: f64) -> bool {
+    let read = |key: &'static str| -> Option<f64> {
+        bounds
+            .find(CFString::from_static_string(key))
+            .and_then(|v| v.downcast::<CFNumber>())
+            .and_then(|n| n.to_f64())
+    };
+    match (read("X"), read("Y"), read("Width"), read("Height")) {
+        (Some(bx), Some(by), Some(bw), Some(bh)) => x >= bx && x < bx + bw && y >= by && y < by + bh,
+        _ => false,
+    }
 }
 
 fn ax_attr_name(name: &str) -> CFString {
