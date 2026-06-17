@@ -265,7 +265,9 @@ fn rect_contains(bounds: &CFDictionary<CFString, CFType>, x: f64, y: f64) -> boo
             .and_then(|n| n.to_f64())
     };
     match (read("X"), read("Y"), read("Width"), read("Height")) {
-        (Some(bx), Some(by), Some(bw), Some(bh)) => x >= bx && x < bx + bw && y >= by && y < by + bh,
+        (Some(bx), Some(by), Some(bw), Some(bh)) => {
+            x >= bx && x < bx + bw && y >= by && y < by + bh
+        }
         _ => false,
     }
 }

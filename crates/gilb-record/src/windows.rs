@@ -63,10 +63,10 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM,
-    MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-    MFCreateSinkWriterFromURL, MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup,
-    MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
+    IMFAttributes, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM, MFCreateAttributes,
+    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL,
+    MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup, MFVideoFormat_H264,
+    MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
     MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
     MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
     MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
