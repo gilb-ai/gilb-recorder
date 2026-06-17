@@ -1098,7 +1098,7 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
                 .context("WriteSample (video)")?;
             write_ms = t_write.elapsed().as_millis() as u64;
         }
-        if iters <= 6 || iters % 120 == 0 {
+        if iters <= 6 || read_ms > 30 || write_ms > 30 || iters % 200 == 0 {
             info!(iters, read_ms, write_ms, "mux: sample copied"); // TODO(diag)
         }
     }
