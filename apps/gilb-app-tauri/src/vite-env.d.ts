@@ -34,6 +34,12 @@ interface ImportMetaEnv {
    * Set to "0" to hide the on-device transcription section in Settings.
    */
   readonly VITE_FEATURE_TRANSCRIPTION?: string;
+  /**
+   * Set to "0" to drop the Settings screen entirely: the footer gear is hidden
+   * and the settings overlay is never opened. For shells that expose no
+   * user-tunable settings.
+   */
+  readonly VITE_FEATURE_SETTINGS?: string;
 }
 
 interface ImportMeta {
