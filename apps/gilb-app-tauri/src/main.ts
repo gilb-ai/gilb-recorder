@@ -20,6 +20,8 @@ const DEFAULT_WORKSPACE_URL =
 // Build-time feature switches (default on; set to "0" to drop a subsystem).
 // A meetings-only shell hides activity tracking (and its Accessibility splash
 // step) and/or the transcription section, and never auto-starts the engine.
+// To request Accessibility now but defer capture to a later release, keep
+// FEATURE_TRACKING on and set FEATURE_TRACKING_AUTOSTART off (see below).
 const FEATURE_TRACKING = import.meta.env.VITE_FEATURE_TRACKING !== "0";
 const FEATURE_TRANSCRIPTION = import.meta.env.VITE_FEATURE_TRANSCRIPTION !== "0";
 // Set to "0" to drop the Settings screen: hide the footer gear and never open
@@ -31,6 +33,15 @@ const FEATURE_SETTINGS = import.meta.env.VITE_FEATURE_SETTINGS !== "0";
 // no tracking surface. The row only shows when both the engine and its UI are on.
 const FEATURE_TRACKING_UI = import.meta.env.VITE_FEATURE_TRACKING_UI !== "0";
 const SHOW_TRACKING_UI = FEATURE_TRACKING && FEATURE_TRACKING_UI;
+// Auto-start the capture engine on launch (default on). Decouples "request the
+// Accessibility permission" from "actually capture": a build that wants the
+// Accessibility grant in place up front but NOT to capture yet sets this to
+// "0" while keeping FEATURE_TRACKING on. The Accessibility splash step still
+// shows and is gated on, so the permission is requested/granted now; capture
+// just never auto-arms. Re-enabling later (flip back to "1") needs no new
+// permission prompt since the grant already exists.
+const FEATURE_TRACKING_AUTOSTART =
+  import.meta.env.VITE_FEATURE_TRACKING_AUTOSTART !== "0";
 
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
@@ -263,9 +274,12 @@ async function refresh() {
   updateSplash(s.permissions, s.platform);
 
   // Auto-resume on launch only if the user hasn't deliberately paused, and
-  // only once every required permission is granted.
+  // only once every required permission is granted. FEATURE_TRACKING_AUTOSTART
+  // lets a build request the Accessibility permission (FEATURE_TRACKING) but
+  // skip actually capturing until a later release flips it on.
   if (
     FEATURE_TRACKING &&
+    FEATURE_TRACKING_AUTOSTART &&
     !hasAutoStarted &&
     !s.recording &&
     allPermissionsGranted(s.permissions) &&

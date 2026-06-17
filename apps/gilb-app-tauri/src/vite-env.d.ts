@@ -31,6 +31,14 @@ interface ImportMetaEnv {
    */
   readonly VITE_FEATURE_TRACKING_UI?: string;
   /**
+   * Set to "0" to request the Accessibility permission (FEATURE_TRACKING must
+   * stay on, so the splash step shows) but NOT auto-start the capture engine.
+   * Lets a release pre-grant Accessibility while deferring capture to a later
+   * build that flips this back to "1" — no new permission prompt then. Default
+   * on (capture auto-starts as usual).
+   */
+  readonly VITE_FEATURE_TRACKING_AUTOSTART?: string;
+  /**
    * Set to "0" to hide the on-device transcription section in Settings.
    */
   readonly VITE_FEATURE_TRANSCRIPTION?: string;
