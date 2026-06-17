@@ -26,8 +26,8 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Wry};
 use tracing::warn;
 
-/// Built-in menu-item ids. A shell's [`TrayConfig::extra_items`] must not reuse
-/// these — a collision would route the built-in's click to `on_custom`.
+/// Built-in menu-item ids. A shell's [`TrayController::extra_items`] must not
+/// reuse these — a collision would route the built-in's click to `on_custom`.
 const MENU_OPEN: &str = "open";
 const MENU_TOGGLE: &str = "toggle-recording";
 const MENU_QUIT: &str = "quit";
@@ -53,10 +53,6 @@ pub struct TrayConfig {
     /// Toggle label while recording (e.g. "Остановить запись").
     pub stop_label: String,
     pub quit_label: String,
-    /// Extra clickable items shown after Open (e.g. sign-in / permissions /
-    /// settings). Empty = built-in menu only. Clicks route to
-    /// [`TrayController::on_custom`].
-    pub extra_items: Vec<TrayMenuItem>,
     pub icon_idle: &'static [u8],
     pub icon_recording: &'static [u8],
 }
@@ -74,7 +70,14 @@ pub trait TrayController: Send + Sync + 'static {
     fn on_open(&self, app: &AppHandle);
     fn on_toggle(&self, app: &AppHandle);
     fn on_quit(&self, app: &AppHandle);
-    /// A shell-declared [`TrayConfig::extra_items`] entry was clicked, passed its
+    /// Extra clickable items shown after Open (e.g. sign-in / permissions /
+    /// settings). Re-evaluated on every render, so the shell can vary them by
+    /// state — e.g. hide "Sign in" once signed in. Default: none. Clicks route
+    /// to [`Self::on_custom`]; ids must not collide with the built-ins.
+    fn extra_items(&self, _app: &AppHandle) -> Vec<TrayMenuItem> {
+        Vec::new()
+    }
+    /// A shell-declared [`Self::extra_items`] entry was clicked, passed its
     /// `id`. Default no-op for shells with no extra items.
     fn on_custom(&self, _app: &AppHandle, _id: &str) {}
 }
@@ -108,6 +111,7 @@ fn build_menu(
     config: &TrayConfig,
     recording: bool,
     status: Option<&str>,
+    extra: &[TrayMenuItem],
 ) -> tauri::Result<Menu<Wry>> {
     let open = MenuItem::with_id(app, MENU_OPEN, &config.open_label, true, None::<&str>)?;
     let toggle = MenuItem::with_id(
@@ -123,7 +127,7 @@ fn build_menu(
     menu.append(&open)?;
     // Shell-declared items (sign-in / permissions / settings …) — clicks route
     // to `on_custom` via their id.
-    for item in &config.extra_items {
+    for item in extra {
         menu.append(&MenuItem::with_id(
             app,
             item.id.as_str(),
@@ -151,7 +155,8 @@ pub fn setup<C: TrayController>(
 ) -> tauri::Result<()> {
     let recording = controller.is_recording(app);
     let status = controller.status_line(app);
-    let menu = build_menu(app, &config, recording, status.as_deref())?;
+    let extra = controller.extra_items(app);
+    let menu = build_menu(app, &config, recording, status.as_deref(), &extra)?;
     TrayIconBuilder::with_id(config.tray_id.as_str())
         .icon(icon(&config, recording)?)
         .icon_as_template(cfg!(target_os = "macos"))
@@ -180,9 +185,12 @@ pub fn setup<C: TrayController>(
     Ok(())
 }
 
-/// Last rendered (recording, status) — skip native menu/icon churn when nothing
-/// visible changed (refresh can fire per status tick).
-static LAST_RENDERED: Mutex<Option<(bool, Option<String>)>> = Mutex::new(None);
+/// Last rendered (recording, status, extra items) — skip native menu/icon churn
+/// when nothing visible changed (refresh can fire per status tick). The extra
+/// items are part of the key so a state-driven change (e.g. "Sign in" appearing)
+/// still re-renders even when recording/status are unchanged.
+static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Vec<(String, String)>)>> =
+    Mutex::new(None);
 
 /// Re-render the tray (icon + menu) from the [`TrayController`]. A no-op until
 /// [`setup`] has run.
@@ -195,13 +203,18 @@ pub fn refresh(app: &AppHandle) {
     };
     let recording = state.controller.is_recording(app);
     let status = state.controller.status_line(app);
+    let extra = state.controller.extra_items(app);
+    let extra_key: Vec<(String, String)> = extra
+        .iter()
+        .map(|i| (i.id.clone(), i.label.clone()))
+        .collect();
 
     let mut last = LAST_RENDERED.lock();
-    let icon_changed = last.as_ref().map(|(r, _)| *r) != Some(recording);
-    if last.as_ref() == Some(&(recording, status.clone())) {
+    let icon_changed = last.as_ref().map(|(r, _, _)| *r) != Some(recording);
+    if last.as_ref() == Some(&(recording, status.clone(), extra_key.clone())) {
         return;
     }
-    *last = Some((recording, status.clone()));
+    *last = Some((recording, status.clone(), extra_key));
     drop(last);
 
     if icon_changed {
@@ -215,7 +228,7 @@ pub fn refresh(app: &AppHandle) {
             Err(err) => warn!(?err, "failed to load tray icon"),
         }
     }
-    match build_menu(app, &state.config, recording, status.as_deref()) {
+    match build_menu(app, &state.config, recording, status.as_deref(), &extra) {
         Ok(menu) => {
             if let Err(err) = tray.set_menu(Some(menu)) {
                 warn!(?err, "failed to update tray menu");
@@ -237,7 +250,6 @@ mod tests {
             start_label: "Start recording".into(),
             stop_label: "Stop recording".into(),
             quit_label: "Quit".into(),
-            extra_items: Vec::new(),
             icon_idle: &[],
             icon_recording: &[],
         }
@@ -252,20 +264,17 @@ mod tests {
 
     #[test]
     fn extra_item_ids_do_not_collide_with_builtins() {
-        let cfg = TrayConfig {
-            extra_items: vec![
-                TrayMenuItem {
-                    id: "sign-in".into(),
-                    label: "Sign in".into(),
-                },
-                TrayMenuItem {
-                    id: "settings".into(),
-                    label: "Settings".into(),
-                },
-            ],
-            ..config()
-        };
-        for item in &cfg.extra_items {
+        let items = [
+            TrayMenuItem {
+                id: "sign-in".into(),
+                label: "Sign in".into(),
+            },
+            TrayMenuItem {
+                id: "settings".into(),
+                label: "Settings".into(),
+            },
+        ];
+        for item in &items {
             assert!(
                 ![MENU_OPEN, MENU_TOGGLE, MENU_QUIT].contains(&item.id.as_str()),
                 "extra item id {:?} collides with a built-in",

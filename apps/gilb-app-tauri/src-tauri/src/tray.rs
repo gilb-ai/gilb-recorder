@@ -65,8 +65,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             start_label: "Начать запись".into(),
             stop_label: "Остановить запись".into(),
             quit_label: "Завершить".into(),
-            // gilb has no extra tray items yet — built-in menu only.
-            extra_items: Vec::new(),
             icon_idle: ICON_IDLE,
             icon_recording: ICON_RECORDING,
         },
