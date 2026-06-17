@@ -1,17 +1,18 @@
 //! gilb's [`ShellHooks`] over the reusable Tauri meeting glue in
 //! `crates/gilb-shell-tauri`. The shared work (countdown windows, the
-//! `meeting-recording` webview event) lives in the crate; gilb only diverges on
+//! `meeting-recording` webview event) lives in the crate; gilb diverges on
 //! `recording_stopped`, where a finished meeting is enqueued for on-device
-//! transcription.
+//! transcription, and mirrors `recording_status` into `AppState` + the tray.
 
 use std::path::PathBuf;
 
 use gilb_db::Db;
 use gilb_events::EventBus;
-use gilb_shell_tauri::{spawn_meeting_pipeline as shell_spawn, ShellHooks};
+use gilb_shell_tauri::{spawn_meeting_pipeline as shell_spawn, RecordingStatus, ShellHooks};
 use tauri::{AppHandle, Manager};
 use tracing::warn;
 
+use crate::state::AppState;
 use crate::transcribe_worker::{TranscribeTx, TranscriptionJob};
 
 /// gilb-specific divergence: a finished meeting recording goes to on-device
@@ -20,6 +21,25 @@ use crate::transcribe_worker::{TranscribeTx, TranscriptionJob};
 struct GilbHooks;
 
 impl ShellHooks for GilbHooks {
+    /// Mirror the pipeline's recording indicator into [`AppState`] and refresh
+    /// the tray (icon + menu). The tray menu and manual stop read `recording`;
+    /// any status update also ends an in-flight manual arm. Already emitted to
+    /// the webview by the crate before this runs.
+    fn on_recording_status(&self, app: &AppHandle, status: &RecordingStatus) {
+        if let Some(state) = app.try_state::<AppState>() {
+            *state.recording.lock() = match (status.recording, status.meeting_id) {
+                (true, Some(id)) => Some((
+                    id,
+                    status.app.clone().unwrap_or_else(|| "встреча".to_string()),
+                )),
+                _ => None,
+            };
+            // Any status resolution ends an in-flight manual arm.
+            *state.arming_since.lock() = None;
+        }
+        crate::tray::refresh(app);
+    }
+
     /// Enqueue a finished meeting for on-device transcription. The background
     /// worker (`transcribe_worker`) owns the model + queue and does the rest;
     /// gating on a downloaded model, audio presence, and persistence all happen

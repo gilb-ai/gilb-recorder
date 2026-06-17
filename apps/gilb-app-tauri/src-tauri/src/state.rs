@@ -30,6 +30,15 @@ pub struct AppState {
     pub pending_auth: Mutex<Option<PendingAuth>>,
     /// Drives the bundled `gilb-analyzer run` daemon: active while capture runs.
     pub analyzer: AnalyzerSupervisor,
+    /// The active meeting recording (id, display name) — mirrors the pipeline's
+    /// indicator so the tray menu and manual stop know what to stop. `None` when
+    /// nothing is recording.
+    pub recording: Mutex<Option<(i64, String)>>,
+    /// Set while a manual arm is in flight (between publishing
+    /// `RecordingEvent::Armed` and the pipeline's status callback), so a quick
+    /// double toggle can't insert two meetings. Cleared by any status update;
+    /// entries older than a few seconds are treated as stale.
+    pub arming_since: Mutex<Option<std::time::Instant>>,
 }
 
 /// Open the SQLite database and build [`AppState`]. Pulled out of `setup()` so
@@ -43,6 +52,8 @@ pub fn build_app_state() -> Result<AppState> {
         engine: Arc::new(engine),
         pending_auth: Mutex::new(None),
         analyzer: AnalyzerSupervisor::spawn(),
+        recording: Mutex::new(None),
+        arming_since: Mutex::new(None),
     })
 }
 
