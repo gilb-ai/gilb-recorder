@@ -23,6 +23,14 @@ interface ImportMetaEnv {
    */
   readonly VITE_FEATURE_TRACKING?: string;
   /**
+   * Set to "0" to hide the activity-tracking UI (the Capture card's status row
+   * and Pause/Resume button) while still running the engine. Unlike
+   * VITE_FEATURE_TRACKING=0, the capture engine keeps auto-starting and the
+   * Accessibility splash step stays — only the visible surface is removed. Used
+   * by headless-tracking brands that capture silently with no user toggle.
+   */
+  readonly VITE_FEATURE_TRACKING_UI?: string;
+  /**
    * Set to "0" to hide the on-device transcription section in Settings.
    */
   readonly VITE_FEATURE_TRANSCRIPTION?: string;

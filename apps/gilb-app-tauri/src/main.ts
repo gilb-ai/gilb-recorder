@@ -22,6 +22,12 @@ const DEFAULT_WORKSPACE_URL =
 // step) and/or the transcription section, and never auto-starts the engine.
 const FEATURE_TRACKING = import.meta.env.VITE_FEATURE_TRACKING !== "0";
 const FEATURE_TRANSCRIPTION = import.meta.env.VITE_FEATURE_TRANSCRIPTION !== "0";
+// Hide the tracking *UI* (status row + Pause/Resume) but keep the engine. A
+// headless-tracking brand sets this to "0": capture still auto-starts (gated on
+// FEATURE_TRACKING) and the Accessibility splash step stays, but the user sees
+// no tracking surface. The row only shows when both the engine and its UI are on.
+const FEATURE_TRACKING_UI = import.meta.env.VITE_FEATURE_TRACKING_UI !== "0";
+const SHOW_TRACKING_UI = FEATURE_TRACKING && FEATURE_TRACKING_UI;
 
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
@@ -237,8 +243,9 @@ async function refresh() {
   if (mySeq !== refreshSeq) return;
 
   // Activity tracking (subsystem A): calm status + Pause/Resume. Never
-  // "recording". A meetings-only build hides the row and never auto-starts.
-  if (FEATURE_TRACKING) {
+  // "recording". A meetings-only build hides the row and never auto-starts; a
+  // headless-tracking build keeps the engine but hides the row (SHOW_TRACKING_UI).
+  if (SHOW_TRACKING_UI) {
     tracking = s.recording;
     setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
     const dot = $("track-dot");
@@ -597,8 +604,17 @@ async function checkForUpdates() {
 window.addEventListener("DOMContentLoaded", () => {
   applyI18n();
   if (!FEATURE_TRACKING) {
-    $("track-row")?.setAttribute("hidden", "");
     $("splash-step-ax")?.setAttribute("hidden", "");
+  }
+  if (!SHOW_TRACKING_UI) {
+    $("track-row")?.setAttribute("hidden", "");
+  }
+  if (!FEATURE_TRACKING_UI) {
+    // Engine still runs; only the tracking surface goes. Drop the "Capture"
+    // caption and let the card collapse when it has nothing live to show (no
+    // meeting recording, no message) — see `.capture-ui-hidden` in styles.css.
+    $("capture-head")?.setAttribute("hidden", "");
+    document.querySelector(".card.capture")?.classList.add("capture-ui-hidden");
   }
   if (!FEATURE_TRANSCRIPTION) {
     $("transcription-row")?.setAttribute("hidden", "");
