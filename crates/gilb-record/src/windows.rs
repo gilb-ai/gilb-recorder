@@ -63,15 +63,16 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFSample, IMFSinkWriter, IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_PCM,
-    MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL,
-    MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup,
-    MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
-    MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
-    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
-    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    IMFAttributes, IMFSample, IMFSinkWriter, IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_PCM,
+    MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
+    MFCreateSinkWriterFromURL, MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video,
+    MFShutdown, MFStartup, MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
+    MFSTARTUP_FULL, MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
+    MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+    MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+    MF_READWRITE_DISABLE_CONVERTERS, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -1000,8 +1001,27 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
         .encode_wide()
         .chain(once(0))
         .collect();
-    let reader: IMFSourceReader = MFCreateSourceReaderFromURL(PCWSTR(in_url.as_ptr()), None)
-        .context("MFCreateSourceReaderFromURL")?;
+    // Passthrough remux: tell the source reader NOT to insert any decoder
+    // (`DISABLE_CONVERTERS`) and not to spin up DXVA hardware acceleration. On
+    // ARM64 the default path instantiates the hardware H.264 decoder, whose
+    // synchronous `ReadSample` deadlocks on this (already blocked) thread — the
+    // recorder then never finishes stopping and nothing uploads. We only copy
+    // encoded samples through, so no decoder is needed anyway.
+    let reader_attrs: IMFAttributes = {
+        let mut attrs: Option<IMFAttributes> = None;
+        MFCreateAttributes(&mut attrs, 2).context("MFCreateAttributes (source reader)")?;
+        let attrs = attrs.ok_or_else(|| anyhow!("MFCreateAttributes returned no store"))?;
+        attrs
+            .SetUINT32(&MF_READWRITE_DISABLE_CONVERTERS, 1)
+            .context("set MF_READWRITE_DISABLE_CONVERTERS")?;
+        attrs
+            .SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 1)
+            .context("set MF_SOURCE_READER_DISABLE_DXVA")?;
+        attrs
+    };
+    let reader: IMFSourceReader =
+        MFCreateSourceReaderFromURL(PCWSTR(in_url.as_ptr()), &reader_attrs)
+            .context("MFCreateSourceReaderFromURL")?;
     let v_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
     reader
         .SetStreamSelection(v_stream, true)
@@ -1049,6 +1069,7 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
     info!("mux: reader+writer ready, copying video samples"); // TODO(diag)
 
     // Copy every encoded video sample through unchanged.
+    let mut iters: u64 = 0; // TODO(diag): trace hang in the copy loop
     loop {
         let mut flags = 0u32;
         let mut sample: Option<IMFSample> = None;
@@ -1062,6 +1083,15 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
                 Some(&mut sample as *mut Option<IMFSample>),
             )
             .context("ReadSample (video)")?;
+        iters += 1;
+        if iters <= 3 || iters % 120 == 0 {
+            info!(
+                iters,
+                eos = flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0,
+                has_sample = sample.is_some(),
+                "mux: ReadSample returned"
+            ); // TODO(diag)
+        }
         if flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
             break;
         }
