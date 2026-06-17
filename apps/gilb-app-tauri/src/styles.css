@@ -241,6 +241,7 @@ button:disabled {
 
 .splash-steps li {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -257,6 +258,7 @@ button:disabled {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
+  min-width: 0;
   gap: 2px;
 }
 
@@ -268,6 +270,8 @@ button:disabled {
 .splash-steps li.granted .splash-status { color: #15803d; }
 
 .splash-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
   background: #2563eb;
   color: white;
   border: 1px solid #1d4ed8;
