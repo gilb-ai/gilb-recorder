@@ -26,8 +26,7 @@ use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
 use core_graphics::window::{
-    copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListOptionOnScreenOnly,
-    kCGWindowOwnerPID,
+    copy_window_info, kCGNullWindowID, kCGWindowBounds, kCGWindowListOptionAll, kCGWindowOwnerPID,
 };
 use crossbeam_channel as cc;
 use parking_lot::Mutex;
@@ -199,7 +198,11 @@ fn element_at(
 /// (our window actually on top, e.g. the tray status item) is always caught.
 fn point_over_own_window(x: f64, y: f64) -> bool {
     let our_pid = std::process::id() as i64;
-    let Some(windows) = copy_window_info(kCGWindowListOptionOnScreenOnly, kCGNullWindowID) else {
+    // `All` (not OnScreenOnly): AppKit short-circuits the AX hit-test based on
+    // the point belonging to our process, not on "is on screen". A status item
+    // or panel that is appearing / momentarily off the on-screen list would
+    // still route in-process, so consider every window we own.
+    let Some(windows) = copy_window_info(kCGWindowListOptionAll, kCGNullWindowID) else {
         return false;
     };
     // SAFETY: reading the framework's CFString key globals.
@@ -224,7 +227,12 @@ fn point_over_own_window(x: f64, y: f64) -> bool {
         let Some(bounds) = dict.find(&bounds_key) else {
             continue;
         };
-        // SAFETY: kCGWindowBounds is always a CFDictionary (X/Y/Width/Height).
+        // kCGWindowBounds is documented to always be a CFDictionary, but verify
+        // before the raw cast rather than trust the invariant.
+        if !bounds.instance_of::<CFDictionary>() {
+            continue;
+        }
+        // SAFETY: type-checked above; its keys (X/Y/Width/Height) are CFStrings.
         let bounds = unsafe {
             CFDictionary::<CFString, CFType>::wrap_under_get_rule(
                 bounds.as_CFTypeRef() as CFDictionaryRef
