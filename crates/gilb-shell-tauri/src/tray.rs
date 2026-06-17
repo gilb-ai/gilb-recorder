@@ -230,8 +230,15 @@ pub fn refresh(app: &AppHandle) {
     // worker thread stalls the AppKit run loop and the app stops responding to
     // clicks; it shows up most during an upload, whose per-percent status line
     // fires refresh() rapidly. The dedup above still throttles redundant renders.
+    let queued = std::time::Instant::now();
     let handle = app.clone();
     let render = move || {
+        // `queued.elapsed()` is how long this render waited for the main thread:
+        // a large value means the main thread was busy (the signature of an
+        // upload-time freeze). `render_ms` is the native menu rebuild itself.
+        // Logged only when actually slow, so it never spams a healthy run.
+        let waited_ms = queued.elapsed().as_millis() as u64;
+        let started = std::time::Instant::now();
         let Some(state) = handle.try_state::<TrayState>() else {
             return;
         };
@@ -256,6 +263,10 @@ pub fn refresh(app: &AppHandle) {
                 }
             }
             Err(err) => warn!(?err, "failed to build tray menu"),
+        }
+        let render_ms = started.elapsed().as_millis() as u64;
+        if waited_ms > 250 || render_ms > 100 {
+            warn!(waited_ms, render_ms, "slow tray render — main thread was busy");
         }
     };
     if let Err(err) = app.run_on_main_thread(render) {
