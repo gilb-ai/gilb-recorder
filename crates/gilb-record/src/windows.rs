@@ -246,17 +246,19 @@ impl ScreenAudioCapturer for WindowsCapturer {
         }
         drop(buffers);
 
-        // Mux the mixed audio into the (silent) `.mp4` on a background thread so
-        // stop() returns promptly (parity with the macOS backend). Best-effort:
-        // on failure the video stays silent and the WAV sidecars remain.
-        let video_path = session.video_path.clone();
-        thread::spawn(move || {
-            if let Err(err) = mux_audio_into_video(&video_path, &mix48, CAPTURE_SAMPLE_RATE) {
-                warn!(error = %err, "failed to mux audio into video; mp4 stays silent");
-            } else {
-                info!(video = %video_path.display(), "muxed audio into video");
-            }
-        });
+        // Mux the mixed audio into the (silent) `.mp4` synchronously, before
+        // stop() returns: the recording is enqueued for upload only after the
+        // recorder finishes stopping, so the mux must complete here or the queue
+        // uploads the silent capture (parity with the macOS backend). This is a
+        // remux (the video is copied through, not re-encoded), so it's quick, and
+        // stop() runs on the recorder's background task, not the UI thread.
+        // Best-effort: on failure the video stays silent and the WAV sidecars
+        // remain.
+        if let Err(err) = mux_audio_into_video(&session.video_path, &mix48, CAPTURE_SAMPLE_RATE) {
+            warn!(error = %err, "failed to mux audio into video; mp4 stays silent");
+        } else {
+            info!(video = %session.video_path.display(), "muxed audio into video");
+        }
 
         info!("Windows capture stopped");
         Ok(())

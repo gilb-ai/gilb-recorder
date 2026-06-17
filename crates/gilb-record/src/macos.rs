@@ -658,18 +658,20 @@ impl ScreenAudioCapturer for MacosCapturer {
         write_wav_16k_mono(&dir.join("system.wav"), &sys_only).context("write system track")?;
         drop(buffers);
 
-        // Mux the mixed audio into the (silent) video on a background thread:
-        // the export re-encodes and can take a while, and `stop()` must return
-        // promptly so the UI doesn't hang. The mixed wav is already on disk, so
-        // the mux just rewrites the mp4 with sound when it finishes.
-        let video_path = session.video_path.clone();
-        let audio_path = session.audio_path.clone();
-        std::thread::spawn(
-            move || match mux_audio_into_video(&video_path, &audio_path) {
-                Ok(()) => info!(video = %video_path.display(), "muxed audio into video"),
-                Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
-            },
-        );
+        // Mux the mixed audio into the (silent) video synchronously, before
+        // `stop()` returns. The finished recording is handed to the upload queue
+        // only *after* the recorder stops (`on_recording_stopped` runs once this
+        // returns), so the mux must finish here — otherwise the queue registers
+        // and uploads the silent capture, racing the mux's rename. The export
+        // re-encodes and can take a while, but `stop()` runs on the recorder's
+        // background task (driven off the event bus), not the UI thread, so
+        // blocking here only delays the upload enqueue — exactly what we want —
+        // without hanging the UI. Best-effort: on failure the video stays silent
+        // and the WAV sidecars remain.
+        match mux_audio_into_video(&session.video_path, &session.audio_path) {
+            Ok(()) => info!(video = %session.video_path.display(), "muxed audio into video"),
+            Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
+        }
 
         info!(video = %session.video_path.display(), "macOS capture stopped");
         Ok(())

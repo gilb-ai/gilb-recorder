@@ -464,10 +464,13 @@ async fn stop_recording(
         return;
     }
     state.cap_deadline = None;
-    if let Err(err) = recorder.stop(RecordingOutcome::Completed).await {
-        warn!(meeting_id, error = %err, "failed to stop recorder");
-    }
-    ui.recording_stopped(meeting_id);
+
+    // Clear the indicator before stopping: the meeting is over the moment the
+    // user leaves it, and `recorder.stop()` now also muxes the audio into the
+    // video synchronously (a re-encode that can take a while). The mux is
+    // post-processing, not recording, so leaving the indicator lit through it
+    // would misrepresent a finished meeting as still recording. The capture
+    // itself (screen + mic streams) is torn down at the top of `stop()` anyway.
     state.app_names.remove(&meeting_id);
     if state
         .recording
@@ -482,6 +485,14 @@ async fn stop_recording(
         app: None,
         started_at_ms: None,
     });
+
+    // Finalize the recording (stops capture, then muxes audio into the video).
+    // `recording_stopped` hands the file to the upload queue, so it must run
+    // after the mux completes — the muxed video with sound is then what uploads.
+    if let Err(err) = recorder.stop(RecordingOutcome::Completed).await {
+        warn!(meeting_id, error = %err, "failed to stop recorder");
+    }
+    ui.recording_stopped(meeting_id);
 }
 
 #[cfg(test)]
