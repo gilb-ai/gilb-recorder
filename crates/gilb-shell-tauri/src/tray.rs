@@ -195,19 +195,21 @@ static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Vec<(String, String)>)
 /// Re-render the tray (icon + menu) from the [`TrayController`]. A no-op until
 /// [`setup`] has run.
 pub fn refresh(app: &AppHandle) {
-    let Some(state) = app.try_state::<TrayState>() else {
-        return;
+    // Read the dynamic state (controller methods just lock the shell's AppState,
+    // safe on any thread), then drop the state guard before dispatching.
+    let (recording, status, extra, extra_key) = {
+        let Some(state) = app.try_state::<TrayState>() else {
+            return;
+        };
+        let recording = state.controller.is_recording(app);
+        let status = state.controller.status_line(app);
+        let extra = state.controller.extra_items(app);
+        let extra_key: Vec<(String, String)> = extra
+            .iter()
+            .map(|i| (i.id.clone(), i.label.clone()))
+            .collect();
+        (recording, status, extra, extra_key)
     };
-    let Some(tray) = app.tray_by_id(state.config.tray_id.as_str()) else {
-        return;
-    };
-    let recording = state.controller.is_recording(app);
-    let status = state.controller.status_line(app);
-    let extra = state.controller.extra_items(app);
-    let extra_key: Vec<(String, String)> = extra
-        .iter()
-        .map(|i| (i.id.clone(), i.label.clone()))
-        .collect();
 
     let mut last = LAST_RENDERED.lock();
     let icon_changed = last.as_ref().map(|(r, _, _)| *r) != Some(recording);
@@ -215,26 +217,49 @@ pub fn refresh(app: &AppHandle) {
         return;
     }
     *last = Some((recording, status.clone(), extra_key));
-    drop(last);
+    // Hold `last` across the dispatch below so concurrent refreshes enqueue
+    // their renders in the same order they won the dedup — otherwise a slower
+    // thread could enqueue a stale render after a newer one and leave the tray
+    // out of sync with LAST_RENDERED. The guard drops at end of scope; the
+    // render itself runs later on the main thread, not under this lock.
 
-    if icon_changed {
-        match icon(&state.config, recording) {
-            Ok(img) => {
-                if let Err(err) = tray.set_icon(Some(img)) {
-                    warn!(?err, "failed to set tray icon");
+    // muda / tray-icon mutate NSStatusItem / NSMenu, which AppKit requires on
+    // the main thread. refresh() is called from background tasks — the
+    // upload-progress consumer, the meeting pipeline, the window-gate poll — so
+    // marshal the native render onto the main thread. Rebuilding the menu on a
+    // worker thread stalls the AppKit run loop and the app stops responding to
+    // clicks; it shows up most during an upload, whose per-percent status line
+    // fires refresh() rapidly. The dedup above still throttles redundant renders.
+    let handle = app.clone();
+    let render = move || {
+        let Some(state) = handle.try_state::<TrayState>() else {
+            return;
+        };
+        let Some(tray) = handle.tray_by_id(state.config.tray_id.as_str()) else {
+            return;
+        };
+        if icon_changed {
+            match icon(&state.config, recording) {
+                Ok(img) => {
+                    if let Err(err) = tray.set_icon(Some(img)) {
+                        warn!(?err, "failed to set tray icon");
+                    }
+                    let _ = tray.set_icon_as_template(cfg!(target_os = "macos"));
                 }
-                let _ = tray.set_icon_as_template(cfg!(target_os = "macos"));
-            }
-            Err(err) => warn!(?err, "failed to load tray icon"),
-        }
-    }
-    match build_menu(app, &state.config, recording, status.as_deref(), &extra) {
-        Ok(menu) => {
-            if let Err(err) = tray.set_menu(Some(menu)) {
-                warn!(?err, "failed to update tray menu");
+                Err(err) => warn!(?err, "failed to load tray icon"),
             }
         }
-        Err(err) => warn!(?err, "failed to build tray menu"),
+        match build_menu(&handle, &state.config, recording, status.as_deref(), &extra) {
+            Ok(menu) => {
+                if let Err(err) = tray.set_menu(Some(menu)) {
+                    warn!(?err, "failed to update tray menu");
+                }
+            }
+            Err(err) => warn!(?err, "failed to build tray menu"),
+        }
+    };
+    if let Err(err) = app.run_on_main_thread(render) {
+        warn!(?err, "failed to dispatch tray refresh to main thread");
     }
 }
 
