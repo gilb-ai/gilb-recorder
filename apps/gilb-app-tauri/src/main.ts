@@ -683,12 +683,11 @@ window.addEventListener("DOMContentLoaded", () => {
     updateRecIndicator(e.payload),
   );
   // Backend emits `auth` after the gilb://auth/callback deep link is handled.
-  // Clear the "continue in your browser" message with the outcome.
+  // Clear the "continue in your browser" message with the outcome. On success
+  // clear it entirely — the signed-in card already shows the workspace + account,
+  // so repeating "connected" in the status line just duplicates it.
   listen<AuthStatus>("auth", (e) => {
-    setMessage(
-      e.payload?.signed_in ? t("auth.connectedLine") : t("auth.signInFailed"),
-      e.payload?.signed_in ? "info" : "error",
-    );
+    setMessage(e.payload?.signed_in ? "" : t("auth.signInFailed"), "error");
     refreshAuth();
   });
   // Tray items (rodnik hide-UI, RDK-25) ask to surface a specific screen.
