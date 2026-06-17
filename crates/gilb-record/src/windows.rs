@@ -203,9 +203,13 @@ impl ScreenAudioCapturer for WindowsCapturer {
         // Signal all three threads, then wait for them to tear down their COM
         // chains (and the video thread to finalize the `.mp4`).
         session.running.store(false, Ordering::Relaxed);
-        for handle in session.threads {
+        info!("stop: signaled capture threads, joining"); // TODO(diag): trace hang
+        for (i, handle) in session.threads.into_iter().enumerate() {
+            info!(thread = i, "stop: joining capture thread"); // TODO(diag)
             let _ = handle.join();
+            info!(thread = i, "stop: capture thread joined"); // TODO(diag)
         }
+        info!("stop: all capture threads joined, mixing audio"); // TODO(diag)
 
         let buffers = session
             .audio
@@ -254,6 +258,7 @@ impl ScreenAudioCapturer for WindowsCapturer {
         // stop() runs on the recorder's background task, not the UI thread.
         // Best-effort: on failure the video stays silent and the WAV sidecars
         // remain.
+        info!(samples = mix48.len(), "stop: wav sidecars written, starting mux"); // TODO(diag)
         if let Err(err) = mux_audio_into_video(&session.video_path, &mix48, CAPTURE_SAMPLE_RATE) {
             warn!(error = %err, "failed to mux audio into video; mp4 stays silent");
         } else {
@@ -576,13 +581,17 @@ unsafe fn capture_video_inner(
     }
 
     // Stop capture, then flush any frames already queued before finalizing.
+    info!("video: stopping live capture"); // TODO(diag): trace hang
     if let Some(l) = live.take() {
         l.stop();
     }
+    info!("video: live capture stopped, flushing queued frames"); // TODO(diag)
     while let Ok((data, time_100ns)) = frame_rx.try_recv() {
         write_video_sample(&writer, stream_index, &data, time_100ns)?;
     }
+    info!("video: finalizing mp4"); // TODO(diag)
     writer.Finalize().context("IMFSinkWriter::Finalize")?;
+    info!("video: mp4 finalized"); // TODO(diag)
     Ok(())
 }
 
@@ -979,6 +988,7 @@ fn mux_audio_into_video(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()>
 }
 
 unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
+    info!("mux: start"); // TODO(diag): trace hang
     let out_path = video_path.with_extension("muxed.mp4");
     let _ = std::fs::remove_file(&out_path); // a stale file would fail the writer
 
@@ -1036,6 +1046,7 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
         .context("SetInputMediaType (pcm)")?;
 
     writer.BeginWriting().context("BeginWriting (mux)")?;
+    info!("mux: reader+writer ready, copying video samples"); // TODO(diag)
 
     // Copy every encoded video sample through unchanged.
     loop {
@@ -1060,6 +1071,8 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
                 .context("WriteSample (video)")?;
         }
     }
+
+    info!(pcm_samples = pcm.len(), "mux: video copied, encoding audio"); // TODO(diag)
 
     // Encode the PCM to AAC in fixed chunks, timestamped from the sample index.
     const CHUNK: usize = 1024;
@@ -1089,7 +1102,9 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
         i = end;
     }
 
+    info!("mux: audio encoded, finalizing writer"); // TODO(diag)
     writer.Finalize().context("IMFSinkWriter::Finalize (mux)")?;
+    info!("mux: writer finalized, releasing handles"); // TODO(diag)
 
     // Release the Media Foundation objects before the rename. On Windows a file
     // with an open handle cannot be renamed/replaced: `reader` keeps `video_path`
@@ -1099,7 +1114,9 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
     // left behind and the uploaded `video.mp4` stays silent.
     drop(writer);
     drop(reader);
+    info!("mux: handles released, renaming muxed mp4 into place"); // TODO(diag)
 
     std::fs::rename(&out_path, video_path).context("replace video with muxed mp4")?;
+    info!("mux: rename complete"); // TODO(diag)
     Ok(())
 }
