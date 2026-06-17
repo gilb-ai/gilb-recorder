@@ -63,16 +63,15 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFSample, IMFSinkWriter, IMFSourceReader, MFAudioFormat_AAC, MFAudioFormat_PCM,
+    IMFAttributes, IMFSample, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM,
     MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
-    MFCreateSinkWriterFromURL, MFCreateSourceReaderFromURL, MFMediaType_Audio, MFMediaType_Video,
-    MFShutdown, MFStartup, MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive,
-    MFSTARTUP_FULL, MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE,
-    MF_MT_AUDIO_BLOCK_ALIGNMENT, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
-    MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
-    MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
-    MF_READWRITE_DISABLE_CONVERTERS, MF_SOURCE_READERF_ENDOFSTREAM,
-    MF_SOURCE_READER_DISABLE_DXVA, MF_SOURCE_READER_FIRST_VIDEO_STREAM, MF_VERSION,
+    MFCreateSinkWriterFromURL, MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup,
+    MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
+    MF_MT_AUDIO_AVG_BYTES_PER_SECOND, MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_BLOCK_ALIGNMENT,
+    MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND, MF_MT_AVG_BITRATE,
+    MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
+    MF_MT_MAJOR_TYPE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE, MF_SINK_WRITER_DISABLE_THROTTLING,
+    MF_VERSION,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -124,15 +123,24 @@ struct AudioBuffers {
     system: Vec<f32>,
 }
 
-/// A running capture: the shared stop flag, the capture thread handles, the
-/// shared audio buffers, and the audio output path to finalize on stop. (The
-/// `.mp4` is finalized by the video thread itself when it observes the flag.)
+/// A running capture. The video thread owns the sink writer and muxes audio at
+/// capture time: when `running` clears it stops the screen capture, then waits
+/// on `audio_tx`'s receiver for the stop-time audio mix, writes it as the mp4's
+/// AAC track, and finalizes the `.mp4`. There is no separate post-stop remux —
+/// the video is encoded exactly once, during capture.
 struct Session {
     running: Arc<AtomicBool>,
-    threads: Vec<JoinHandle<()>>,
+    /// Mic + system WASAPI threads. Joined first on stop so the audio buffers
+    /// are complete before mixing.
+    audio_threads: Vec<JoinHandle<()>>,
+    /// Screen-capture + encode + mux thread. Joined last, after the mix is sent.
+    video_thread: JoinHandle<()>,
     audio: Arc<Mutex<AudioBuffers>>,
+    /// Hands the stop-time 48 kHz audio mix to the video thread for the mp4
+    /// audio track. Dropping it (e.g. on an error path) makes the video thread
+    /// finalize a silent `.mp4` rather than block forever.
+    audio_tx: std_mpsc::Sender<Vec<i16>>,
     audio_path: PathBuf,
-    video_path: PathBuf,
 }
 
 /// Windows [`ScreenAudioCapturer`]. Holds the active [`Session`] behind a mutex
@@ -173,21 +181,25 @@ impl ScreenAudioCapturer for WindowsCapturer {
         let system_thread = spawn_audio_thread(false, audio.clone(), running.clone());
         let mic_thread = spawn_audio_thread(true, audio.clone(), running.clone());
 
-        // Screen capture + H.264 encode runs on its own MTA thread, finalizing
-        // the `.mp4` when `running` clears. A video-side failure is logged but
-        // does not abort the (independent) audio capture.
+        // Screen capture + H.264 encode runs on its own MTA thread. When `running`
+        // clears it stops capturing, waits on `audio_rx` for the stop-time mix,
+        // writes the AAC track, and finalizes the `.mp4`. A video-side failure is
+        // logged but does not abort the (independent) audio capture.
+        let (audio_tx, audio_rx) = std_mpsc::channel::<Vec<i16>>();
         let video_thread = spawn_video_thread(
             video_path.to_path_buf(),
             app_bundle_id.map(str::to_string),
             running.clone(),
+            audio_rx,
         );
 
         *guard = Some(Session {
             running,
-            threads: vec![system_thread, mic_thread, video_thread],
+            audio_threads: vec![system_thread, mic_thread],
+            video_thread,
             audio,
+            audio_tx,
             audio_path: audio_path.to_path_buf(),
-            video_path: video_path.to_path_buf(),
         });
         info!(video = %video_path.display(), "Windows capture started");
         Ok(())
@@ -201,16 +213,13 @@ impl ScreenAudioCapturer for WindowsCapturer {
             .take()
             .ok_or_else(|| anyhow!("capture is not running"))?;
 
-        // Signal all three threads, then wait for them to tear down their COM
-        // chains (and the video thread to finalize the `.mp4`).
+        // Stop everything, then join the audio threads first so their buffers are
+        // complete before we mix. The video thread is joined last (below), after
+        // it has been handed the mix and finalized the `.mp4`.
         session.running.store(false, Ordering::Relaxed);
-        info!("stop: signaled capture threads, joining"); // TODO(diag): trace hang
-        for (i, handle) in session.threads.into_iter().enumerate() {
-            info!(thread = i, "stop: joining capture thread"); // TODO(diag)
+        for handle in session.audio_threads {
             let _ = handle.join();
-            info!(thread = i, "stop: capture thread joined"); // TODO(diag)
         }
-        info!("stop: all capture threads joined, mixing audio"); // TODO(diag)
 
         let buffers = session
             .audio
@@ -251,20 +260,19 @@ impl ScreenAudioCapturer for WindowsCapturer {
         }
         drop(buffers);
 
-        // Mux the mixed audio into the (silent) `.mp4` synchronously, before
-        // stop() returns: the recording is enqueued for upload only after the
-        // recorder finishes stopping, so the mux must complete here or the queue
-        // uploads the silent capture (parity with the macOS backend). This is a
-        // remux (the video is copied through, not re-encoded), so it's quick, and
-        // stop() runs on the recorder's background task, not the UI thread.
-        // Best-effort: on failure the video stays silent and the WAV sidecars
-        // remain.
-        info!(samples = mix48.len(), "stop: wav sidecars written, starting mux"); // TODO(diag)
-        if let Err(err) = mux_audio_into_video(&session.video_path, &mix48, CAPTURE_SAMPLE_RATE) {
-            warn!(error = %err, "failed to mux audio into video; mp4 stays silent");
+        // Hand the mix to the video thread, which writes it as the mp4's AAC
+        // track and finalizes the file. The recording is enqueued for upload only
+        // after stop() returns, so we must wait for that finalize here (join
+        // below). No second encode: the video was already written during capture.
+        // If the thread already died, the send fails and its `.mp4` is silent —
+        // best effort, parity with the old post-mux's failure mode.
+        let samples = mix48.len();
+        if session.audio_tx.send(mix48).is_err() {
+            warn!("video thread gone before audio handoff; mp4 will be silent");
         } else {
-            info!(video = %session.video_path.display(), "muxed audio into video");
+            info!(samples, "handed audio mix to video thread for muxing");
         }
+        let _ = session.video_thread.join();
 
         info!("Windows capture stopped");
         Ok(())
@@ -396,9 +404,10 @@ fn spawn_video_thread(
     video_path: PathBuf,
     app_bundle_id: Option<String>,
     running: Arc<AtomicBool>,
+    audio_rx: std_mpsc::Receiver<Vec<i16>>,
 ) -> JoinHandle<()> {
     thread::spawn(move || {
-        if let Err(err) = capture_video(&video_path, app_bundle_id.as_deref(), &running) {
+        if let Err(err) = capture_video(&video_path, app_bundle_id.as_deref(), &running, audio_rx) {
             warn!(error = %err, "WGC/Media Foundation video thread failed");
         }
     })
@@ -409,11 +418,13 @@ fn spawn_video_thread(
 type VideoFrame = (Vec<u8>, i64);
 
 /// Set up WGC + Media Foundation, encode frames until `running` clears, then
-/// finalize the `.mp4`. COM is initialized for the lifetime of this thread.
+/// mux in the audio handed over `audio_rx` and finalize the `.mp4`. COM is
+/// initialized for the lifetime of this thread.
 fn capture_video(
     video_path: &Path,
     app_bundle_id: Option<&str>,
     running: &AtomicBool,
+    audio_rx: std_mpsc::Receiver<Vec<i16>>,
 ) -> Result<()> {
     unsafe {
         CoInitializeEx(None, COINIT_MULTITHREADED)
@@ -421,7 +432,7 @@ fn capture_video(
             .context("CoInitializeEx (video)")?;
         MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup")?;
 
-        let result = capture_video_inner(video_path, app_bundle_id, running);
+        let result = capture_video_inner(video_path, app_bundle_id, running, audio_rx);
 
         let _ = MFShutdown();
         CoUninitialize();
@@ -433,6 +444,7 @@ unsafe fn capture_video_inner(
     video_path: &Path,
     app_bundle_id: Option<&str>,
     running: &AtomicBool,
+    audio_rx: std_mpsc::Receiver<Vec<i16>>,
 ) -> Result<()> {
     if !GraphicsCaptureSession::IsSupported().unwrap_or(false) {
         return Err(anyhow!(
@@ -501,7 +513,7 @@ unsafe fn capture_video_inner(
         return Err(anyhow!("capture item reported a zero size"));
     }
 
-    let (writer, stream_index) = create_sink_writer(video_path, out_w, out_h)?;
+    let (writer, stream_index, audio_index) = create_sink_writer(video_path, out_w, out_h)?;
 
     // Shared sinks, reused across watcher re-targets: the frame channel, the
     // staging-texture cache (recreated when the source size changes), and the
@@ -581,18 +593,30 @@ unsafe fn capture_video_inner(
         }
     }
 
-    // Stop capture, then flush any frames already queued before finalizing.
-    info!("video: stopping live capture"); // TODO(diag): trace hang
+    // Stop capture, then flush any frames already queued.
     if let Some(l) = live.take() {
         l.stop();
     }
-    info!("video: live capture stopped, flushing queued frames"); // TODO(diag)
     while let Ok((data, time_100ns)) = frame_rx.try_recv() {
         write_video_sample(&writer, stream_index, &data, time_100ns)?;
     }
-    info!("video: finalizing mp4"); // TODO(diag)
+
+    // Wait for the stop-time audio mix and write it as the AAC track before
+    // finalizing. The video is already fully written (encoded once, during
+    // capture); this only appends audio, so there is no second video encode.
+    // A closed channel (stop() bailed) just yields a silent `.mp4`.
+    match audio_rx.recv() {
+        Ok(pcm) => {
+            info!(samples = pcm.len(), "video: writing audio track");
+            if let Err(err) = write_audio_samples(&writer, audio_index, &pcm, CAPTURE_SAMPLE_RATE) {
+                warn!(error = %err, "failed to write audio track; mp4 stays silent");
+            }
+        }
+        Err(_) => warn!("audio channel closed before handoff; mp4 stays silent"),
+    }
+
     writer.Finalize().context("IMFSinkWriter::Finalize")?;
-    info!("video: mp4 finalized"); // TODO(diag)
+    info!(video = %video_path.display(), "muxed audio into video, finalized mp4");
     Ok(())
 }
 
@@ -894,9 +918,32 @@ unsafe fn on_frame(
 /// Build an `IMFSinkWriter` for `path` with an H.264 output stream fed from an
 /// RGB32 (BGRA) input type. Returns the writer and its stream index, ready for
 /// `WriteSample`.
-unsafe fn create_sink_writer(path: &Path, width: u32, height: u32) -> Result<(IMFSinkWriter, u32)> {
+/// Create the capture sink writer with two streams: an H.264 video stream (fed
+/// BGRA frames during capture) and an AAC audio stream (fed the mixed 16-bit PCM
+/// at stop, just before finalizing). Returns `(writer, video_index, audio_index)`.
+///
+/// `MF_SINK_WRITER_DISABLE_THROTTLING` is essential: the audio stream stays
+/// silent for the whole recording (the mix is only available at stop), and with
+/// throttling on the sink writer would block video `WriteSample` to keep the two
+/// streams aligned, stalling the capture. Disabled, the video is written through
+/// in real time and the audio is appended at the end.
+unsafe fn create_sink_writer(
+    path: &Path,
+    width: u32,
+    height: u32,
+) -> Result<(IMFSinkWriter, u32, u32)> {
     let url: Vec<u16> = path.as_os_str().encode_wide().chain(once(0)).collect();
-    let writer = MFCreateSinkWriterFromURL(PCWSTR(url.as_ptr()), None, None)
+
+    let sink_attrs: IMFAttributes = {
+        let mut attrs: Option<IMFAttributes> = None;
+        MFCreateAttributes(&mut attrs, 1).context("MFCreateAttributes (sink writer)")?;
+        let attrs = attrs.ok_or_else(|| anyhow!("MFCreateAttributes returned no store"))?;
+        attrs
+            .SetUINT32(&MF_SINK_WRITER_DISABLE_THROTTLING, 1)
+            .context("set MF_SINK_WRITER_DISABLE_THROTTLING")?;
+        attrs
+    };
+    let writer = MFCreateSinkWriterFromURL(PCWSTR(url.as_ptr()), None, &sink_attrs)
         .context("MFCreateSinkWriterFromURL")?;
 
     let frame_size = pack_u32_pair(width, height);
@@ -912,9 +959,9 @@ unsafe fn create_sink_writer(path: &Path, width: u32, height: u32) -> Result<(IM
     output.SetUINT64(&MF_MT_FRAME_SIZE, frame_size)?;
     output.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
     output.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, aspect_ratio)?;
-    let stream_index = writer
+    let video_index = writer
         .AddStream(&output)
-        .context("IMFSinkWriter::AddStream")?;
+        .context("IMFSinkWriter::AddStream (video)")?;
 
     // RGB32 (BGRA, top-down) input type matching the WGC surface format.
     let input = MFCreateMediaType().context("MFCreateMediaType (input)")?;
@@ -926,13 +973,76 @@ unsafe fn create_sink_writer(path: &Path, width: u32, height: u32) -> Result<(IM
     input.SetUINT64(&MF_MT_FRAME_RATE, frame_rate)?;
     input.SetUINT64(&MF_MT_PIXEL_ASPECT_RATIO, aspect_ratio)?;
     writer
-        .SetInputMediaType(stream_index, &input, None)
-        .context("IMFSinkWriter::SetInputMediaType")?;
+        .SetInputMediaType(video_index, &input, None)
+        .context("IMFSinkWriter::SetInputMediaType (video)")?;
+
+    // AAC audio output type + 16-bit PCM input (mono, at the capture rate the MF
+    // AAC encoder accepts). Fed at stop from the mixed sidecar audio.
+    let aac = MFCreateMediaType().context("MFCreateMediaType (aac)")?;
+    aac.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+    aac.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
+    aac.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+    aac.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, CAPTURE_SAMPLE_RATE)?;
+    aac.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 1)?;
+    aac.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 16_000)?; // ~128 kbps
+    let audio_index = writer
+        .AddStream(&aac)
+        .context("IMFSinkWriter::AddStream (audio)")?;
+
+    let pcm = MFCreateMediaType().context("MFCreateMediaType (pcm)")?;
+    pcm.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
+    pcm.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
+    pcm.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
+    pcm.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, CAPTURE_SAMPLE_RATE)?;
+    pcm.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 1)?;
+    pcm.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 2)?;
+    pcm.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, CAPTURE_SAMPLE_RATE * 2)?;
+    writer
+        .SetInputMediaType(audio_index, &pcm, None)
+        .context("IMFSinkWriter::SetInputMediaType (pcm)")?;
 
     writer
         .BeginWriting()
         .context("IMFSinkWriter::BeginWriting")?;
-    Ok((writer, stream_index))
+    Ok((writer, video_index, audio_index))
+}
+
+/// Encode the mono 16-bit `pcm` (at `rate` Hz) into the sink writer's AAC audio
+/// stream in fixed chunks, timestamped from the sample index. Called once at
+/// stop, before [`IMFSinkWriter::Finalize`].
+unsafe fn write_audio_samples(
+    writer: &IMFSinkWriter,
+    audio_index: u32,
+    pcm: &[i16],
+    rate: u32,
+) -> Result<()> {
+    const CHUNK: usize = 1024;
+    let mut i = 0usize;
+    while i < pcm.len() {
+        let end = (i + CHUNK).min(pcm.len());
+        let slice = &pcm[i..end];
+        let byte_len = slice.len() * 2;
+        let buffer =
+            MFCreateMemoryBuffer(byte_len as u32).context("MFCreateMemoryBuffer (audio)")?;
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut max_len = 0u32;
+        buffer
+            .Lock(&mut ptr, Some(&mut max_len), None)
+            .context("IMFMediaBuffer::Lock (audio)")?;
+        std::ptr::copy_nonoverlapping(slice.as_ptr() as *const u8, ptr, byte_len);
+        buffer.SetCurrentLength(byte_len as u32)?;
+        buffer.Unlock()?;
+
+        let sample = MFCreateSample().context("MFCreateSample (audio)")?;
+        sample.AddBuffer(&buffer)?;
+        sample.SetSampleTime((i as i64) * 10_000_000 / rate as i64)?;
+        sample.SetSampleDuration((slice.len() as i64) * 10_000_000 / rate as i64)?;
+        writer
+            .WriteSample(audio_index, &sample)
+            .context("WriteSample (audio)")?;
+        i = end;
+    }
+    Ok(())
 }
 
 /// Wrap packed BGRA `data` in an MF sample and write it to `writer`.
@@ -966,188 +1076,4 @@ unsafe fn write_video_sample(
 /// ratio/size attributes (frame size, frame rate, pixel aspect ratio).
 fn pack_u32_pair(hi: u32, lo: u32) -> u64 {
     ((hi as u64) << 32) | lo as u64
-}
-
-/// Mux the mono PCM `pcm` (at `rate` Hz) into the silent H.264 `video_path` as
-/// an AAC track, producing a playable `.mp4`. Mirrors the macOS post-mux: the
-/// video is copied through unchanged (no re-encode) while the audio is encoded
-/// to AAC alongside it, then the muxed file replaces the silent one. Runs on its
-/// own thread, so it owns its COM + Media Foundation lifetime. `rate` must be a
-/// rate the MF AAC encoder accepts (44.1/48 kHz) — the caller passes the native
-/// 48 kHz capture rate, not the 16 kHz sidecar rate.
-fn mux_audio_into_video(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
-    unsafe {
-        CoInitializeEx(None, COINIT_MULTITHREADED)
-            .ok()
-            .context("CoInitializeEx (mux)")?;
-        MFStartup(MF_VERSION, MFSTARTUP_FULL).context("MFStartup (mux)")?;
-        let result = mux_inner(video_path, pcm, rate);
-        let _ = MFShutdown();
-        CoUninitialize();
-        result
-    }
-}
-
-unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
-    info!("mux: start"); // TODO(diag): trace hang
-    let out_path = video_path.with_extension("muxed.mp4");
-    let _ = std::fs::remove_file(&out_path); // a stale file would fail the writer
-
-    // Source reader for the silent H.264 video. Selecting the native media type
-    // as the current type makes it deliver the encoded samples unchanged (no
-    // decode), so the video is remuxed rather than re-encoded.
-    let in_url: Vec<u16> = video_path
-        .as_os_str()
-        .encode_wide()
-        .chain(once(0))
-        .collect();
-    // Passthrough remux: tell the source reader NOT to insert any decoder
-    // (`DISABLE_CONVERTERS`) and not to spin up DXVA hardware acceleration. On
-    // ARM64 the default path instantiates the hardware H.264 decoder, whose
-    // synchronous `ReadSample` deadlocks on this (already blocked) thread — the
-    // recorder then never finishes stopping and nothing uploads. We only copy
-    // encoded samples through, so no decoder is needed anyway.
-    let reader_attrs: IMFAttributes = {
-        let mut attrs: Option<IMFAttributes> = None;
-        MFCreateAttributes(&mut attrs, 2).context("MFCreateAttributes (source reader)")?;
-        let attrs = attrs.ok_or_else(|| anyhow!("MFCreateAttributes returned no store"))?;
-        attrs
-            .SetUINT32(&MF_READWRITE_DISABLE_CONVERTERS, 1)
-            .context("set MF_READWRITE_DISABLE_CONVERTERS")?;
-        attrs
-            .SetUINT32(&MF_SOURCE_READER_DISABLE_DXVA, 1)
-            .context("set MF_SOURCE_READER_DISABLE_DXVA")?;
-        attrs
-    };
-    let reader: IMFSourceReader =
-        MFCreateSourceReaderFromURL(PCWSTR(in_url.as_ptr()), &reader_attrs)
-            .context("MFCreateSourceReaderFromURL")?;
-    let v_stream = MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32;
-    reader
-        .SetStreamSelection(v_stream, true)
-        .context("SetStreamSelection (video)")?;
-    let video_type = reader
-        .GetNativeMediaType(v_stream, 0)
-        .context("GetNativeMediaType")?;
-    reader
-        .SetCurrentMediaType(v_stream, None, &video_type)
-        .context("SetCurrentMediaType (video passthrough)")?;
-
-    // Sink writer: the same H.264 video stream plus an AAC audio stream fed from
-    // 16-bit PCM at the capture rate.
-    let out_url: Vec<u16> = out_path.as_os_str().encode_wide().chain(once(0)).collect();
-    let writer = MFCreateSinkWriterFromURL(PCWSTR(out_url.as_ptr()), None, None)
-        .context("MFCreateSinkWriterFromURL (mux)")?;
-
-    let v_index = writer.AddStream(&video_type).context("AddStream (video)")?;
-    writer
-        .SetInputMediaType(v_index, &video_type, None)
-        .context("SetInputMediaType (video passthrough)")?;
-
-    let aac = MFCreateMediaType().context("MFCreateMediaType (aac)")?;
-    aac.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-    aac.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_AAC)?;
-    aac.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-    aac.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)?;
-    aac.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 1)?;
-    aac.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, 16_000)?; // ~128 kbps
-    let a_index = writer.AddStream(&aac).context("AddStream (audio)")?;
-
-    let pcm_type = MFCreateMediaType().context("MFCreateMediaType (pcm)")?;
-    pcm_type.SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)?;
-    pcm_type.SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_PCM)?;
-    pcm_type.SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 16)?;
-    pcm_type.SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, rate)?;
-    pcm_type.SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, 1)?;
-    pcm_type.SetUINT32(&MF_MT_AUDIO_BLOCK_ALIGNMENT, 2)?;
-    pcm_type.SetUINT32(&MF_MT_AUDIO_AVG_BYTES_PER_SECOND, rate * 2)?;
-    writer
-        .SetInputMediaType(a_index, &pcm_type, None)
-        .context("SetInputMediaType (pcm)")?;
-
-    writer.BeginWriting().context("BeginWriting (mux)")?;
-    info!("mux: reader+writer ready, copying video samples"); // TODO(diag)
-
-    // Copy every encoded video sample through unchanged.
-    let mut iters: u64 = 0; // TODO(diag): time each ReadSample/WriteSample
-    loop {
-        let mut flags = 0u32;
-        let mut sample: Option<IMFSample> = None;
-        let t_read = Instant::now();
-        reader
-            .ReadSample(
-                v_stream,
-                0,
-                None,
-                Some(&mut flags as *mut u32),
-                None,
-                Some(&mut sample as *mut Option<IMFSample>),
-            )
-            .context("ReadSample (video)")?;
-        let read_ms = t_read.elapsed().as_millis() as u64;
-        iters += 1;
-        if flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
-            info!(iters, "mux: ReadSample hit end-of-stream"); // TODO(diag)
-            break;
-        }
-        let mut write_ms = 0u64;
-        if let Some(sample) = sample {
-            let t_write = Instant::now();
-            writer
-                .WriteSample(v_index, &sample)
-                .context("WriteSample (video)")?;
-            write_ms = t_write.elapsed().as_millis() as u64;
-        }
-        if iters <= 6 || read_ms > 30 || write_ms > 30 || iters % 200 == 0 {
-            info!(iters, read_ms, write_ms, "mux: sample copied"); // TODO(diag)
-        }
-    }
-
-    info!(pcm_samples = pcm.len(), "mux: video copied, encoding audio"); // TODO(diag)
-
-    // Encode the PCM to AAC in fixed chunks, timestamped from the sample index.
-    const CHUNK: usize = 1024;
-    let mut i = 0usize;
-    while i < pcm.len() {
-        let end = (i + CHUNK).min(pcm.len());
-        let slice = &pcm[i..end];
-        let byte_len = slice.len() * 2;
-        let buffer =
-            MFCreateMemoryBuffer(byte_len as u32).context("MFCreateMemoryBuffer (audio)")?;
-        let mut ptr: *mut u8 = std::ptr::null_mut();
-        let mut max_len = 0u32;
-        buffer
-            .Lock(&mut ptr, Some(&mut max_len), None)
-            .context("IMFMediaBuffer::Lock (audio)")?;
-        std::ptr::copy_nonoverlapping(slice.as_ptr() as *const u8, ptr, byte_len);
-        buffer.SetCurrentLength(byte_len as u32)?;
-        buffer.Unlock()?;
-
-        let sample = MFCreateSample().context("MFCreateSample (audio)")?;
-        sample.AddBuffer(&buffer)?;
-        sample.SetSampleTime((i as i64) * 10_000_000 / rate as i64)?;
-        sample.SetSampleDuration((slice.len() as i64) * 10_000_000 / rate as i64)?;
-        writer
-            .WriteSample(a_index, &sample)
-            .context("WriteSample (audio)")?;
-        i = end;
-    }
-
-    info!("mux: audio encoded, finalizing writer"); // TODO(diag)
-    writer.Finalize().context("IMFSinkWriter::Finalize (mux)")?;
-    info!("mux: writer finalized, releasing handles"); // TODO(diag)
-
-    // Release the Media Foundation objects before the rename. On Windows a file
-    // with an open handle cannot be renamed/replaced: `reader` keeps `video_path`
-    // (the rename destination) open for reading, and `writer` keeps `out_path`
-    // (the source) open. Unlike macOS — where the same in-place replace just
-    // works — leaving these alive makes `rename` fail, so `video.muxed.mp4` is
-    // left behind and the uploaded `video.mp4` stays silent.
-    drop(writer);
-    drop(reader);
-    info!("mux: handles released, renaming muxed mp4 into place"); // TODO(diag)
-
-    std::fs::rename(&out_path, video_path).context("replace video with muxed mp4")?;
-    info!("mux: rename complete"); // TODO(diag)
-    Ok(())
 }
