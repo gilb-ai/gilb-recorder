@@ -730,7 +730,7 @@ fn system_audio_samples(sample: &CMSampleBuffer) -> Option<Vec<f32>> {
 fn mux_audio_into_video(video_path: &Path, audio_path: &Path) -> Result<()> {
     use block2::RcBlock;
     use objc2_av_foundation::{
-        AVAssetExportPreset1280x720, AVAssetExportSession, AVAssetExportSessionStatus,
+        AVAssetExportPreset960x540, AVAssetExportSession, AVAssetExportSessionStatus,
         AVMediaTypeAudio, AVMutableComposition, AVURLAsset,
     };
 
@@ -778,7 +778,10 @@ fn mux_audio_into_video(video_path: &Path, audio_path: &Path) -> Result<()> {
         let export = AVAssetExportSession::initWithAsset_presetName(
             AVAssetExportSession::alloc(),
             &comp,
-            AVAssetExportPreset1280x720,
+            // 540p (down from 720p) to roughly halve the file. The export already
+            // re-encodes the HEVC capture, so this changes only the output size,
+            // not whether a re-encode happens.
+            AVAssetExportPreset960x540,
         )
         .ok_or_else(|| anyhow!("create export session"))?;
         let mp4 = AVFileTypeMPEG4.ok_or_else(|| anyhow!("AVFileTypeMPEG4 unavailable"))?;
