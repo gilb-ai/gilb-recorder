@@ -4,7 +4,7 @@
 //! wording and icons plus the [`TrayController`] that binds menu actions to
 //! gilb's [`AppState`].
 //!
-//! Menu (Russian): Открыть gilb / Начать запись|Остановить запись / Завершить.
+//! Menu: Open gilb / Start Recording|Stop Recording / Quit.
 
 use gilb_shell_tauri::tray::{self, TrayConfig, TrayController};
 use tauri::{AppHandle, Manager};
@@ -39,6 +39,17 @@ impl TrayController for GilbTrayController {
         None
     }
 
+    fn account_line(&self, _app: &AppHandle) -> Option<String> {
+        // The signed-in user's email, shown at the top of the menu. gilb-web
+        // sends it as the `employee` label in the auth callback (see
+        // commands::auth), persisted in ~/.gilb/credentials.json. `None` while
+        // signed out, so the shared renderer hides the line.
+        gilb_config::load_credentials()
+            .ok()
+            .flatten()
+            .and_then(|creds| creds.employee)
+    }
+
     fn on_open(&self, app: &AppHandle) {
         show_main_window(app);
     }
@@ -61,10 +72,10 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         TrayConfig {
             tray_id: TRAY_ID.into(),
             tooltip: "gilb".into(),
-            open_label: "Открыть gilb".into(),
-            start_label: "Начать запись".into(),
-            stop_label: "Остановить запись".into(),
-            quit_label: "Завершить".into(),
+            open_label: "Open gilb".into(),
+            start_label: "Start Recording".into(),
+            stop_label: "Stop Recording".into(),
+            quit_label: "Quit".into(),
             icon_idle: ICON_IDLE,
             icon_recording: ICON_RECORDING,
         },

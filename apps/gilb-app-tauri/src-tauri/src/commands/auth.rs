@@ -82,8 +82,11 @@ pub async fn auth_status() -> Result<AuthStatus, String> {
 
 /// Sign out: delete the credentials file, returning the recorder to Tier-1.
 #[tauri::command]
-pub async fn sign_out() -> Result<(), String> {
-    clear_credentials().map_err(|e| e.to_string())
+pub async fn sign_out(app: AppHandle) -> Result<(), String> {
+    clear_credentials().map_err(|e| e.to_string())?;
+    // Drop the email line from the tray menu (the frontend refreshes itself).
+    crate::tray::refresh(&app);
+    Ok(())
 }
 
 /// Handle a `gilb://auth/callback` deep link: verify it matches the pending
@@ -154,6 +157,8 @@ pub fn handle_callback(app: &AppHandle, url: &url::Url) {
             gilb_web_url: Some(creds.gilb_web_url),
         },
     );
+    // Surface the signed-in email in the tray menu (reads it back from disk).
+    crate::tray::refresh(app);
 }
 
 /// Percent-encode a query-parameter value (only the few chars we emit).
