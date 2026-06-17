@@ -1069,10 +1069,11 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
     info!("mux: reader+writer ready, copying video samples"); // TODO(diag)
 
     // Copy every encoded video sample through unchanged.
-    let mut iters: u64 = 0; // TODO(diag): trace hang in the copy loop
+    let mut iters: u64 = 0; // TODO(diag): time each ReadSample/WriteSample
     loop {
         let mut flags = 0u32;
         let mut sample: Option<IMFSample> = None;
+        let t_read = Instant::now();
         reader
             .ReadSample(
                 v_stream,
@@ -1083,22 +1084,22 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
                 Some(&mut sample as *mut Option<IMFSample>),
             )
             .context("ReadSample (video)")?;
+        let read_ms = t_read.elapsed().as_millis() as u64;
         iters += 1;
-        if iters <= 3 || iters % 120 == 0 {
-            info!(
-                iters,
-                eos = flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0,
-                has_sample = sample.is_some(),
-                "mux: ReadSample returned"
-            ); // TODO(diag)
-        }
         if flags & (MF_SOURCE_READERF_ENDOFSTREAM.0 as u32) != 0 {
+            info!(iters, "mux: ReadSample hit end-of-stream"); // TODO(diag)
             break;
         }
+        let mut write_ms = 0u64;
         if let Some(sample) = sample {
+            let t_write = Instant::now();
             writer
                 .WriteSample(v_index, &sample)
                 .context("WriteSample (video)")?;
+            write_ms = t_write.elapsed().as_millis() as u64;
+        }
+        if iters <= 6 || iters % 120 == 0 {
+            info!(iters, read_ms, write_ms, "mux: sample copied"); // TODO(diag)
         }
     }
 
