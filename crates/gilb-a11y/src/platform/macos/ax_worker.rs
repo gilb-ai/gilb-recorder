@@ -30,7 +30,7 @@ use core_graphics::window::{
 };
 use crossbeam_channel as cc;
 use parking_lot::Mutex;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use gilb_core::ElementContext;
 
@@ -152,7 +152,16 @@ fn element_at(
     // inside CFDictionarySetValue when the cursor is over the menu-bar status
     // item). Skip points over our own windows — we lose only the element
     // context for clicks on our own chrome; cross-process queries are unaffected.
-    if point_over_own_window(x, y) {
+    // Diagnostic: the self-window guard enumerates all windows via CoreGraphics
+    // on every hit-test. Warn if that turns expensive (it shouldn't), so a
+    // perf regression here is visible rather than a silent drag on capture.
+    let guard_started = std::time::Instant::now();
+    let over_own = point_over_own_window(x, y);
+    let guard_ms = guard_started.elapsed().as_millis() as u64;
+    if guard_ms > 30 {
+        warn!(guard_ms, "slow self-window check (CGWindowList)");
+    }
+    if over_own {
         return None;
     }
 
