@@ -5,8 +5,10 @@ mod commands;
 mod events;
 mod logging;
 mod meeting;
+mod recording;
 mod state;
 mod transcribe_worker;
+mod tray;
 
 use tauri::Manager;
 use tracing::error;
@@ -71,6 +73,13 @@ pub fn run() {
                             meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)
                         }
                         Err(err) => error!(?err, "data_dir failed; meeting pipeline not started"),
+                    }
+
+                    // System tray: gilb's home (open the window, toggle a manual
+                    // recording, quit). Built after `AppState` is managed — the
+                    // controller reads `recording` from it.
+                    if let Err(err) = tray::setup(app.handle()) {
+                        error!(?err, "tray setup failed");
                     }
 
                     // Deep-link auth callbacks (gilb://auth/callback?token=…).
