@@ -331,6 +331,34 @@ async function openSettings() {
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
 
+// Surface a specific screen when the tray asks (rodnik hide-UI emits
+// `tray-navigate`, RDK-25). The shell has already shown the window; we only pick
+// the view. Any open settings overlay is closed first so it can't hide the
+// requested screen. Unknown targets are ignored.
+function navigateTray(target: string) {
+  const overlay = $("settings-overlay");
+  switch (target) {
+    case "settings":
+      void openSettings();
+      break;
+    case "permissions": {
+      if (overlay && !overlay.hidden) void closeSettings(false);
+      // Force the permissions splash up even if everything is granted — the
+      // user explicitly asked to check.
+      const splash = $("splash");
+      if (splash) splash.hidden = false;
+      break;
+    }
+    case "login": {
+      if (overlay && !overlay.hidden) void closeSettings(false);
+      $<HTMLButtonElement>("btn-connect")?.focus();
+      break;
+    }
+    default:
+      break;
+  }
+}
+
 async function closeSettings(save: boolean) {
   const overlay = $("settings-overlay");
   const toggle = $<HTMLButtonElement>("toggle-meeting");
@@ -647,6 +675,8 @@ window.addEventListener("DOMContentLoaded", () => {
     );
     refreshAuth();
   });
+  // Tray items (rodnik hide-UI, RDK-25) ask to surface a specific screen.
+  listen<string>("tray-navigate", (e) => navigateTray(e.payload));
 
   // Register Gilb as a LaunchAgent on first run so it starts at login.
   // Idempotent — `enable()` is a no-op once the agent plist is in place.
