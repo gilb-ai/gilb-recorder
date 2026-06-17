@@ -8,7 +8,13 @@
 //! copying it.
 //!
 //! Menu layout:
-//!   [open] / [optional status line] / [start|stop recording] / --- / [quit]
+//!   [open] / [shell's extra items] / [optional status line] /
+//!   [start|stop recording] / --- / [quit]
+//!
+//! A shell can declare its own clickable items via [`TrayConfig::extra_items`]
+//! (e.g. "Sign in" / "Check permissions" / "Settings"); clicks route to
+//! [`TrayController::on_custom`]. Empty by default, so a shell that wants only
+//! the built-in items leaves it untouched.
 //!
 //! On macOS the icons are template PNGs (`icon_as_template`) so they adapt to
 //! the menu-bar theme.
@@ -20,9 +26,20 @@ use tauri::tray::TrayIconBuilder;
 use tauri::{AppHandle, Manager, Wry};
 use tracing::warn;
 
+/// Built-in menu-item ids. A shell's [`TrayConfig::extra_items`] must not reuse
+/// these — a collision would route the built-in's click to `on_custom`.
 const MENU_OPEN: &str = "open";
 const MENU_TOGGLE: &str = "toggle-recording";
 const MENU_QUIT: &str = "quit";
+
+/// A shell-declared clickable menu item, inserted after Open. Its `id` is passed
+/// back to [`TrayController::on_custom`] when clicked, so the shell routes the
+/// action. `id` must not be one of the built-in ids (`open`, `toggle-recording`,
+/// `quit`).
+pub struct TrayMenuItem {
+    pub id: String,
+    pub label: String,
+}
 
 /// Static per-shell tray configuration: the menu wording, tooltip, tray id, and
 /// the two icon variants (raw PNG bytes, decoded on demand). Differently-branded
@@ -36,6 +53,10 @@ pub struct TrayConfig {
     /// Toggle label while recording (e.g. "Остановить запись").
     pub stop_label: String,
     pub quit_label: String,
+    /// Extra clickable items shown after Open (e.g. sign-in / permissions /
+    /// settings). Empty = built-in menu only. Clicks route to
+    /// [`TrayController::on_custom`].
+    pub extra_items: Vec<TrayMenuItem>,
     pub icon_idle: &'static [u8],
     pub icon_recording: &'static [u8],
 }
@@ -53,6 +74,9 @@ pub trait TrayController: Send + Sync + 'static {
     fn on_open(&self, app: &AppHandle);
     fn on_toggle(&self, app: &AppHandle);
     fn on_quit(&self, app: &AppHandle);
+    /// A shell-declared [`TrayConfig::extra_items`] entry was clicked, passed its
+    /// `id`. Default no-op for shells with no extra items.
+    fn on_custom(&self, _app: &AppHandle, _id: &str) {}
 }
 
 /// Config + controller, managed as Tauri state so the menu-event closure and
@@ -97,6 +121,17 @@ fn build_menu(
 
     let menu = Menu::new(app)?;
     menu.append(&open)?;
+    // Shell-declared items (sign-in / permissions / settings …) — clicks route
+    // to `on_custom` via their id.
+    for item in &config.extra_items {
+        menu.append(&MenuItem::with_id(
+            app,
+            item.id.as_str(),
+            &item.label,
+            true,
+            None::<&str>,
+        )?)?;
+    }
     if let Some(status) = status {
         // Informational, non-clickable line mirroring the shell's status.
         menu.append(&MenuItem::new(app, status, false, None::<&str>)?)?;
@@ -133,7 +168,8 @@ pub fn setup<C: TrayController>(
                 // Routing through the controller lets the shell stop an active
                 // recording before exiting rather than killing it mid-write.
                 MENU_QUIT => state.controller.on_quit(app),
-                _ => {}
+                // Any other id belongs to a shell-declared extra item.
+                other => state.controller.on_custom(app, other),
             }
         })
         .build(app)?;
@@ -201,6 +237,7 @@ mod tests {
             start_label: "Start recording".into(),
             stop_label: "Stop recording".into(),
             quit_label: "Quit".into(),
+            extra_items: Vec::new(),
             icon_idle: &[],
             icon_recording: &[],
         }
@@ -211,5 +248,29 @@ mod tests {
         let cfg = config();
         assert_eq!(toggle_label(&cfg, false), "Start recording");
         assert_eq!(toggle_label(&cfg, true), "Stop recording");
+    }
+
+    #[test]
+    fn extra_item_ids_do_not_collide_with_builtins() {
+        let cfg = TrayConfig {
+            extra_items: vec![
+                TrayMenuItem {
+                    id: "sign-in".into(),
+                    label: "Sign in".into(),
+                },
+                TrayMenuItem {
+                    id: "settings".into(),
+                    label: "Settings".into(),
+                },
+            ],
+            ..config()
+        };
+        for item in &cfg.extra_items {
+            assert!(
+                ![MENU_OPEN, MENU_TOGGLE, MENU_QUIT].contains(&item.id.as_str()),
+                "extra item id {:?} collides with a built-in",
+                item.id
+            );
+        }
     }
 }
