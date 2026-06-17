@@ -124,7 +124,17 @@ button:disabled {
   justify-content: space-between;
   margin-bottom: 14px;
 }
+/* display:flex would beat the UA `[hidden]{display:none}` (cf. `.track[hidden]`).
+   Headless-tracking builds hide the "Capture" caption. */
+.capture-head[hidden] { display: none; }
 .capture-head h2 { margin: 0; }
+/* Headless-tracking build (VITE_FEATURE_TRACKING_UI=0): the engine still runs
+   but the card has no tracking row. Collapse the whole card when nothing else is
+   live — no active meeting recording (#rec-indicator shown) and no status text
+   (.message non-empty) — so it doesn't render as an empty box. */
+.capture-ui-hidden:not(:has(#rec-indicator:not([hidden]))):not(:has(.message:not(:empty))) {
+  display: none;
+}
 .track-state { display: flex; align-items: center; gap: 8px; font-weight: 600; }
 .track-dot {
   flex: none;
