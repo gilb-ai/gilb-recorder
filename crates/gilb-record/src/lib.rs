@@ -318,7 +318,6 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
         };
 
         let capture_result = self.capturer.stop();
-        info!(meeting_id, ok = capture_result.is_ok(), "capturer.stop returned"); // TODO(diag)
         let status = if capture_result.is_err() {
             RecordingOutcome::Failed
         } else {
@@ -329,7 +328,6 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
         meetings::finish_meeting(&self.db, meeting_id, now, status.as_status())
             .await
             .context("finish meeting")?;
-        info!(meeting_id, "finish_meeting persisted"); // TODO(diag)
 
         match &capture_result {
             Ok(()) => info!(meeting_id, status = status.as_status(), "recording stopped"),
