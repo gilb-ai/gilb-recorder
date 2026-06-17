@@ -63,7 +63,7 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_LOOPBACK, AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFAttributes, IMFSample, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM,
+    IMFAttributes, IMFSinkWriter, MFAudioFormat_AAC, MFAudioFormat_PCM,
     MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample,
     MFCreateSinkWriterFromURL, MFMediaType_Audio, MFMediaType_Video, MFShutdown, MFStartup,
     MFVideoFormat_H264, MFVideoFormat_RGB32, MFVideoInterlace_Progressive, MFSTARTUP_FULL,
