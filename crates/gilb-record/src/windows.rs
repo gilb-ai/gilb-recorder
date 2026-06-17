@@ -1090,6 +1090,16 @@ unsafe fn mux_inner(video_path: &Path, pcm: &[i16], rate: u32) -> Result<()> {
     }
 
     writer.Finalize().context("IMFSinkWriter::Finalize (mux)")?;
+
+    // Release the Media Foundation objects before the rename. On Windows a file
+    // with an open handle cannot be renamed/replaced: `reader` keeps `video_path`
+    // (the rename destination) open for reading, and `writer` keeps `out_path`
+    // (the source) open. Unlike macOS — where the same in-place replace just
+    // works — leaving these alive makes `rename` fail, so `video.muxed.mp4` is
+    // left behind and the uploaded `video.mp4` stays silent.
+    drop(writer);
+    drop(reader);
+
     std::fs::rename(&out_path, video_path).context("replace video with muxed mp4")?;
     Ok(())
 }
