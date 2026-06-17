@@ -67,6 +67,12 @@ pub trait TrayController: Send + Sync + 'static {
     /// Optional informational line shown between Open and the toggle (e.g. an
     /// upload/transcription status). `None` hides it.
     fn status_line(&self, app: &AppHandle) -> Option<String>;
+    /// Optional non-clickable line shown at the top of the menu identifying the
+    /// signed-in account (e.g. the user's email). `None` hides it (e.g. signed
+    /// out). Default: none.
+    fn account_line(&self, _app: &AppHandle) -> Option<String> {
+        None
+    }
     fn on_open(&self, app: &AppHandle);
     fn on_toggle(&self, app: &AppHandle);
     fn on_quit(&self, app: &AppHandle);
@@ -110,6 +116,7 @@ fn build_menu(
     app: &AppHandle,
     config: &TrayConfig,
     recording: bool,
+    account: Option<&str>,
     status: Option<&str>,
     extra: &[TrayMenuItem],
 ) -> tauri::Result<Menu<Wry>> {
@@ -125,6 +132,10 @@ fn build_menu(
 
     let menu = Menu::new(app)?;
     menu.append(&open)?;
+    if let Some(account) = account {
+        // Non-clickable line identifying the signed-in account (e.g. email).
+        menu.append(&MenuItem::new(app, account, false, None::<&str>)?)?;
+    }
     // Shell-declared items (sign-in / permissions / settings …) — clicks route
     // to `on_custom` via their id.
     for item in extra {
@@ -154,9 +165,17 @@ pub fn setup<C: TrayController>(
     controller: C,
 ) -> tauri::Result<()> {
     let recording = controller.is_recording(app);
+    let account = controller.account_line(app);
     let status = controller.status_line(app);
     let extra = controller.extra_items(app);
-    let menu = build_menu(app, &config, recording, status.as_deref(), &extra)?;
+    let menu = build_menu(
+        app,
+        &config,
+        recording,
+        account.as_deref(),
+        status.as_deref(),
+        &extra,
+    )?;
     TrayIconBuilder::with_id(config.tray_id.as_str())
         .icon(icon(&config, recording)?)
         .icon_as_template(cfg!(target_os = "macos"))
@@ -189,7 +208,7 @@ pub fn setup<C: TrayController>(
 /// when nothing visible changed (refresh can fire per status tick). The extra
 /// items are part of the key so a state-driven change (e.g. "Sign in" appearing)
 /// still re-renders even when recording/status are unchanged.
-static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Vec<(String, String)>)>> =
+static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Option<String>, Vec<(String, String)>)>> =
     Mutex::new(None);
 
 /// Re-render the tray (icon + menu) from the [`TrayController`]. A no-op until
@@ -197,26 +216,27 @@ static LAST_RENDERED: Mutex<Option<(bool, Option<String>, Vec<(String, String)>)
 pub fn refresh(app: &AppHandle) {
     // Read the dynamic state (controller methods just lock the shell's AppState,
     // safe on any thread), then drop the state guard before dispatching.
-    let (recording, status, extra, extra_key) = {
+    let (recording, account, status, extra, extra_key) = {
         let Some(state) = app.try_state::<TrayState>() else {
             return;
         };
         let recording = state.controller.is_recording(app);
+        let account = state.controller.account_line(app);
         let status = state.controller.status_line(app);
         let extra = state.controller.extra_items(app);
         let extra_key: Vec<(String, String)> = extra
             .iter()
             .map(|i| (i.id.clone(), i.label.clone()))
             .collect();
-        (recording, status, extra, extra_key)
+        (recording, account, status, extra, extra_key)
     };
 
     let mut last = LAST_RENDERED.lock();
-    let icon_changed = last.as_ref().map(|(r, _, _)| *r) != Some(recording);
-    if last.as_ref() == Some(&(recording, status.clone(), extra_key.clone())) {
+    let icon_changed = last.as_ref().map(|(r, ..)| *r) != Some(recording);
+    if last.as_ref() == Some(&(recording, account.clone(), status.clone(), extra_key.clone())) {
         return;
     }
-    *last = Some((recording, status.clone(), extra_key));
+    *last = Some((recording, account.clone(), status.clone(), extra_key));
     // Hold `last` across the dispatch below so concurrent refreshes enqueue
     // their renders in the same order they won the dedup — otherwise a slower
     // thread could enqueue a stale render after a newer one and leave the tray
@@ -256,7 +276,14 @@ pub fn refresh(app: &AppHandle) {
                 Err(err) => warn!(?err, "failed to load tray icon"),
             }
         }
-        match build_menu(&handle, &state.config, recording, status.as_deref(), &extra) {
+        match build_menu(
+            &handle,
+            &state.config,
+            recording,
+            account.as_deref(),
+            status.as_deref(),
+            &extra,
+        ) {
             Ok(menu) => {
                 if let Err(err) = tray.set_menu(Some(menu)) {
                     warn!(?err, "failed to update tray menu");
