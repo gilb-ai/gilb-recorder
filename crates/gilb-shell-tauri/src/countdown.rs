@@ -267,7 +267,11 @@ mod tests {
     #[test]
     fn reuse_url_works_against_a_dev_server_origin() {
         let current = Url::parse("http://localhost:1420/countdown.html").unwrap();
-        let out = reuse_url(&current, STOP_COUNTDOWN_HTML, "app=Zoom&meeting_id=3&seconds=5");
+        let out = reuse_url(
+            &current,
+            STOP_COUNTDOWN_HTML,
+            "app=Zoom&meeting_id=3&seconds=5",
+        );
         assert_eq!(out.scheme(), "http");
         assert_eq!(out.host_str(), Some("localhost"));
         assert_eq!(out.port(), Some(1420));
