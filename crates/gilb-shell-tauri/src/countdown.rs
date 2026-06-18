@@ -15,11 +15,14 @@ use gilb_events::{EventBus, RecordingEvent};
 use gilb_pipeline::StopResolution;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::info;
+use url::Url;
 
 use crate::ShellConfig;
 
 const COUNTDOWN_LABEL: &str = "countdown";
 const STOP_COUNTDOWN_LABEL: &str = "stop-countdown";
+const COUNTDOWN_HTML: &str = "countdown.html";
+const STOP_COUNTDOWN_HTML: &str = "stop-countdown.html";
 
 /// Fallback window title when no [`ShellConfig`] is managed (shells are expected
 /// to manage one — see [`crate::spawn_meeting_pipeline`]).
@@ -42,23 +45,63 @@ fn window_title(app: &AppHandle) -> String {
     shell_title(app.try_state::<ShellConfig>().as_deref())
 }
 
-/// Open the borderless, centered, always-on-top countdown window for
-/// `meeting_id`. Shared by the `show_countdown` command (invoked from the UI)
-/// and the Rust-side meeting bridge, which can't `invoke` a command.
-pub(crate) fn open_countdown_window(
-    app: &AppHandle,
-    app_name: &str,
-    meeting_id: i64,
-) -> tauri::Result<()> {
+/// Build the `app=&meeting_id=&seconds=` query string the countdown pages read.
+fn countdown_query(app_name: &str, meeting_id: i64) -> String {
     let seconds = RecordingSettings::from_env().countdown_seconds;
-    let query = url::form_urlencoded::Serializer::new(String::new())
+    url::form_urlencoded::Serializer::new(String::new())
         .append_pair("app", app_name)
         .append_pair("meeting_id", &meeting_id.to_string())
         .append_pair("seconds", &seconds.to_string())
-        .finish();
-    let url = WebviewUrl::App(format!("countdown.html?{query}").into());
+        .finish()
+}
 
-    WebviewWindowBuilder::new(app, COUNTDOWN_LABEL, url)
+/// Re-point a live window's URL at `/{html}?{query}` while preserving its scheme
+/// and host, so the result is correct whether assets are served from the bundled
+/// `tauri://` protocol or a dev server. Pure so the rewrite is unit-testable.
+fn reuse_url(current: &Url, html: &str, query: &str) -> Url {
+    let mut url = current.clone();
+    url.set_path(&format!("/{html}"));
+    url.set_query(Some(query));
+    url
+}
+
+/// Show a borderless, centered, always-on-top countdown popup, *reusing* the
+/// existing OS window when one is already alive rather than destroying and
+/// rebuilding it.
+///
+/// macOS teardown safety: `WebviewWindow::close()` frees the WKWebView's
+/// `WebPageProxy`, but WebKit may still have main-thread runloop work queued for
+/// it — obscured-content-inset updates triggered by the create/center/focus we
+/// just performed. That deferred work then fires against freed memory, a
+/// use-after-free crash in `WebPageProxy::dispatchSetObscuredContentInsets`
+/// (observed on macOS 26). Keeping one hidden window per popup alive and
+/// re-navigating it removes the teardown race entirely.
+///
+/// Reuse relies on the countdown page resetting itself on load: the `resolve`
+/// guard + `clearTimeout` in `countdown.ts`/`stop-countdown.ts` mean a hidden,
+/// already-resolved page never auto-fires, and a fresh `navigate` restarts the
+/// fill from zero with the new meeting's params.
+fn show_countdown_popup(
+    app: &AppHandle,
+    label: &str,
+    html: &str,
+    app_name: &str,
+    meeting_id: i64,
+) -> tauri::Result<()> {
+    let query = countdown_query(app_name, meeting_id);
+
+    if let Some(win) = app.get_webview_window(label) {
+        // Reuse: reload the existing webview with a fresh countdown, recenter for
+        // the current display layout, and resurface it.
+        win.navigate(reuse_url(&win.url()?, html, &query))?;
+        let _ = win.center();
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let url = WebviewUrl::App(format!("{html}?{query}").into());
+    WebviewWindowBuilder::new(app, label, url)
         .title(window_title(app))
         .inner_size(380.0, 220.0)
         .resizable(false)
@@ -74,6 +117,17 @@ pub(crate) fn open_countdown_window(
         .set_focus()
         .ok();
     Ok(())
+}
+
+/// Open the borderless, centered, always-on-top countdown window for
+/// `meeting_id`. Shared by the `show_countdown` command (invoked from the UI)
+/// and the Rust-side meeting bridge, which can't `invoke` a command.
+pub(crate) fn open_countdown_window(
+    app: &AppHandle,
+    app_name: &str,
+    meeting_id: i64,
+) -> tauri::Result<()> {
+    show_countdown_popup(app, COUNTDOWN_LABEL, COUNTDOWN_HTML, app_name, meeting_id)
 }
 
 #[tauri::command]
@@ -107,8 +161,11 @@ pub async fn resolve_countdown(
 ) -> Result<(), String> {
     publish_resolution(&bus, meeting_id, armed);
 
+    // Hide, don't close: the window is reused on the next meeting (see
+    // `show_countdown_popup`), and closing the WKWebView here would risk the
+    // macOS teardown use-after-free. The page has already cleared its own timer.
     if let Some(win) = app.get_webview_window(COUNTDOWN_LABEL) {
-        let _ = win.close();
+        let _ = win.hide();
     }
     Ok(())
 }
@@ -122,30 +179,13 @@ pub(crate) fn open_stop_countdown_window(
     app_name: &str,
     meeting_id: i64,
 ) -> tauri::Result<()> {
-    let seconds = RecordingSettings::from_env().countdown_seconds;
-    let query = url::form_urlencoded::Serializer::new(String::new())
-        .append_pair("app", app_name)
-        .append_pair("meeting_id", &meeting_id.to_string())
-        .append_pair("seconds", &seconds.to_string())
-        .finish();
-    let url = WebviewUrl::App(format!("stop-countdown.html?{query}").into());
-
-    WebviewWindowBuilder::new(app, STOP_COUNTDOWN_LABEL, url)
-        .title(window_title(app))
-        .inner_size(380.0, 220.0)
-        .resizable(false)
-        .decorations(false)
-        .always_on_top(true)
-        // Grab focus so the very first click hits a button. A borderless,
-        // always-on-top window over another app (Zoom) is otherwise inactive on
-        // macOS, where the first click only activates the window — making
-        // "Record now"/"Stop now" appear dead until a second click.
-        .focused(true)
-        .center()
-        .build()?
-        .set_focus()
-        .ok();
-    Ok(())
+    show_countdown_popup(
+        app,
+        STOP_COUNTDOWN_LABEL,
+        STOP_COUNTDOWN_HTML,
+        app_name,
+        meeting_id,
+    )
 }
 
 /// One exit point for the stop-countdown popup: hand the user's choice
@@ -159,11 +199,13 @@ pub async fn resolve_stop_countdown(
     keep: bool,
 ) -> Result<(), String> {
     info!(meeting_id, keep, "stop-countdown resolved");
-    // Close the window *first*, unconditionally: it's borderless + always-on-top
+    // Hide the window *first*, unconditionally: it's borderless + always-on-top
     // with no title bar, so if the send below fails (e.g. the bridge task is
     // gone) we must not leave an un-dismissable overlay floating over everything.
+    // Hide (not close) keeps the WKWebView alive for reuse and avoids the macOS
+    // teardown use-after-free; the page has already cleared its own timer.
     if let Some(win) = app.get_webview_window(STOP_COUNTDOWN_LABEL) {
-        let _ = win.close();
+        let _ = win.hide();
     }
     stop_tx
         .0
@@ -207,6 +249,34 @@ mod tests {
     #[test]
     fn shell_title_falls_back_without_config() {
         assert_eq!(shell_title(None), DEFAULT_TITLE);
+    }
+
+    #[test]
+    fn reuse_url_preserves_origin_and_swaps_path_query() {
+        // Bundled asset protocol: scheme + host must survive the rewrite so the
+        // reused window navigates to the same origin, just a fresh countdown.
+        let current =
+            Url::parse("tauri://localhost/countdown.html?app=Old&meeting_id=1&seconds=5").unwrap();
+        let out = reuse_url(&current, COUNTDOWN_HTML, "app=New&meeting_id=2&seconds=9");
+        assert_eq!(out.scheme(), "tauri");
+        assert_eq!(out.host_str(), Some("localhost"));
+        assert_eq!(out.path(), "/countdown.html");
+        assert_eq!(out.query(), Some("app=New&meeting_id=2&seconds=9"));
+    }
+
+    #[test]
+    fn reuse_url_works_against_a_dev_server_origin() {
+        let current = Url::parse("http://localhost:1420/countdown.html").unwrap();
+        let out = reuse_url(
+            &current,
+            STOP_COUNTDOWN_HTML,
+            "app=Zoom&meeting_id=3&seconds=5",
+        );
+        assert_eq!(out.scheme(), "http");
+        assert_eq!(out.host_str(), Some("localhost"));
+        assert_eq!(out.port(), Some(1420));
+        assert_eq!(out.path(), "/stop-countdown.html");
+        assert_eq!(out.query(), Some("app=Zoom&meeting_id=3&seconds=5"));
     }
 
     #[tokio::test]
