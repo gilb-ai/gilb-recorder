@@ -93,6 +93,12 @@ pub struct Frame {
     pub h: f64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SelectionRange {
+    pub start: usize,
+    pub end: usize,
+}
+
 /// A single captured action, before it has been persisted.
 ///
 /// The `id` and `session_id` are assigned by the write queue / engine.
@@ -151,4 +157,19 @@ impl Action {
 /// A unique correlation id we expose to logs / health events.
 pub fn new_correlation_id() -> String {
     Uuid::new_v4().to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selection_range_serializes_to_start_end() {
+        let range = SelectionRange { start: 0, end: 10 };
+        let json = serde_json::to_string(&range).unwrap();
+        assert_eq!(json, r#"{"start":0,"end":10}"#);
+
+        let back: SelectionRange = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, range);
+    }
 }
