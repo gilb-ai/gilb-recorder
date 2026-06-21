@@ -23,6 +23,7 @@
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
@@ -232,6 +233,8 @@ impl Normalizer {
                 "flush_reason": format!("{:?}", flushed.reason),
                 "char_count": flushed.text.chars().count(),
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_blocking(action).await;
     }
@@ -278,6 +281,8 @@ impl Normalizer {
                 "x": x,
                 "y": y,
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
@@ -298,6 +303,8 @@ impl Normalizer {
             extra_json: Some(serde_json::json!({
                 "key": format!("{:?}", special),
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
@@ -316,6 +323,8 @@ impl Normalizer {
                 "delta_x": dx,
                 "delta_y": dy,
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
@@ -331,6 +340,8 @@ impl Normalizer {
             password_flag: false,
             tree_snapshot_id: None,
             extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_blocking(action).await;
     }
@@ -342,6 +353,10 @@ impl Normalizer {
                 return;
             }
         }
+        // Hash the RAW clipboard text BEFORE redaction so copy↔paste linking
+        // survives `redact_pii` on the shipped `text_content`. Step-1 op is
+        // always "copy" (NSPasteboard can't distinguish copy/cut).
+        let content_hash = change.text.as_deref().and_then(clipboard_content_hash);
         let text = change
             .text
             .map(|t| redact_pii(&t))
@@ -358,6 +373,8 @@ impl Normalizer {
             extra_json: Some(serde_json::json!({
                 "change_count": change.change_count,
             })),
+            clipboard_op: Some("copy".to_string()),
+            content_hash,
         };
         self.emit_lossy(action, drops);
     }
@@ -387,5 +404,51 @@ impl Normalizer {
         {
             *drops += 1;
         }
+    }
+}
+
+/// sha256 (hex) of a raw clipboard string, or `None` for empty input.
+///
+/// Computed from the PRE-redaction bytes so copy↔paste linking via
+/// `content_hash` survives `redact_pii` on the shipped `text_content`.
+fn clipboard_content_hash(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_content_hash_is_deterministic_and_skips_empty() {
+        // sha256("hello") == 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        assert_eq!(
+            clipboard_content_hash("hello").as_deref(),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+        // Empty input → None (no hash, no linking value).
+        assert_eq!(clipboard_content_hash(""), None);
+        // Same raw text → same hash (stable across calls; redaction of the
+        // shipped text_content does not affect it).
+        assert_eq!(
+            clipboard_content_hash("invoice-123"),
+            clipboard_content_hash("invoice-123")
+        );
+        // Different text → different hash.
+        assert_ne!(
+            clipboard_content_hash("invoice-123"),
+            clipboard_content_hash("invoice-456")
+        );
     }
 }

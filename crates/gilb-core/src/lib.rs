@@ -113,6 +113,14 @@ pub struct Action {
     pub password_flag: bool,
     pub tree_snapshot_id: Option<TreeSnapshotId>,
     pub extra_json: Option<serde_json::Value>,
+    /// Clipboard operation kind ("copy"/"cut"/"paste"); `Some` only for
+    /// `Clipboard` actions. Step-1: always "copy" — NSPasteboard can't tell
+    /// copy from cut; cut/paste detection is deferred.
+    pub clipboard_op: Option<String>,
+    /// sha256 (hex) of the raw clipboard text BEFORE PII redaction; `Some`
+    /// only for `Clipboard` actions. Lets copy↔paste linking survive
+    /// redaction of the shipped `text_content`.
+    pub content_hash: Option<String>,
 }
 
 /// Anything the capture pipeline can hand to the engine writer.
@@ -121,6 +129,11 @@ pub struct Action {
 /// writer fans in [`crate::TreeSnapshot`]s too. Keep this enum small —
 /// we route on the variant in the writer's hot loop.
 #[derive(Debug, Clone)]
+// `Action` is ~408 B; the `clipboard_op`/`content_hash` fields pushed it past
+// clippy's variant-size threshold. This enum is only ever moved through a
+// tokio mpsc channel as a heap-managed slot, so the inline size carries no
+// stack/perf cost — boxing the variant would just add a per-event allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum WriterMessage {
     Action(Action),
     TreeSnapshot(TreeSnapshot),
@@ -150,6 +163,8 @@ impl Action {
             password_flag: false,
             tree_snapshot_id: None,
             extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
         }
     }
 }

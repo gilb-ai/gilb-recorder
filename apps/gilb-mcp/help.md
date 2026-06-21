@@ -19,7 +19,10 @@ The main table is `actions`. One row per atomic user action:
   - `key` — non-printable navigation/editing key (Enter, Tab, Backspace,
     arrows, etc.). `extra.key` names which one.
   - `scroll` — wheel event. `extra.delta_x`, `extra.delta_y`.
-  - `clipboard` — `text_content` is the clipboard string.
+  - `clipboard` — `text_content` is the clipboard string (PII-redacted).
+    `clipboard_op` is the op ("copy"; cut/paste detection deferred) and
+    `content_hash` is sha256 (hex) of the raw pre-redaction text, for
+    copy↔paste linking across rows.
   - `focus_change` — frontmost app changed; useful as an activity boundary.
 - `app_name`, `app_bundle_id`, `window_title` — foreground app context.
 - `browser_url` — URL of the focused tab when the foreground app is a

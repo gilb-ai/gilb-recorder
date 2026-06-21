@@ -35,8 +35,9 @@ where
             session_id, captured_at, kind,
             app_bundle_id, app_name, app_pid, window_title, browser_url,
             element_role, element_name, element_value, element_help, element_id, element_frame,
-            text_content, password_flag, tree_snapshot_id, extra_json
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            text_content, password_flag, tree_snapshot_id, extra_json,
+            clipboard_op, content_hash
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         "#,
     )
     .bind(action.session_id)
@@ -57,6 +58,8 @@ where
     .bind(if action.password_flag { 1_i64 } else { 0_i64 })
     .bind(action.tree_snapshot_id)
     .bind(&extra_json)
+    .bind(&action.clipboard_op)
+    .bind(&action.content_hash)
     .execute(executor)
     .await?;
 
