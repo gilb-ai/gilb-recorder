@@ -78,6 +78,10 @@ impl Normalizer {
 
         let mut drops_since_report: u64 = 0;
         let mut last_drop_report = Instant::now();
+        // Idle/alive lifecycle tracker — produces `system` actions the server
+        // segments cases/sessions on (GILB-77). macOS lock/unlock/sleep/wake
+        // signals come from platform/macos/session.rs (later).
+        let mut idle = crate::idle::IdleTracker::new(Instant::now());
 
         loop {
             tokio::select! {
@@ -120,6 +124,9 @@ impl Normalizer {
                     }
                 }
                 _ = text_tick.tick() => {
+                    for sig in idle.tick(Instant::now()) {
+                        self.emit_system(sig).await;
+                    }
                     if buffer.should_timeout(Instant::now()) {
                         self.flush_text(&mut buffer, FlushReason::Timeout).await;
                     }
@@ -136,10 +143,16 @@ impl Normalizer {
                 }
                 Some(ev) = raw_rx.recv() => {
                     self.handle_raw(ev, &mut buffer, &mut drops_since_report).await;
+                    if let Some(sig) = idle.on_input(Instant::now()) {
+                        self.emit_system(sig).await;
+                    }
                 }
                 Some(change) = clip_rx.recv() => {
                     if self.settings.capture_clipboard {
                         self.handle_clipboard(change, &mut drops_since_report).await;
+                        if let Some(sig) = idle.on_input(Instant::now()) {
+                            self.emit_system(sig).await;
+                        }
                     }
                 }
                 else => break,
@@ -393,6 +406,27 @@ impl Normalizer {
         if let Err(err) = self.writer_tx.send(WriterMessage::Action(action)).await {
             warn!(?err, "normalizer: writer channel closed");
         }
+    }
+
+    /// Persist a lifecycle `system` action (idle/alive now; lock/unlock/recording
+    /// arrive from the macOS session source later). Carries the foreground app so
+    /// the server can correlate; no text/element PII.
+    async fn emit_system(&self, signal: crate::idle::SystemSignal) {
+        let snap = self.focus.current();
+        let action = Action {
+            session_id: self.session_id,
+            captured_at: Utc::now(),
+            kind: ActionKind::System,
+            app: snap.app.clone(),
+            element: ElementContext::default(),
+            text_content: None,
+            password_flag: false,
+            tree_snapshot_id: None,
+            extra_json: Some(serde_json::json!({ "system": signal.as_str() })),
+            clipboard_op: None,
+            content_hash: None,
+        };
+        self.emit_blocking(action).await;
     }
 
     fn emit_lossy(&self, action: Action, drops: &mut u64) {

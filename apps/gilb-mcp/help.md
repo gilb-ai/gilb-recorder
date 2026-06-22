@@ -24,6 +24,8 @@ The main table is `actions`. One row per atomic user action:
     `content_hash` is sha256 (hex) of the raw pre-redaction text, for
     copy↔paste linking across rows.
   - `focus_change` — frontmost app changed; useful as an activity boundary.
+  - `system` — lifecycle marker. `extra.system` is `idle_start` / `idle_end` /
+    `alive` (lock/unlock/recording arrive later). Segment cases/sessions on these.
 - `app_name`, `app_bundle_id`, `window_title` — foreground app context.
 - `browser_url` — URL of the focused tab when the foreground app is a
   known browser (Chrome / Safari / Firefox / Edge / Brave / Arc /
