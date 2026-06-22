@@ -10,13 +10,15 @@
 //! Ships UNCOMPRESSED JSONL (zstd is a later optimization — the web ingest
 //! endpoint accepts plain JSONL first).
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use serde::Serialize;
 use sqlx::Row;
-use tracing::warn;
+use tokio::sync::oneshot;
+use tracing::{info, warn};
 
 use gilb_db::Db;
 
@@ -236,6 +238,40 @@ pub async fn run_once(
     Ok(ids.len())
 }
 
+/// Run a long-lived shipper: tick every `interval`, call [`run_once`], log the
+/// result, and exit when `shutdown` fires (or its sender is dropped). The
+/// Engine spawns this when onboarding Credentials are present; it drains the
+/// buffer independent of capture sessions.
+pub fn spawn_loop(
+    db: Db,
+    dest: Arc<dyn Destination>,
+    interval: Duration,
+    batch: i64,
+    cfg: ShipConfig,
+    mut shutdown: oneshot::Receiver<()>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut shutdown => {
+                    info!("shipper loop stopped");
+                    break;
+                }
+                _ = tick.tick() => {
+                    match run_once(&db, dest.as_ref(), batch, &cfg).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(n, "shipper shipped events"),
+                        Err(e) => warn!(error = %e, "shipper run_once failed; will retry next tick"),
+                    }
+                }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -419,6 +455,44 @@ mod tests {
         assert!(res.is_err(), "ship failure must propagate");
         // Cursor NOT advanced → row is still unshipped (retried next pass).
         assert_eq!(fetch_unshipped(&db, 10).await.unwrap().len(), 1);
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn spawn_loop_drains_backlog_and_stops_on_shutdown() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let session_id = gilb_db::sessions::start_session(&db).await.unwrap();
+        for i in 0..2 {
+            insert_click(&db, session_id, i).await;
+        }
+        assert_eq!(fetch_unshipped(&db, 10).await.unwrap().len(), 2);
+
+        let dest: Arc<dyn Destination> = Arc::new(MockDestination::always_ok());
+        let (tx, rx) = oneshot::channel();
+        let handle = spawn_loop(
+            db.clone(),
+            dest,
+            Duration::from_millis(50),
+            10,
+            ShipConfig {
+                max_retries: 0,
+                base_backoff: Duration::ZERO,
+            },
+            rx,
+        );
+
+        // Wait past one tick so the loop ships the backlog.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            fetch_unshipped(&db, 10).await.unwrap().is_empty(),
+            "backlog drained by the loop"
+        );
+
+        let _ = tx.send(());
+        handle.await.unwrap();
 
         db.close().await;
         cleanup(&path);

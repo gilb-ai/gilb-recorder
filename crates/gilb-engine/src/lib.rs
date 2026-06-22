@@ -17,14 +17,15 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use parking_lot::Mutex;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tracing::{info, warn};
 
 use gilb_a11y::{current_platform, CapturePlatform, Permissions, RunningCapture, StartContext};
-use gilb_config::RecordingSettings;
+use gilb_config::{load_credentials, RecordingSettings};
 use gilb_core::{SessionId, WriterMessage};
 use gilb_db::{actions, open_db, sessions, tree_snapshots, write_batch, Db};
 use gilb_events::EventBus;
+use gilb_shipper::{spawn_loop, HttpDestination, ShipConfig};
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
 
@@ -38,6 +39,11 @@ const WRITER_BATCH_MAX: usize = 256;
 /// light activity.
 const WRITER_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 
+/// Ship buffered actions to gilb-web at least this often (GILB-96).
+const SHIP_INTERVAL: Duration = Duration::from_secs(30);
+/// Actions per shipping pass.
+const SHIP_BATCH: i64 = 1000;
+
 #[derive(Clone)]
 pub struct Engine {
     inner: Arc<EngineInner>,
@@ -48,6 +54,20 @@ struct EngineInner {
     event_bus: EventBus,
     platform: Box<dyn CapturePlatform>,
     state: Mutex<Option<ActiveSession>>,
+    /// Shutdown signal for the background shipper (GILB-96). `None` when the
+    /// device isn't onboarded (no credentials) → no shipper running.
+    shipper_shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl Drop for EngineInner {
+    fn drop(&mut self) {
+        // Signal the shipper loop to exit on engine shutdown. (The oneshot
+        // receiver also resolves if this sender is merely dropped, so dropping
+        // the Engine stops the loop either way.)
+        if let Some(tx) = self.shipper_shutdown.take() {
+            let _ = tx.send(());
+        }
+    }
 }
 
 struct ActiveSession {
@@ -71,12 +91,33 @@ impl Engine {
         let db = open_db(&db_path).await?;
         let event_bus = EventBus::new();
         let platform = current_platform();
+        // If the device is onboarded (has gilb-web credentials), start a
+        // background shipper that drains the local buffer to /api/v1/ingest.
+        // No credentials → no shipper; capture still works, events buffer.
+        let shipper_shutdown = match load_credentials().ok().flatten() {
+            Some(creds) => {
+                let dest: Arc<dyn gilb_shipper::Destination> =
+                    Arc::new(HttpDestination::new(creds.gilb_web_url, creds.token));
+                let (tx, rx) = oneshot::channel();
+                spawn_loop(
+                    db.clone(),
+                    dest,
+                    SHIP_INTERVAL,
+                    SHIP_BATCH,
+                    ShipConfig::default(),
+                    rx,
+                );
+                Some(tx)
+            }
+            None => None,
+        };
         Ok(Self {
             inner: Arc::new(EngineInner {
                 db,
                 event_bus,
                 platform,
                 state: Mutex::new(None),
+                shipper_shutdown,
             }),
         })
     }
