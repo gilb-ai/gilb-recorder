@@ -2062,6 +2062,7 @@ dependencies = [
  "gilb-core",
  "gilb-db",
  "gilb-events",
+ "gilb-shipper",
  "parking_lot",
  "serde",
  "thiserror 1.0.69",

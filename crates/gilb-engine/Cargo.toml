@@ -11,6 +11,7 @@ gilb-config = { workspace = true }
 gilb-events = { workspace = true }
 gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
+gilb-shipper = { workspace = true }
 
 tokio = { workspace = true }
 parking_lot = { workspace = true }
