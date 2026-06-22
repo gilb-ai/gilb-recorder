@@ -15,6 +15,7 @@ members = [
     "crates/gilb-pipeline",
     "crates/gilb-record",
     "crates/gilb-shell-tauri",
+    "crates/gilb-shipper",
     "crates/gilb-transcribe",
 ]
 
@@ -104,6 +105,7 @@ gilb-meeting = { path = "crates/gilb-meeting" }
 gilb-pipeline = { path = "crates/gilb-pipeline" }
 gilb-record = { path = "crates/gilb-record" }
 gilb-shell-tauri = { path = "crates/gilb-shell-tauri" }
+gilb-shipper = { path = "crates/gilb-shipper" }
 gilb-transcribe = { path = "crates/gilb-transcribe" }
 
 [profile.release]
