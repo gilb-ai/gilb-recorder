@@ -238,6 +238,24 @@ pub async fn run_once(
     Ok(ids.len())
 }
 
+/// Local retention for shipped rows: keep a week queryable via gilb-mcp; older
+/// shipped rows are already on the server (`received_batches`, GILB-83), so
+/// they're pruned to bound SQLite growth (GILB-98).
+pub const RETAIN_SHIPPED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+
+/// Delete shipped (`shipped_at IS NOT NULL`) actions older than `retain`
+/// (now − retain). Returns rows deleted. Unshipped rows are never touched;
+/// shipped rows are already server-side before `shipped_at` is set.
+pub async fn prune_shipped(db: &Db, retain: Duration) -> Result<u64> {
+    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(retain.as_secs() as i64);
+    let res = sqlx::query("DELETE FROM actions WHERE shipped_at IS NOT NULL AND shipped_at < ?")
+        .bind(cutoff.to_rfc3339())
+        .execute(db)
+        .await
+        .context("prune_shipped delete")?;
+    Ok(res.rows_affected())
+}
+
 /// Run a long-lived shipper: tick every `interval`, call [`run_once`], log the
 /// result, and exit when `shutdown` fires (or its sender is dropped). The
 /// Engine spawns this when onboarding Credentials are present; it drains the
@@ -253,6 +271,11 @@ pub fn spawn_loop(
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(interval);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut prune_tick = tokio::time::interval(Duration::from_secs(3600));
+        prune_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // Consume the interval's immediate first fire so the first prune happens
+        // after one prune interval, not at startup.
+        prune_tick.tick().await;
         loop {
             tokio::select! {
                 biased;
@@ -265,6 +288,13 @@ pub fn spawn_loop(
                         Ok(0) => {}
                         Ok(n) => info!(n, "shipper shipped events"),
                         Err(e) => warn!(error = %e, "shipper run_once failed; will retry next tick"),
+                    }
+                }
+                _ = prune_tick.tick() => {
+                    match prune_shipped(&db, RETAIN_SHIPPED).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(n, "shipper pruned old shipped rows"),
+                        Err(e) => warn!(error = %e, "shipper prune failed"),
                     }
                 }
             }
@@ -493,6 +523,54 @@ mod tests {
 
         let _ = tx.send(());
         handle.await.unwrap();
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn prune_shipped_drops_old_keeps_recent_and_unshipped() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+        for i in 0..3 {
+            insert_click(&db, sid, i).await;
+        }
+        // ids[0]: ancient shipped · ids[1]: recent shipped · ids[2]: unshipped.
+        let ids: Vec<(i64,)> = sqlx::query_as("SELECT id FROM actions ORDER BY id")
+            .fetch_all(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE actions SET shipped_at = ? WHERE id = ?")
+            .bind("2020-01-01T00:00:00Z")
+            .bind(ids[0].0)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE actions SET shipped_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(ids[1].0)
+            .execute(&db)
+            .await
+            .unwrap();
+
+        // 7-day retention → the ancient row is past the cutoff; the recent one
+        // isn't; the unshipped row is excluded entirely.
+        let n = prune_shipped(&db, Duration::from_secs(7 * 24 * 60 * 60))
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "only the ancient shipped row is pruned");
+
+        let remaining: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM actions")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(remaining.0, 2, "recent-shipped + unshipped remain");
+        assert_eq!(
+            fetch_unshipped(&db, 10).await.unwrap().len(),
+            1,
+            "unshipped row is untouched"
+        );
 
         db.close().await;
         cleanup(&path);
