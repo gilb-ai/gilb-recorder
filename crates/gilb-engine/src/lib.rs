@@ -39,10 +39,12 @@ const WRITER_BATCH_MAX: usize = 256;
 /// light activity.
 const WRITER_FLUSH_INTERVAL: Duration = Duration::from_millis(200);
 
-/// Ship buffered actions to gilb-web at least this often. 10s — near-real-time
-/// for server-side mining; idle ticks are a cheap indexed SELECT returning 0,
-/// and a request fires only when there's data (GILB-96/97).
-const SHIP_INTERVAL: Duration = Duration::from_secs(10);
+/// Ship buffered actions to gilb-web at least this often. 60s — the server-side
+/// mining is retrospective (case/variant analysis), so it doesn't need
+/// near-real-time freshness; a minute keeps the device lean (~1440 req/day)
+/// while still shipping one batch per tick (run_once ships ≤ SHIP_BATCH).
+/// (GILB-96/97/99.)
+const SHIP_INTERVAL: Duration = Duration::from_secs(60);
 /// Max actions per shipping pass — absorbs a burst, well under the web
 /// endpoint's 4MB body cap (GILB-96/97).
 const SHIP_BATCH: i64 = 2000;
