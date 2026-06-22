@@ -25,6 +25,10 @@ pub enum ActionKind {
     Scroll,
     Clipboard,
     FocusChange,
+    /// Lifecycle marker (idle/alive/lock/unlock/recording). The specific
+    /// signal rides in `extra_json.system` (see gilb-a11y `idle` + the macOS
+    /// `session` source). Lets the server segment cases/sessions for mining.
+    System,
     Debug,
 }
 
@@ -37,6 +41,7 @@ impl ActionKind {
             ActionKind::Scroll => "scroll",
             ActionKind::Clipboard => "clipboard",
             ActionKind::FocusChange => "focus_change",
+            ActionKind::System => "system",
             ActionKind::Debug => "debug",
         }
     }
