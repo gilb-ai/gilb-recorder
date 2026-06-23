@@ -14,8 +14,6 @@ use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 use tracing::info;
 
-use crate::analyzer_supervisor::AnalyzerSupervisor;
-
 /// In-flight recorder→gilb-web login. Set by `start_login`, consumed by the
 /// `gilb://auth/callback` deep-link handler, which checks `state` matches the
 /// callback before trusting it (the callback must belong to a login this
@@ -28,8 +26,6 @@ pub struct PendingAuth {
 pub struct AppState {
     pub engine: Arc<Engine>,
     pub pending_auth: Mutex<Option<PendingAuth>>,
-    /// Drives the bundled `gilb-analyzer run` daemon: active while capture runs.
-    pub analyzer: AnalyzerSupervisor,
     /// The active meeting recording (id, display name) — mirrors the pipeline's
     /// indicator so the tray menu and manual stop know what to stop. `None` when
     /// nothing is recording.
@@ -51,7 +47,6 @@ pub fn build_app_state() -> Result<AppState> {
     Ok(AppState {
         engine: Arc::new(engine),
         pending_auth: Mutex::new(None),
-        analyzer: AnalyzerSupervisor::spawn(),
         recording: Mutex::new(None),
         arming_since: Mutex::new(None),
     })

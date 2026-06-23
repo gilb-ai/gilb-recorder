@@ -3,7 +3,6 @@ resolver = "2"
 members = [
     "apps/gilb-app-tauri/src-tauri",
     "apps/gilb-mcp",
-    "apps/gilb-analyzer",
     "crates/gilb-core",
     "crates/gilb-config",
     "crates/gilb-events",
