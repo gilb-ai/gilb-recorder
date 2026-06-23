@@ -104,6 +104,66 @@ pub struct SelectionRange {
     pub end: usize,
 }
 
+/// Modifier-key flags (SHIFT/CTRL/OPT/CMD/CAPS/FN) as a compact u8 bitfield.
+/// Copied from screenpipe-a11y/events.rs — the cross-platform type that the
+/// macOS CGEventFlags decoder (GILB-64) and the RawEvent (GILB-65) use.
+/// `from_cg_flags` is macOS-only (the flag constants are CGEventFlags).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Modifiers(pub u8);
+
+impl Modifiers {
+    pub const SHIFT: u8 = 1 << 0;
+    pub const CTRL: u8 = 1 << 1;
+    pub const OPT: u8 = 1 << 2;
+    pub const CMD: u8 = 1 << 3;
+    pub const CAPS: u8 = 1 << 4;
+    pub const FN: u8 = 1 << 5;
+
+    pub fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn has_shift(&self) -> bool {
+        self.0 & Self::SHIFT != 0
+    }
+    pub fn has_ctrl(&self) -> bool {
+        self.0 & Self::CTRL != 0
+    }
+    pub fn has_opt(&self) -> bool {
+        self.0 & Self::OPT != 0
+    }
+    pub fn has_cmd(&self) -> bool {
+        self.0 & Self::CMD != 0
+    }
+    pub fn any_modifier(&self) -> bool {
+        self.0 & (Self::CMD | Self::CTRL) != 0
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn from_cg_flags(flags: u64) -> Self {
+        let mut m = 0u8;
+        if flags & 0x20000 != 0 {
+            m |= Self::SHIFT;
+        }
+        if flags & 0x40000 != 0 {
+            m |= Self::CTRL;
+        }
+        if flags & 0x80000 != 0 {
+            m |= Self::OPT;
+        }
+        if flags & 0x100000 != 0 {
+            m |= Self::CMD;
+        }
+        if flags & 0x10000 != 0 {
+            m |= Self::CAPS;
+        }
+        if flags & 0x800000 != 0 {
+            m |= Self::FN;
+        }
+        Self(m)
+    }
+}
+
 /// A single captured action, before it has been persisted.
 ///
 /// The `id` and `session_id` are assigned by the write queue / engine.
