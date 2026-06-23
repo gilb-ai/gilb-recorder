@@ -1,6 +1,5 @@
 //! gilb Tauri shell — wires the UI to `gilb-engine`.
 
-mod analyzer_supervisor;
 mod commands;
 mod events;
 mod logging;
