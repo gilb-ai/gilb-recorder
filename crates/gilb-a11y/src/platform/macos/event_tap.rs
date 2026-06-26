@@ -154,6 +154,7 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
             RawEvent::KeyDown {
                 special: super::keyboard::special_key_from_macos_keycode(keycode),
                 text,
+                modifiers: gilb_core::Modifiers::new(),
             }
         }
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
@@ -167,6 +168,8 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
                 button,
                 x: p.x,
                 y: p.y,
+                click_count: 1,
+                modifiers: gilb_core::Modifiers::new(),
             }
         }
         CGEventType::ScrollWheel => {
