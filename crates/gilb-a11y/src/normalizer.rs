@@ -28,7 +28,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use gilb_config::RecordingSettings;
-use gilb_core::{Action, ActionKind, AppInfo, ElementContext, SessionId, WriterMessage};
+use gilb_core::{Action, ActionKind, AppInfo, ElementContext, Modifiers, SessionId, WriterMessage};
 use gilb_events::{EventBus, HealthEvent};
 
 use crate::events::{ClipboardChange, MouseButton, RawEvent};
@@ -172,11 +172,15 @@ impl Normalizer {
         }
 
         match ev {
-            RawEvent::KeyDown { special, text } => {
+            RawEvent::KeyDown {
+                special,
+                text,
+                modifiers,
+            } => {
                 if let Some(special) = special {
                     if special.is_navigation() {
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
-                        self.emit_key(special, &snap, drops).await;
+                        self.emit_key(special, modifiers, &snap, drops).await;
                         return;
                     }
                     if matches!(special, SpecialKey::Backspace | SpecialKey::Delete) {
@@ -185,7 +189,7 @@ impl Normalizer {
                         // For Phase 1 we just flush, which over-counts edits
                         // but never leaks more than typed.
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
-                        self.emit_key(special, &snap, drops).await;
+                        self.emit_key(special, modifiers, &snap, drops).await;
                         return;
                     }
                 }
@@ -199,9 +203,16 @@ impl Normalizer {
                     || snap.focused_secure;
                 buffer.push(&s, masked);
             }
-            RawEvent::MouseDown { button, x, y } => {
+            RawEvent::MouseDown {
+                button,
+                x,
+                y,
+                click_count,
+                modifiers,
+            } => {
                 self.flush_text(buffer, FlushReason::Click).await;
-                self.emit_click(button, x, y, &snap, drops).await;
+                self.emit_click(button, x, y, click_count, modifiers, &snap, drops)
+                    .await;
             }
             RawEvent::Scroll { delta_x, delta_y } => {
                 self.emit_scroll(delta_x, delta_y, &snap, drops).await;
@@ -252,11 +263,14 @@ impl Normalizer {
         self.emit_blocking(action).await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn emit_click(
         &self,
         button: MouseButton,
         x: f64,
         y: f64,
+        click_count: u32,
+        modifiers: Modifiers,
         snap: &FocusSnapshot,
         drops: &mut u64,
     ) {
@@ -293,6 +307,8 @@ impl Normalizer {
                 "button": format!("{:?}", button),
                 "x": x,
                 "y": y,
+                "click_count": click_count,
+                "modifiers": modifiers.0,
             })),
             clipboard_op: None,
             content_hash: None,
@@ -300,7 +316,13 @@ impl Normalizer {
         self.emit_lossy(action, drops);
     }
 
-    async fn emit_key(&self, special: SpecialKey, snap: &FocusSnapshot, drops: &mut u64) {
+    async fn emit_key(
+        &self,
+        special: SpecialKey,
+        modifiers: Modifiers,
+        snap: &FocusSnapshot,
+        drops: &mut u64,
+    ) {
         let action = Action {
             session_id: self.session_id,
             captured_at: Utc::now(),
@@ -315,6 +337,7 @@ impl Normalizer {
             tree_snapshot_id: None,
             extra_json: Some(serde_json::json!({
                 "key": format!("{:?}", special),
+                "modifiers": modifiers.0,
             })),
             clipboard_op: None,
             content_hash: None,
