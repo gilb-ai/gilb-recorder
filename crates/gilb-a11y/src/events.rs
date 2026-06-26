@@ -7,6 +7,7 @@
 //! normalizer serve every platform.
 
 use crate::keyboard::SpecialKey;
+use gilb_core::Modifiers;
 
 /// Minimal representation of an input event handed to the normalizer.
 ///
@@ -20,11 +21,14 @@ pub enum RawEvent {
         special: Option<SpecialKey>,
         /// Composed printable text for this key, if any.
         text: Option<String>,
+        modifiers: Modifiers,
     },
     MouseDown {
         button: MouseButton,
         x: f64,
         y: f64,
+        click_count: u32,
+        modifiers: Modifiers,
     },
     Scroll {
         delta_y: i64,
