@@ -6,9 +6,11 @@ SQLite database that you (and your LLM tools) can query later.
 
 ## Status
 
-Early. Only the capture layer (Layer 1) is implemented. macOS is the
-only working backend; the Windows backend is a stub. There is no
-hosted release, no installer, and the storage schema is not stable.
+Early. Only the capture layer (Layer 1) is implemented. macOS and
+Windows both have working backends (macOS via CGEventTap + the
+Accessibility API; Windows via UI Automation + event hooks). Signed
+installers (macOS `.dmg`, Windows NSIS) with auto-update are
+published via GitHub Releases. The storage schema is not yet stable.
 
 ## What it captures
 
@@ -29,13 +31,19 @@ while a password field had focus are masked at the SQL layer
 (`text_content` and `element_value` become `'[masked]'`,
 `password_flag = true`).
 
+Meetings are captured in parallel: when a video-conference app
+starts a call, Gilb records the meeting (start/end, app, audio/video
+paths) into a `meetings` table and links subsequent actions to it via
+`actions.meeting_id`. After the call ends, the audio is transcribed
+fully on-device with whisper.cpp into `meeting_transcripts`.
+
 ## Requirements
 
-- macOS (Apple Silicon or Intel). Linux is out of scope.
+- macOS (Apple Silicon or Intel) or Windows. Linux is out of scope.
 - Rust toolchain (stable, edition 2021).
 - Node + npm (only for the Tauri shell).
-- Accessibility and Input Monitoring permissions, granted in
-  *System Settings → Privacy & Security*. The app exposes an
+- On macOS: Accessibility and Input Monitoring permissions, granted
+  in *System Settings → Privacy & Security*. The app exposes an
   `open_privacy_pane` command that jumps you to the relevant pane.
 
 ## Build and run
@@ -64,10 +72,11 @@ Build options live in `RecordingSettings::from_env`:
 
 ## Architecture
 
-Cargo workspace with two runnable apps (`apps/gilb-app-tauri`,
-`apps/gilb-mcp`) and seven library crates under `crates/`. The
-capture pipeline is platform-gated behind a `CapturePlatform`
-trait; macOS uses CGEventTap + the Accessibility API.
+Cargo workspace with three runnable apps (`apps/gilb-app-tauri`,
+`apps/gilb-mcp`, `apps/gilb-analyzer`) and twelve library crates
+under `crates/`. The capture pipeline is platform-gated behind a
+`CapturePlatform` trait; macOS uses CGEventTap + the Accessibility
+API, Windows uses UI Automation + event hooks.
 
 See [CLAUDE.md](./CLAUDE.md) for the full crate graph, capture →
 DB data flow, and macOS-specific notes (entitlements, signing,
