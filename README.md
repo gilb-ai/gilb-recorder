@@ -70,6 +70,39 @@ Build options live in `RecordingSettings::from_env`:
 | `CAPTURE_TREE_SNAPSHOTS` | `true`  | Periodic full AX tree dumps             |
 | `RUST_LOG`               | varies  | Standard `tracing` filter               |
 
+## Querying recorded activity from Claude Code
+
+If you installed Gilb from a release (the macOS `.dmg`), the read-only
+MCP server ships inside the app bundle — no build step needed. The
+binary lives at:
+
+```
+/Applications/Gilb.app/Contents/MacOS/gilb-mcp
+```
+
+Register it with Claude Code:
+
+```sh
+claude mcp add gilb --scope user /Applications/Gilb.app/Contents/MacOS/gilb-mcp
+```
+
+Use `--scope user` so the server is available in every project, since
+Gilb records activity regardless of which repo you're working in. Drop
+the flag to register it for the current project only. Confirm it
+registered and connected:
+
+```sh
+claude mcp list
+```
+
+Inside a Claude Code session the `gilb_*` tools are now available (see
+[`apps/gilb-mcp/help.md`](./apps/gilb-mcp/help.md) for the full
+catalog). The server reads `~/.gilb/db.sqlite` over stdio; `Gilb.app`
+itself does not need to be running. If you built Gilb from source, point
+the same command at the built binary instead (`cargo run -p gilb-mcp`,
+or `target/release/gilb-mcp`). See [`INSTALL.md`](./INSTALL.md) for the
+end-user install and permissions guide.
+
 ## Architecture
 
 Cargo workspace with three runnable apps (`apps/gilb-app-tauri`,
