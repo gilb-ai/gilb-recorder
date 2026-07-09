@@ -12,7 +12,6 @@
 
 pub mod activity_feed;
 pub mod budget;
-pub mod click_state;
 pub mod events;
 pub mod focus;
 pub mod idle;

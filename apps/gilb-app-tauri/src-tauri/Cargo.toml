@@ -47,7 +47,7 @@ gilb-shell-tauri = { workspace = true }
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 
 [target.'cfg(unix)'.dependencies]
-# SIGTERM the analyzer daemon for a graceful stop (see analyzer_supervisor).
+# `libc::_exit` on quit to skip the atexit / static-destructor phase (see lib.rs).
 libc = "0.2"
 
 # Desktop-only plugins. The updater builds on desktop OSes; single-instance

@@ -99,11 +99,20 @@ impl Engine {
         // If the device is onboarded (has gilb-web credentials), start a
         // background shipper that drains the local buffer to /api/v1/ingest.
         // No credentials → no shipper; capture still works, events buffer.
+        //
+        // Credentials are read once, here. A device that onboards *after* the
+        // Engine is open won't ship until the next app start — acceptable while
+        // onboarding is a first-run step; revisit if login moves in-session.
         let shipper_shutdown = match load_credentials().ok().flatten() {
             Some(creds) => {
                 let dest: Arc<dyn gilb_shipper::Destination> =
                     Arc::new(HttpDestination::new(creds.gilb_web_url, creds.token));
                 let (tx, rx) = oneshot::channel();
+                // The JoinHandle is intentionally dropped: the loop is detached
+                // and stopped via `tx` (the oneshot in `shipper_shutdown`) on
+                // Engine drop. A batch in flight at shutdown is abandoned, not
+                // awaited — the server dedups by event_id, so it re-ships next
+                // launch.
                 spawn_loop(
                     db.clone(),
                     dest,

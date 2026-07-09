@@ -46,12 +46,36 @@ pub struct EventRow {
     pub extra: Option<serde_json::Value>,
 }
 
+/// Why a [`Destination::send`] failed — governs whether [`ship`] retries.
+#[derive(Debug)]
+pub enum SendError {
+    /// Network error, timeout, 5xx, or a rate-limit (408/429) — retrying the
+    /// same body may succeed, so [`ship`] backs off and retries.
+    Transient(anyhow::Error),
+    /// The server rejected the batch as-is (a non-rate-limit 4xx, e.g. 400
+    /// malformed / 413 too large). Re-sending the identical body will fail the
+    /// same way, so [`ship`] gives up immediately instead of spinning retries.
+    Permanent(anyhow::Error),
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SendError::Transient(e) => write!(f, "transient: {e}"),
+            SendError::Permanent(e) => write!(f, "permanent: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
 /// Where a batch goes. [`HttpDestination`] is prod; tests use a mock.
 #[async_trait]
 pub trait Destination: Send + Sync {
     /// Send one JSONL body (newline-joined). `Ok` only on a 2xx ack so the
-    /// caller advances its cursor.
-    async fn send(&self, jsonl_body: &str) -> Result<()>;
+    /// caller advances its cursor. On failure, classify it so [`ship`] knows
+    /// whether a retry can help (see [`SendError`]).
+    async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError>;
 }
 
 /// POSTs JSONL batches to gilb-web `/api/v1/ingest` with a Bearer ApiToken.
@@ -79,7 +103,7 @@ impl HttpDestination {
 
 #[async_trait]
 impl Destination for HttpDestination {
-    async fn send(&self, jsonl_body: &str) -> Result<()> {
+    async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError> {
         let resp = self
             .client
             .post(&self.ingest_url)
@@ -88,12 +112,25 @@ impl Destination for HttpDestination {
             .body(jsonl_body.to_string())
             .send()
             .await
-            .map_err(|e| anyhow::anyhow!("ingest request failed: {e}"))?;
+            // A transport-level failure (DNS, connect, TLS, timeout) is always
+            // worth retrying.
+            .map_err(|e| SendError::Transient(anyhow::anyhow!("ingest request failed: {e}")))?;
         let status = resp.status();
         if status.is_success() {
-            Ok(())
+            return Ok(());
+        }
+        let err = anyhow::anyhow!("ingest returned {status}");
+        // 5xx = server-side/transient. 408/429 are 4xx but explicitly
+        // retry-after-backoff. Every other 4xx means the batch itself is bad
+        // (400 malformed, 413 too large, 401/403 auth) — the same body won't
+        // fare better, so classify it permanent and stop retrying.
+        if status.is_server_error()
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            Err(SendError::Transient(err))
         } else {
-            Err(anyhow::anyhow!("ingest returned {status}"))
+            Err(SendError::Permanent(err))
         }
     }
 }
@@ -137,7 +174,14 @@ pub async fn ship(dest: &dyn Destination, rows: &[EventRow], cfg: &ShipConfig) -
     loop {
         match dest.send(&body).await {
             Ok(()) => return Ok(()),
-            Err(e) => {
+            // A permanent rejection won't change on retry — surface it now so
+            // the caller leaves the cursor put and an operator can act, instead
+            // of burning the full backoff schedule every pass on a poison batch.
+            Err(SendError::Permanent(e)) => {
+                warn!(error = %e, "ship rejected permanently; not retrying");
+                return Err(e).context("ship rejected permanently");
+            }
+            Err(SendError::Transient(e)) => {
                 attempt += 1;
                 if attempt > cfg.max_retries {
                     return Err(e)
@@ -193,6 +237,10 @@ pub async fn fetch_unshipped(db: &Db, limit: i64) -> Result<Vec<(i64, EventRow)>
                 password_flag: password_flag != 0,
                 clipboard_op: r.try_get("clipboard_op")?,
                 content_hash: r.try_get("content_hash")?,
+                // Best-effort: malformed stored `extra_json` is dropped to
+                // `None` rather than failing the whole batch. Written by us, so
+                // this should never fire; a bad row still ships (minus `extra`)
+                // instead of wedging the cursor.
                 extra: extra_json
                     .as_deref()
                     .and_then(|s| serde_json::from_str(s).ok()),
@@ -203,14 +251,25 @@ pub async fn fetch_unshipped(db: &Db, limit: i64) -> Result<Vec<(i64, EventRow)>
 }
 
 /// Mark the given action ids as shipped at `ts` (RFC3339), in one transaction.
+/// One `UPDATE ... WHERE id IN (...)` per chunk rather than one statement per
+/// id, chunked well under SQLite's bound-parameter cap so even a full
+/// `SHIP_BATCH` collapses to a handful of statements.
 pub async fn mark_shipped(db: &Db, ids: &[i64], ts: &str) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
     let mut tx = db.begin().await.context("begin mark_shipped tx")?;
-    for id in ids {
-        sqlx::query("UPDATE actions SET shipped_at = ? WHERE id = ?")
-            .bind(ts)
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
+    for chunk in ids.chunks(512) {
+        let placeholders = std::iter::repeat("?")
+            .take(chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("UPDATE actions SET shipped_at = ? WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql).bind(ts);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut *tx).await?;
     }
     tx.commit().await.context("commit mark_shipped")?;
     Ok(())
@@ -315,6 +374,9 @@ mod tests {
     /// every body it received (so tests can assert call count + JSONL shape).
     struct MockDestination {
         fail_first_n: AtomicU32,
+        /// When set, the first `fail_first_n` failures are Permanent (not
+        /// retryable) instead of Transient.
+        permanent: bool,
         calls: Mutex<Vec<String>>,
     }
 
@@ -322,12 +384,21 @@ mod tests {
         fn fail_first(n: u32) -> Self {
             Self {
                 fail_first_n: AtomicU32::new(n),
+                permanent: false,
                 calls: Mutex::new(Vec::new()),
             }
         }
         fn always_ok() -> Self {
             Self {
                 fail_first_n: AtomicU32::new(0),
+                permanent: false,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn fail_permanent() -> Self {
+            Self {
+                fail_first_n: AtomicU32::new(1),
+                permanent: true,
                 calls: Mutex::new(Vec::new()),
             }
         }
@@ -338,13 +409,18 @@ mod tests {
 
     #[async_trait]
     impl Destination for MockDestination {
-        async fn send(&self, body: &str) -> Result<()> {
+        async fn send(&self, body: &str) -> std::result::Result<(), SendError> {
             self.calls.lock().unwrap().push(body.to_string());
             // Decrement-and-test: fail while the counter is positive.
             let prev = self.fail_first_n.load(Ordering::SeqCst);
             if prev > 0 {
                 self.fail_first_n.store(prev - 1, Ordering::SeqCst);
-                Err(anyhow::anyhow!("mock failure"))
+                let e = anyhow::anyhow!("mock failure");
+                if self.permanent {
+                    Err(SendError::Permanent(e))
+                } else {
+                    Err(SendError::Transient(e))
+                }
             } else {
                 Ok(())
             }
@@ -410,6 +486,19 @@ mod tests {
         assert!(res.is_err(), "exhausted retries must error");
         // initial attempt + 1 retry = 2 sends.
         assert_eq!(mock.call_count(), 2);
+    }
+
+    #[tokio::test]
+    async fn ship_permanent_error_does_not_retry() {
+        let mock = MockDestination::fail_permanent();
+        let cfg = ShipConfig {
+            max_retries: 5,
+            base_backoff: Duration::ZERO,
+        };
+        let res = ship(&mock, &[sample_row(1)], &cfg).await;
+        assert!(res.is_err(), "permanent rejection must error");
+        // A permanent error is not retried despite max_retries=5: exactly 1 send.
+        assert_eq!(mock.call_count(), 1);
     }
 
     // ----- DB-backed integration tests -------------------------------------
