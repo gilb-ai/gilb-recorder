@@ -140,6 +140,11 @@ impl Destination for HttpDestination {
 pub struct ShipConfig {
     pub max_retries: u32,
     pub base_backoff: Duration,
+    /// Max serialized JSONL body per send. A fetched batch whose body would
+    /// exceed this is split into sub-batches (see [`run_once`]) so it can never
+    /// trigger a permanent 413 that wedges the cursor (GILB-114). Default 3 MiB,
+    /// comfortably under the web ingest 4 MB cap.
+    pub max_body_bytes: usize,
 }
 
 impl Default for ShipConfig {
@@ -147,6 +152,7 @@ impl Default for ShipConfig {
         Self {
             max_retries: 3,
             base_backoff: Duration::from_secs(2),
+            max_body_bytes: 3 * 1024 * 1024,
         }
     }
 }
@@ -217,6 +223,18 @@ pub async fn fetch_unshipped(db: &Db, limit: i64) -> Result<Vec<(i64, EventRow)>
         let id: i64 = r.try_get("id")?;
         let extra_json: Option<String> = r.try_get("extra_json")?;
         let password_flag: i64 = r.try_get("password_flag")?;
+        let masked = password_flag != 0;
+        // Password-field rows are stored raw; the local MCP read masks them via
+        // a SQL CASE (`apps/gilb-mcp/src/queries.rs`). The shipper is a SECOND
+        // reader and must apply the SAME masking so secure-field values never
+        // leave the device over the wire (GILB-111).
+        let mask = |v: Option<String>| {
+            if masked {
+                Some("[masked]".to_string())
+            } else {
+                v
+            }
+        };
         out.push((
             id,
             EventRow {
@@ -231,10 +249,10 @@ pub async fn fetch_unshipped(db: &Db, limit: i64) -> Result<Vec<(i64, EventRow)>
                 browser_url: r.try_get("browser_url")?,
                 element_role: r.try_get("element_role")?,
                 element_name: r.try_get("element_name")?,
-                element_value: r.try_get("element_value")?,
+                element_value: mask(r.try_get("element_value")?),
                 element_identifier: r.try_get("element_id")?,
-                text_content: r.try_get("text_content")?,
-                password_flag: password_flag != 0,
+                text_content: mask(r.try_get("text_content")?),
+                password_flag: masked,
                 clipboard_op: r.try_get("clipboard_op")?,
                 content_hash: r.try_get("content_hash")?,
                 // Best-effort: malformed stored `extra_json` is dropped to
@@ -260,8 +278,7 @@ pub async fn mark_shipped(db: &Db, ids: &[i64], ts: &str) -> Result<()> {
     }
     let mut tx = db.begin().await.context("begin mark_shipped tx")?;
     for chunk in ids.chunks(512) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
+        let placeholders = std::iter::repeat_n("?", chunk.len())
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!("UPDATE actions SET shipped_at = ? WHERE id IN ({placeholders})");
@@ -279,6 +296,11 @@ pub async fn mark_shipped(db: &Db, ids: &[i64], ts: &str) -> Result<()> {
 /// Returns the number of actions shipped. On ship failure (after retries) the
 /// cursor is NOT advanced, so the same batch is retried next pass — safe
 /// because the server dedups by `event_id`.
+///
+/// The fetched batch is split into sub-batches whose serialized JSONL body
+/// stays under `cfg.max_body_bytes`, so a single send can never exceed the web
+/// ingest cap and 413 (GILB-114). Each sub-batch is shipped and marked before
+/// the next, so a mid-batch failure still advances the acked prefix.
 pub async fn run_once(
     db: &Db,
     dest: &dyn Destination,
@@ -289,11 +311,48 @@ pub async fn run_once(
     if rows.is_empty() {
         return Ok(0);
     }
-    let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
-    let events: Vec<EventRow> = rows.into_iter().map(|(_, e)| e).collect();
-    ship(dest, &events, cfg).await?;
+
+    let mut shipped = 0usize;
+    let mut ids: Vec<i64> = Vec::new();
+    let mut events: Vec<EventRow> = Vec::new();
+    let mut bytes = 0usize;
+
+    for (id, ev) in rows {
+        // +1 for the newline `to_jsonl` appends after each line.
+        let line_bytes = serde_json::to_string(&ev)
+            .context("serialize event row")?
+            .len()
+            + 1;
+        // Flush the accumulated sub-batch before it would overflow the budget.
+        // The `!events.is_empty()` guard guarantees at least one row per send,
+        // so an oversized single row still makes progress (rather than looping).
+        if !events.is_empty() && bytes + line_bytes > cfg.max_body_bytes {
+            shipped += ship_and_mark(db, dest, &ids, &events, cfg).await?;
+            ids.clear();
+            events.clear();
+            bytes = 0;
+        }
+        bytes += line_bytes;
+        ids.push(id);
+        events.push(ev);
+    }
+    if !events.is_empty() {
+        shipped += ship_and_mark(db, dest, &ids, &events, cfg).await?;
+    }
+    Ok(shipped)
+}
+
+/// Ship one sub-batch and, on ack, mark its ids shipped. Returns the count.
+async fn ship_and_mark(
+    db: &Db,
+    dest: &dyn Destination,
+    ids: &[i64],
+    events: &[EventRow],
+    cfg: &ShipConfig,
+) -> Result<usize> {
+    ship(dest, events, cfg).await?;
     let ts = chrono::Utc::now().to_rfc3339();
-    mark_shipped(db, &ids, &ts).await?;
+    mark_shipped(db, ids, &ts).await?;
     Ok(ids.len())
 }
 
@@ -302,17 +361,42 @@ pub async fn run_once(
 /// they're pruned to bound SQLite growth (GILB-98).
 pub const RETAIN_SHIPPED: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
+/// How many rows a single `prune_shipped` DELETE removes before yielding the
+/// SQLite write lock. Small enough that a large backlog prune can't stall the
+/// capture writer (GILB-116).
+const PRUNE_CHUNK: i64 = 500;
+
 /// Delete shipped (`shipped_at IS NOT NULL`) actions older than `retain`
 /// (now − retain). Returns rows deleted. Unshipped rows are never touched;
 /// shipped rows are already server-side before `shipped_at` is set.
+///
+/// Deletes in bounded chunks so a large first prune (after a long backlog)
+/// never holds the write lock long enough to stall the capture writer. Uses the
+/// portable `id IN (SELECT … LIMIT …)` form because `DELETE … LIMIT` needs a
+/// non-default SQLite compile flag.
 pub async fn prune_shipped(db: &Db, retain: Duration) -> Result<u64> {
-    let cutoff = chrono::Utc::now() - chrono::Duration::seconds(retain.as_secs() as i64);
-    let res = sqlx::query("DELETE FROM actions WHERE shipped_at IS NOT NULL AND shipped_at < ?")
-        .bind(cutoff.to_rfc3339())
+    let cutoff =
+        (chrono::Utc::now() - chrono::Duration::seconds(retain.as_secs() as i64)).to_rfc3339();
+    let mut total = 0u64;
+    loop {
+        let res = sqlx::query(
+            "DELETE FROM actions WHERE id IN \
+             (SELECT id FROM actions \
+              WHERE shipped_at IS NOT NULL AND shipped_at < ? \
+              ORDER BY id LIMIT ?)",
+        )
+        .bind(&cutoff)
+        .bind(PRUNE_CHUNK)
         .execute(db)
         .await
         .context("prune_shipped delete")?;
-    Ok(res.rows_affected())
+        let n = res.rows_affected();
+        total += n;
+        if n < PRUNE_CHUNK as u64 {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 /// Run a long-lived shipper: tick every `interval`, call [`run_once`], log the
@@ -467,6 +551,7 @@ mod tests {
         let cfg = ShipConfig {
             max_retries: 3,
             base_backoff: Duration::ZERO,
+            ..Default::default()
         };
         ship(&mock, &[sample_row(1), sample_row(2)], &cfg)
             .await
@@ -481,6 +566,7 @@ mod tests {
         let cfg = ShipConfig {
             max_retries: 1,
             base_backoff: Duration::ZERO,
+            ..Default::default()
         };
         let res = ship(&mock, &[sample_row(1)], &cfg).await;
         assert!(res.is_err(), "exhausted retries must error");
@@ -494,6 +580,7 @@ mod tests {
         let cfg = ShipConfig {
             max_retries: 5,
             base_backoff: Duration::ZERO,
+            ..Default::default()
         };
         let res = ship(&mock, &[sample_row(1)], &cfg).await;
         assert!(res.is_err(), "permanent rejection must error");
@@ -536,6 +623,71 @@ mod tests {
         gilb_db::actions::insert_action(db, &action).await.unwrap();
     }
 
+    /// Insert a click whose focused element carries a value + typed text, with
+    /// `password_flag` set — i.e. a secure-field interaction (GILB-111).
+    async fn insert_secure_action(db: &Db, session_id: i64) {
+        use gilb_core::{Action, ActionKind, AppInfo, ElementContext};
+        let action = Action {
+            session_id,
+            captured_at: chrono::Utc::now(),
+            kind: ActionKind::Click,
+            app: AppInfo {
+                name: Some("SecureApp".into()),
+                ..Default::default()
+            },
+            element: ElementContext {
+                value: Some("s3cr3t-value".into()),
+                ..Default::default()
+            },
+            text_content: Some("s3cr3t-text".into()),
+            password_flag: true,
+            tree_snapshot_id: None,
+            extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
+        };
+        gilb_db::actions::insert_action(db, &action).await.unwrap();
+    }
+
+    /// Insert a click with an explicit `text_content` (to control row size).
+    async fn insert_click_with_text(db: &Db, session_id: i64, text: &str) {
+        use gilb_core::{Action, ActionKind, AppInfo};
+        let action = Action {
+            session_id,
+            captured_at: chrono::Utc::now(),
+            kind: ActionKind::Click,
+            app: AppInfo {
+                name: Some("App".into()),
+                ..Default::default()
+            },
+            element: Default::default(),
+            text_content: Some(text.to_string()),
+            password_flag: false,
+            tree_snapshot_id: None,
+            extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
+        };
+        gilb_db::actions::insert_action(db, &action).await.unwrap();
+    }
+
+    /// Bulk-insert `n` already-shipped rows dated in the distant past, in one
+    /// transaction (fast enough to cross PRUNE_CHUNK in a test).
+    async fn insert_old_shipped(db: &Db, session_id: i64, n: usize) {
+        let mut tx = db.begin().await.unwrap();
+        for _ in 0..n {
+            sqlx::query(
+                "INSERT INTO actions (session_id, captured_at, kind, password_flag, shipped_at) \
+                 VALUES (?, '2020-01-01T00:00:00Z', 'click', 0, '2020-01-01T00:00:00Z')",
+            )
+            .bind(session_id)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        }
+        tx.commit().await.unwrap();
+    }
+
     #[tokio::test]
     async fn run_once_ships_and_marks_cursor() {
         let path = temp_db_path();
@@ -569,6 +721,7 @@ mod tests {
         let cfg = ShipConfig {
             max_retries: 0,
             base_backoff: Duration::ZERO,
+            ..Default::default()
         };
         let res = run_once(&db, &mock, 10, &cfg).await;
         assert!(res.is_err(), "ship failure must propagate");
@@ -599,6 +752,7 @@ mod tests {
             ShipConfig {
                 max_retries: 0,
                 base_backoff: Duration::ZERO,
+                ..Default::default()
             },
             rx,
         );
@@ -660,6 +814,96 @@ mod tests {
             1,
             "unshipped row is untouched"
         );
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn password_flag_row_is_masked_on_egress() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+        insert_secure_action(&db, sid).await;
+
+        let rows = fetch_unshipped(&db, 10).await.unwrap();
+        assert_eq!(rows.len(), 1);
+        let ev = &rows[0].1;
+        // The raw element value + typed text must NOT leave the device; the
+        // shipper mirrors the MCP read-time masking (GILB-111).
+        assert!(ev.password_flag);
+        assert_eq!(ev.element_value.as_deref(), Some("[masked]"));
+        assert_eq!(ev.text_content.as_deref(), Some("[masked]"));
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn run_once_splits_oversized_batch_by_bytes() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+        // Four rows whose per-line size (~1 KB text) each exceeds the tiny
+        // budget → one row per send, and every row still ships.
+        let big = "x".repeat(1024);
+        for _ in 0..4 {
+            insert_click_with_text(&db, sid, &big).await;
+        }
+
+        let mock = MockDestination::always_ok();
+        let cfg = ShipConfig {
+            max_body_bytes: 500,
+            ..Default::default()
+        };
+        let n = run_once(&db, &mock, 10, &cfg).await.expect("run_once");
+        assert_eq!(n, 4, "all rows shipped");
+        assert!(
+            mock.call_count() >= 2,
+            "oversized batch split into multiple sends, got {}",
+            mock.call_count()
+        );
+        assert!(fetch_unshipped(&db, 10).await.unwrap().is_empty());
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn prune_shipped_chunks_large_backlog() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+
+        // > one PRUNE_CHUNK of ancient shipped rows forces the delete loop to
+        // iterate more than once.
+        let old = PRUNE_CHUNK as usize + 3;
+        insert_old_shipped(&db, sid, old).await;
+        // One recent-shipped row (must survive) + one unshipped row (untouched).
+        insert_click(&db, sid, 0).await;
+        let recent_id: (i64,) = sqlx::query_as("SELECT MAX(id) FROM actions")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE actions SET shipped_at = ? WHERE id = ?")
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(recent_id.0)
+            .execute(&db)
+            .await
+            .unwrap();
+        insert_click(&db, sid, 1).await; // unshipped
+
+        let n = prune_shipped(&db, Duration::from_secs(7 * 24 * 60 * 60))
+            .await
+            .unwrap();
+        assert_eq!(n, old as u64, "all ancient rows pruned across chunks");
+
+        let remaining: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM actions")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+        assert_eq!(remaining.0, 2, "recent-shipped + unshipped remain");
+        assert_eq!(fetch_unshipped(&db, 10_000).await.unwrap().len(), 1);
 
         db.close().await;
         cleanup(&path);

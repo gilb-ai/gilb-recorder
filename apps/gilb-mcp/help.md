@@ -13,11 +13,18 @@ The main table is `actions`. One row per atomic user action:
 - `captured_at` — ISO 8601 UTC timestamp (e.g. `2026-05-22T22:04:35.802740Z`)
 - `kind` — one of:
   - `click` — mouse button down. Has `element_role`, `element_name`,
-    `element_value` if the AX worker enriched the click with element context.
+    `element_value`, `element_identifier` when the AX worker enriched the
+    click with element context. `extra.button` / `extra.x` / `extra.y` are
+    the button + screen point; `extra.click_count` is the burst count
+    (1=single, 2=double, 3=triple, …); `extra.modifiers` is a held-modifier
+    bitfield: SHIFT=1, CTRL=2, OPT=4, CMD=8, CAPS=16, FN=32 (OR-combined;
+    0 = none).
   - `text` — text the user typed, already after a 300 ms debounce (one row =
     one "burst" of typing). `text_content` is the typed string.
   - `key` — non-printable navigation/editing key (Enter, Tab, Backspace,
-    arrows, etc.). `extra.key` names which one.
+    arrows, etc.). `extra.key` names which one; `extra.modifiers` is the same
+    held-modifier bitfield as `click` (SHIFT=1, CTRL=2, OPT=4, CMD=8, CAPS=16,
+    FN=32).
   - `scroll` — wheel event. `extra.delta_x`, `extra.delta_y`.
   - `clipboard` — `text_content` is the clipboard string (PII-redacted).
     `clipboard_op` is the op ("copy"; cut/paste detection deferred) and
