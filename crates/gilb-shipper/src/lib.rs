@@ -4,8 +4,7 @@
 //! Pipeline: cursor over unshipped actions (`shipped_at IS NULL`) → JSONL
 //! batch → `POST {GILB_WEB_URL}/api/v1/ingest` (Bearer ApiToken) → on ack,
 //! mark `shipped_at`. Idempotent: the server dedups by `event_id`, so retrying
-//! the same batch after a partial/ambiguous failure is safe. Reference:
-//! `screenpipe-sync` (minus encrypt). See GILB_CAPTURE_PLAN.md §2F.
+//! the same batch after a partial/ambiguous failure is safe.
 //!
 //! Ships UNCOMPRESSED JSONL (zstd is a later optimization — the web ingest
 //! endpoint accepts plain JSONL first).

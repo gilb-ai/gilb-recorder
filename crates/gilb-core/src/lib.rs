@@ -121,9 +121,9 @@ pub struct SelectionRange {
 }
 
 /// Modifier-key flags (SHIFT/CTRL/OPT/CMD/CAPS/FN) as a compact u8 bitfield.
-/// Copied from screenpipe-a11y/events.rs — the cross-platform type that the
-/// macOS CGEventFlags decoder (GILB-64) and the RawEvent (GILB-65) use.
-/// `from_cg_flags` is macOS-only (the flag constants are CGEventFlags).
+/// Cross-platform type used by the macOS CGEventFlags decoder (GILB-64) and
+/// the RawEvent (GILB-65). `from_cg_flags` is macOS-only (the flag constants
+/// are CGEventFlags).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Modifiers(pub u8);
 
