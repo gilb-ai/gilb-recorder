@@ -36,6 +36,10 @@ pub struct RecordingSettings {
     pub capture_clipboard: bool,
     /// Persist tree snapshots. Default: enabled.
     pub capture_tree_snapshots: bool,
+    /// Sample screenshots on focus boundaries (GILB-80). Opt-in — **default
+    /// disabled**: visual capture is the heaviest PII modality and must be
+    /// consciously enabled.
+    pub capture_screenshots: bool,
     /// Seconds the pre-record countdown popup fills before auto-arming.
     /// Default: 5.
     pub countdown_seconds: u32,
@@ -51,6 +55,7 @@ impl Default for RecordingSettings {
             capture_mouse_move: false,
             capture_clipboard: true,
             capture_tree_snapshots: true,
+            capture_screenshots: false,
             countdown_seconds: DEFAULT_COUNTDOWN_SECONDS,
         }
     }
@@ -71,6 +76,9 @@ impl RecordingSettings {
         }
         if let Some(v) = env_bool("CAPTURE_TREE_SNAPSHOTS") {
             s.capture_tree_snapshots = v;
+        }
+        if let Some(v) = env_bool("CAPTURE_SCREENSHOTS") {
+            s.capture_screenshots = v;
         }
         if let Some(v) = std::env::var("GILB_COUNTDOWN_SECONDS")
             .ok()

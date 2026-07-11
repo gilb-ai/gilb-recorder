@@ -56,6 +56,10 @@ pub struct Normalizer {
     /// We `try_send` on focus change (lossy: a backed-up worker drops
     /// the hop rather than parking the normalizer task).
     pub snapshot_tx: Option<mpsc::Sender<AppInfo>>,
+    /// `Some` when `settings.capture_screenshots` is enabled — the platform
+    /// wires this to the screenshot worker. Fed by the [`ScreenshotCadence`]
+    /// on boundaries; lossy `try_send` so a busy grabber never parks us.
+    pub screenshot_tx: Option<mpsc::Sender<crate::screenshot::ScreenshotRequest>>,
 }
 
 impl Normalizer {
@@ -83,6 +87,12 @@ impl Normalizer {
         // signals come from platform/macos/session.rs (later).
         let mut idle = crate::idle::IdleTracker::new(Instant::now());
 
+        // Screenshot sampling (GILB-80): boundary-triggered cadence + a local
+        // idle flag (screenshots are suppressed while idle). Inert unless
+        // `screenshot_tx` is wired (capture_screenshots enabled).
+        let mut shot_cadence = crate::screenshot::ScreenshotCadence::default();
+        let mut screen_idle = false;
+
         loop {
             tokio::select! {
                 _ = &mut shutdown => {
@@ -108,6 +118,9 @@ impl Normalizer {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
                         self.emit_focus_change(app.clone()).await;
+                        // A new context appeared — schedule a screenshot after
+                        // it settles (the cadence machine gates the rest).
+                        shot_cadence.on_boundary(Instant::now());
                         if let Some(tx) = &self.snapshot_tx {
                             // Lossy: if the snapshot worker is still busy on
                             // the previous focus, we'd rather skip this hop
@@ -125,7 +138,28 @@ impl Normalizer {
                 }
                 _ = text_tick.tick() => {
                     for sig in idle.tick(Instant::now()) {
+                        if sig == crate::idle::SystemSignal::IdleStart {
+                            screen_idle = true;
+                        }
                         self.emit_system(sig).await;
+                    }
+                    // Screenshot cadence poll: capture iff the machine says so
+                    // and the current context is neither idle nor excluded.
+                    if let Some(tx) = &self.screenshot_tx {
+                        let snap = self.focus.current();
+                        let excluded = snap
+                            .app
+                            .bundle_id
+                            .as_deref()
+                            .map(is_excluded_app)
+                            .unwrap_or(false)
+                            || snap.focused_secure
+                            || snap.focused_role.as_deref().map(is_secure_role).unwrap_or(false);
+                        if shot_cadence.poll(Instant::now(), screen_idle, excluded) {
+                            let _ = tx.try_send(crate::screenshot::ScreenshotRequest {
+                                app: snap.app.clone(),
+                            });
+                        }
                     }
                     if buffer.should_timeout(Instant::now()) {
                         self.flush_text(&mut buffer, FlushReason::Timeout).await;
@@ -142,6 +176,7 @@ impl Normalizer {
                     }
                 }
                 Some(ev) = raw_rx.recv() => {
+                    screen_idle = false;
                     self.handle_raw(ev, &mut buffer, &mut drops_since_report).await;
                     if let Some(sig) = idle.on_input(Instant::now()) {
                         self.emit_system(sig).await;
@@ -149,6 +184,7 @@ impl Normalizer {
                 }
                 Some(change) = clip_rx.recv() => {
                     if self.settings.capture_clipboard {
+                        screen_idle = false;
                         self.handle_clipboard(change, &mut drops_since_report).await;
                         if let Some(sig) = idle.on_input(Instant::now()) {
                             self.emit_system(sig).await;

@@ -19,6 +19,7 @@ pub mod keyboard;
 pub mod normalizer;
 pub mod password_masking;
 pub mod platform;
+pub mod screenshot;
 pub mod text_buffer;
 pub mod tree;
 

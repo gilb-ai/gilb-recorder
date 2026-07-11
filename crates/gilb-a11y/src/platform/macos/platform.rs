@@ -97,6 +97,19 @@ impl CapturePlatform for MacosPlatform {
             (None, None)
         };
 
+        // Screenshot worker (GILB-80) — same pattern as the snapshot worker;
+        // grab + JPEG encode run on the blocking pool. Opt-in only.
+        let (screenshot_tx, screenshot_handle) = if ctx.settings.capture_screenshots {
+            let (tx, h) = super::screencap::spawn_worker(
+                ctx.session_id,
+                ctx.writer_tx.clone(),
+                ctx.event_bus.clone(),
+            );
+            (Some(tx), Some(h))
+        } else {
+            (None, None)
+        };
+
         let normalizer = Normalizer {
             session_id: ctx.session_id,
             writer_tx: ctx.writer_tx,
@@ -106,6 +119,7 @@ impl CapturePlatform for MacosPlatform {
             focus_provider: Box::new(MacFocus),
             element_resolver: Box::new(ax_worker),
             snapshot_tx,
+            screenshot_tx,
         };
 
         // Shutdown choreography:
@@ -125,6 +139,11 @@ impl CapturePlatform for MacosPlatform {
             if let Some(handle) = snapshot_handle {
                 if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
                     warn!(?err, "snapshot worker did not stop in time");
+                }
+            }
+            if let Some(handle) = screenshot_handle {
+                if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
+                    warn!(?err, "screenshot worker did not stop in time");
                 }
             }
             drop(ax_handle);

@@ -23,9 +23,9 @@ use tracing::{info, warn};
 use gilb_a11y::{current_platform, CapturePlatform, Permissions, RunningCapture, StartContext};
 use gilb_config::{load_credentials, RecordingSettings};
 use gilb_core::{SessionId, WriterMessage};
-use gilb_db::{actions, open_db, sessions, tree_snapshots, write_batch, Db};
+use gilb_db::{actions, open_db, screenshots, sessions, tree_snapshots, write_batch, Db};
 use gilb_events::EventBus;
-use gilb_shipper::{spawn_loop, HttpDestination, ShipConfig};
+use gilb_shipper::{spawn_loop, HttpDestination, HttpScreenshotDestination, ShipConfig};
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
 
@@ -105,8 +105,13 @@ impl Engine {
         // onboarding is a first-run step; revisit if login moves in-session.
         let shipper_shutdown = match load_credentials().ok().flatten() {
             Some(creds) => {
-                let dest: Arc<dyn gilb_shipper::Destination> =
-                    Arc::new(HttpDestination::new(creds.gilb_web_url, creds.token));
+                let dest: Arc<dyn gilb_shipper::Destination> = Arc::new(HttpDestination::new(
+                    creds.gilb_web_url.clone(),
+                    creds.token.clone(),
+                ));
+                let shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination> = Arc::new(
+                    HttpScreenshotDestination::new(creds.gilb_web_url, creds.token),
+                );
                 let (tx, rx) = oneshot::channel();
                 // The JoinHandle is intentionally dropped: the loop is detached
                 // and stopped via `tx` (the oneshot in `shipper_shutdown`) on
@@ -116,6 +121,7 @@ impl Engine {
                 spawn_loop(
                     db.clone(),
                     dest,
+                    shot_dest,
                     SHIP_INTERVAL,
                     SHIP_BATCH,
                     ShipConfig::default(),
@@ -295,6 +301,11 @@ async fn write_one(db: &Db, msg: WriterMessage) {
         WriterMessage::TreeSnapshot(snap) => {
             if let Err(err) = tree_snapshots::insert_tree_snapshot(db, &snap).await {
                 warn!(?err, "failed to insert tree_snapshot");
+            }
+        }
+        WriterMessage::Screenshot(shot) => {
+            if let Err(err) = screenshots::insert_screenshot(db, &shot).await {
+                warn!(?err, "failed to insert screenshot");
             }
         }
     }

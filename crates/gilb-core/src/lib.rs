@@ -66,6 +66,22 @@ pub struct TreeSnapshot {
     pub root_json: String,
 }
 
+/// Metadata for a captured screenshot (GILB-80). The encoded image bytes live
+/// on disk at `image_path`; only this small row crosses the writer channel and
+/// later ships (GILB-93). Sampled on focus boundaries, never continuous.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Screenshot {
+    pub session_id: SessionId,
+    pub captured_at: DateTime<Utc>,
+    pub app: AppInfo,
+    /// Stable id linking this shot to nearby actions server-side.
+    pub screenshot_id: String,
+    /// Absolute path to the encoded image file on the local disk.
+    pub image_path: String,
+    pub width: i64,
+    pub height: i64,
+}
+
 /// Foreground app context attached to every event.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AppInfo {
@@ -202,6 +218,7 @@ pub struct Action {
 pub enum WriterMessage {
     Action(Action),
     TreeSnapshot(TreeSnapshot),
+    Screenshot(Screenshot),
 }
 
 impl From<Action> for WriterMessage {
@@ -213,6 +230,12 @@ impl From<Action> for WriterMessage {
 impl From<TreeSnapshot> for WriterMessage {
     fn from(s: TreeSnapshot) -> Self {
         WriterMessage::TreeSnapshot(s)
+    }
+}
+
+impl From<Screenshot> for WriterMessage {
+    fn from(s: Screenshot) -> Self {
+        WriterMessage::Screenshot(s)
     }
 }
 

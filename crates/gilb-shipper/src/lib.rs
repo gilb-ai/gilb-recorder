@@ -406,6 +406,7 @@ pub async fn prune_shipped(db: &Db, retain: Duration) -> Result<u64> {
 pub fn spawn_loop(
     db: Db,
     dest: Arc<dyn Destination>,
+    shot_dest: Arc<dyn ScreenshotDestination>,
     interval: Duration,
     batch: i64,
     cfg: ShipConfig,
@@ -432,6 +433,13 @@ pub fn spawn_loop(
                         Ok(n) => info!(n, "shipper shipped events"),
                         Err(e) => warn!(error = %e, "shipper run_once failed; will retry next tick"),
                     }
+                    // Screenshots ship on the same tick via their own cursor,
+                    // smaller batch (images are heavy). Independent of events.
+                    match run_once_screenshots(&db, shot_dest.as_ref(), SCREENSHOT_SHIP_BATCH, &cfg).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(n, "shipper shipped screenshots"),
+                        Err(e) => warn!(error = %e, "shipper screenshot pass failed; will retry next tick"),
+                    }
                 }
                 _ = prune_tick.tick() => {
                     match prune_shipped(&db, RETAIN_SHIPPED).await {
@@ -439,10 +447,290 @@ pub fn spawn_loop(
                         Ok(n) => info!(n, "shipper pruned old shipped rows"),
                         Err(e) => warn!(error = %e, "shipper prune failed"),
                     }
+                    match prune_shipped_screenshots(&db, RETAIN_SHIPPED).await {
+                        Ok(0) => {}
+                        Ok(n) => info!(n, "shipper pruned old shipped screenshots"),
+                        Err(e) => warn!(error = %e, "shipper screenshot prune failed"),
+                    }
                 }
             }
         }
     })
+}
+
+// ===================== Screenshots (GILB-93) =====================
+
+/// Max screenshots shipped per pass — images are heavy, so keep it small
+/// (each is a separate multipart request).
+pub const SCREENSHOT_SHIP_BATCH: i64 = 50;
+
+/// One screenshot row read for shipping (metadata; image bytes are on disk).
+#[derive(Debug, Clone)]
+pub struct ScreenshotRow {
+    pub id: i64,
+    pub session_id: i64,
+    pub captured_at: String,
+    pub app_bundle_id: Option<String>,
+    pub app_name: Option<String>,
+    pub window_title: Option<String>,
+    pub screenshot_id: String,
+    pub image_path: String,
+    pub width: i64,
+    pub height: i64,
+}
+
+/// Where a screenshot goes. [`HttpScreenshotDestination`] is prod; tests mock.
+#[async_trait]
+pub trait ScreenshotDestination: Send + Sync {
+    /// Send one screenshot: a JSON `meta` part + the raw image bytes. Classify
+    /// failures like [`Destination::send`] (see [`SendError`]).
+    async fn send(
+        &self,
+        meta_json: &str,
+        image: Vec<u8>,
+        filename: &str,
+    ) -> std::result::Result<(), SendError>;
+}
+
+/// Multipart POST to gilb-web `/api/v1/ingest/screenshots` with a Bearer token.
+pub struct HttpScreenshotDestination {
+    client: reqwest::Client,
+    ingest_url: String,
+    token: String,
+}
+
+impl HttpScreenshotDestination {
+    pub fn new(gilb_web_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self {
+            client: reqwest::Client::builder()
+                .use_rustls_tls()
+                .build()
+                .expect("reqwest client build"),
+            ingest_url: format!(
+                "{}/api/v1/ingest/screenshots",
+                gilb_web_url.into().trim_end_matches('/')
+            ),
+            token: token.into(),
+        }
+    }
+}
+
+#[async_trait]
+impl ScreenshotDestination for HttpScreenshotDestination {
+    async fn send(
+        &self,
+        meta_json: &str,
+        image: Vec<u8>,
+        filename: &str,
+    ) -> std::result::Result<(), SendError> {
+        let part = reqwest::multipart::Part::bytes(image)
+            .file_name(filename.to_string())
+            .mime_str("image/jpeg")
+            .expect("static mime");
+        let form = reqwest::multipart::Form::new()
+            .text("meta", meta_json.to_string())
+            .part("image", part);
+        let resp = self
+            .client
+            .post(&self.ingest_url)
+            .bearer_auth(&self.token)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| SendError::Transient(anyhow::anyhow!("screenshot request failed: {e}")))?;
+        let status = resp.status();
+        if status.is_success() {
+            return Ok(());
+        }
+        let err = anyhow::anyhow!("screenshot ingest returned {status}");
+        if status.is_server_error()
+            || status == reqwest::StatusCode::REQUEST_TIMEOUT
+            || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+        {
+            Err(SendError::Transient(err))
+        } else {
+            Err(SendError::Permanent(err))
+        }
+    }
+}
+
+const SCREENSHOT_FETCH_COLUMNS: &str = "id, session_id, captured_at, \
+app_bundle_id, app_name, window_title, screenshot_id, image_path, width, height";
+
+/// Fetch up to `limit` unshipped screenshots (`shipped_at IS NULL`), oldest first.
+pub async fn fetch_unshipped_screenshots(db: &Db, limit: i64) -> Result<Vec<ScreenshotRow>> {
+    let sql = format!(
+        "SELECT {SCREENSHOT_FETCH_COLUMNS} FROM screenshots WHERE shipped_at IS NULL ORDER BY id LIMIT ?"
+    );
+    let rows = sqlx::query(&sql)
+        .bind(limit)
+        .fetch_all(db)
+        .await
+        .context("fetch_unshipped_screenshots query")?;
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        out.push(ScreenshotRow {
+            id: r.try_get("id")?,
+            session_id: r.try_get("session_id")?,
+            captured_at: r.try_get("captured_at")?,
+            app_bundle_id: r.try_get("app_bundle_id")?,
+            app_name: r.try_get("app_name")?,
+            window_title: r.try_get("window_title")?,
+            screenshot_id: r.try_get("screenshot_id")?,
+            image_path: r.try_get("image_path")?,
+            width: r.try_get("width")?,
+            height: r.try_get("height")?,
+        });
+    }
+    Ok(out)
+}
+
+fn screenshot_meta_json(row: &ScreenshotRow) -> String {
+    serde_json::json!({
+        "screenshot_id": row.screenshot_id,
+        "session_id": row.session_id,
+        "captured_at": row.captured_at,
+        "app_bundle_id": row.app_bundle_id,
+        "app_name": row.app_name,
+        "window_title": row.window_title,
+        "width": row.width,
+        "height": row.height,
+    })
+    .to_string()
+}
+
+/// Ship one screenshot with backoff retry (Transient only), reading its image
+/// file from disk. Permanent (non-429 4xx) fails fast.
+pub async fn ship_screenshot(
+    dest: &dyn ScreenshotDestination,
+    row: &ScreenshotRow,
+    cfg: &ShipConfig,
+) -> Result<()> {
+    let image = tokio::fs::read(&row.image_path)
+        .await
+        .with_context(|| format!("read screenshot image {}", row.image_path))?;
+    let meta = screenshot_meta_json(row);
+    let filename = format!("{}.jpg", row.screenshot_id);
+    let mut attempt: u32 = 0;
+    loop {
+        match dest.send(&meta, image.clone(), &filename).await {
+            Ok(()) => return Ok(()),
+            Err(SendError::Permanent(e)) => {
+                warn!(error = %e, "screenshot rejected permanently; not retrying");
+                return Err(e).context("screenshot rejected permanently");
+            }
+            Err(SendError::Transient(e)) => {
+                attempt += 1;
+                if attempt > cfg.max_retries {
+                    return Err(e).with_context(|| {
+                        format!("screenshot ship failed after {} retries", cfg.max_retries)
+                    });
+                }
+                let backoff =
+                    (cfg.base_backoff * 2u32.saturating_pow(attempt)).min(Duration::from_secs(30));
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+}
+
+/// Mark screenshots shipped at `ts`, chunked (mirrors [`mark_shipped`]).
+pub async fn mark_shipped_screenshots(db: &Db, ids: &[i64], ts: &str) -> Result<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let mut tx = db
+        .begin()
+        .await
+        .context("begin mark_shipped_screenshots tx")?;
+    for chunk in ids.chunks(512) {
+        let placeholders = std::iter::repeat_n("?", chunk.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("UPDATE screenshots SET shipped_at = ? WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql).bind(ts);
+        for id in chunk {
+            q = q.bind(id);
+        }
+        q.execute(&mut *tx).await?;
+    }
+    tx.commit()
+        .await
+        .context("commit mark_shipped_screenshots")?;
+    Ok(())
+}
+
+/// One screenshot pass: fetch a batch, ship each (one multipart request per
+/// image), mark shipped on ack. Each acked row advances the cursor, so a
+/// mid-batch failure keeps the successes. Server dedups by `screenshot_id`.
+pub async fn run_once_screenshots(
+    db: &Db,
+    dest: &dyn ScreenshotDestination,
+    batch: i64,
+    cfg: &ShipConfig,
+) -> Result<usize> {
+    let rows = fetch_unshipped_screenshots(db, batch).await?;
+    if rows.is_empty() {
+        return Ok(0);
+    }
+    let mut acked: Vec<i64> = Vec::new();
+    let ts = chrono::Utc::now().to_rfc3339();
+    for row in &rows {
+        match ship_screenshot(dest, row, cfg).await {
+            Ok(()) => acked.push(row.id),
+            Err(e) => {
+                mark_shipped_screenshots(db, &acked, &ts).await?;
+                return Err(e);
+            }
+        }
+    }
+    mark_shipped_screenshots(db, &acked, &ts).await?;
+    Ok(acked.len())
+}
+
+/// Delete shipped screenshots older than `retain`, removing BOTH the row and
+/// the on-disk image file. Chunked like [`prune_shipped`].
+pub async fn prune_shipped_screenshots(db: &Db, retain: Duration) -> Result<u64> {
+    let cutoff =
+        (chrono::Utc::now() - chrono::Duration::seconds(retain.as_secs() as i64)).to_rfc3339();
+    let mut total = 0u64;
+    loop {
+        let rows: Vec<(i64, String)> = sqlx::query_as(
+            "SELECT id, image_path FROM screenshots \
+             WHERE shipped_at IS NOT NULL AND shipped_at < ? ORDER BY id LIMIT ?",
+        )
+        .bind(&cutoff)
+        .bind(PRUNE_CHUNK)
+        .fetch_all(db)
+        .await
+        .context("prune_shipped_screenshots select")?;
+        if rows.is_empty() {
+            break;
+        }
+        let ids: Vec<i64> = rows.iter().map(|(id, _)| *id).collect();
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("DELETE FROM screenshots WHERE id IN ({placeholders})");
+        let mut q = sqlx::query(&sql);
+        for id in &ids {
+            q = q.bind(id);
+        }
+        let res = q
+            .execute(db)
+            .await
+            .context("prune_shipped_screenshots delete")?;
+        // Best-effort file removal — the row is authoritative; a stray file is
+        // harmless and gets caught by the next data-dir cleanup.
+        for (_, path) in &rows {
+            let _ = tokio::fs::remove_file(path).await;
+        }
+        total += res.rows_affected();
+        if (ids.len() as i64) < PRUNE_CHUNK {
+            break;
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -509,6 +797,81 @@ mod tests {
                 Ok(())
             }
         }
+    }
+
+    /// Mock screenshot destination: records (meta, bytes); can fail the first N
+    /// sends (transient or permanent).
+    struct MockShotDest {
+        fail_first_n: AtomicU32,
+        permanent: bool,
+        calls: Mutex<Vec<(String, Vec<u8>)>>,
+    }
+
+    impl MockShotDest {
+        fn always_ok() -> Self {
+            Self {
+                fail_first_n: AtomicU32::new(0),
+                permanent: false,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn fail_first(n: u32, permanent: bool) -> Self {
+            Self {
+                fail_first_n: AtomicU32::new(n),
+                permanent,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+        fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+    }
+
+    #[async_trait]
+    impl ScreenshotDestination for MockShotDest {
+        async fn send(
+            &self,
+            meta_json: &str,
+            image: Vec<u8>,
+            _filename: &str,
+        ) -> std::result::Result<(), SendError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((meta_json.to_string(), image));
+            let prev = self.fail_first_n.load(Ordering::SeqCst);
+            if prev > 0 {
+                self.fail_first_n.store(prev - 1, Ordering::SeqCst);
+                let e = anyhow::anyhow!("mock shot failure");
+                if self.permanent {
+                    Err(SendError::Permanent(e))
+                } else {
+                    Err(SendError::Transient(e))
+                }
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// Insert a screenshots row pointing at `path`; returns its rowid.
+    async fn insert_screenshot_row(db: &Db, session_id: i64, path: &str) -> i64 {
+        use gilb_core::{AppInfo, Screenshot};
+        let shot = Screenshot {
+            session_id,
+            captured_at: chrono::Utc::now(),
+            app: AppInfo {
+                name: Some("App".into()),
+                ..Default::default()
+            },
+            screenshot_id: Uuid::new_v4().to_string(),
+            image_path: path.to_string(),
+            width: 1440,
+            height: 900,
+        };
+        gilb_db::screenshots::insert_screenshot(db, &shot)
+            .await
+            .unwrap()
     }
 
     fn sample_row(id: i64) -> EventRow {
@@ -743,10 +1106,12 @@ mod tests {
         assert_eq!(fetch_unshipped(&db, 10).await.unwrap().len(), 2);
 
         let dest: Arc<dyn Destination> = Arc::new(MockDestination::always_ok());
+        let shot_dest: Arc<dyn ScreenshotDestination> = Arc::new(MockShotDest::always_ok());
         let (tx, rx) = oneshot::channel();
         let handle = spawn_loop(
             db.clone(),
             dest,
+            shot_dest,
             Duration::from_millis(50),
             10,
             ShipConfig {
@@ -905,6 +1270,76 @@ mod tests {
         assert_eq!(remaining.0, 2, "recent-shipped + unshipped remain");
         assert_eq!(fetch_unshipped(&db, 10_000).await.unwrap().len(), 1);
 
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn run_once_screenshots_ships_marks_then_prune_deletes_row_and_file() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+
+        let mut img_paths = Vec::new();
+        for i in 0..2 {
+            let p = std::env::temp_dir().join(format!("gilb-shot-{}-{i}.jpg", Uuid::new_v4()));
+            std::fs::write(&p, b"\xff\xd8\xff\xd9fake-jpeg").unwrap();
+            insert_screenshot_row(&db, sid, p.to_str().unwrap()).await;
+            img_paths.push(p);
+        }
+        assert_eq!(fetch_unshipped_screenshots(&db, 10).await.unwrap().len(), 2);
+
+        let mock = MockShotDest::always_ok();
+        let n = run_once_screenshots(&db, &mock, 10, &ShipConfig::default())
+            .await
+            .expect("run_once_screenshots");
+        assert_eq!(n, 2);
+        assert_eq!(mock.call_count(), 2);
+        // The image bytes reached the destination.
+        assert!(mock
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|(_, b)| b.starts_with(b"\xff\xd8")));
+        assert!(fetch_unshipped_screenshots(&db, 10)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Prune (0 retention) → rows AND files gone.
+        let pruned = prune_shipped_screenshots(&db, Duration::ZERO)
+            .await
+            .unwrap();
+        assert_eq!(pruned, 2);
+        for p in &img_paths {
+            assert!(!p.exists(), "image file removed on prune");
+        }
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    #[tokio::test]
+    async fn run_once_screenshots_permanent_error_does_not_advance() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let sid = gilb_db::sessions::start_session(&db).await.unwrap();
+        let p = std::env::temp_dir().join(format!("gilb-shot-e-{}.jpg", Uuid::new_v4()));
+        std::fs::write(&p, b"\xff\xd8img").unwrap();
+        insert_screenshot_row(&db, sid, p.to_str().unwrap()).await;
+
+        // First send fails permanently → nothing acked.
+        let mock = MockShotDest::fail_first(1, true);
+        let cfg = ShipConfig {
+            max_retries: 0,
+            base_backoff: Duration::ZERO,
+            ..Default::default()
+        };
+        assert!(run_once_screenshots(&db, &mock, 10, &cfg).await.is_err());
+        assert_eq!(fetch_unshipped_screenshots(&db, 10).await.unwrap().len(), 1);
+
+        let _ = std::fs::remove_file(&p);
         db.close().await;
         cleanup(&path);
     }

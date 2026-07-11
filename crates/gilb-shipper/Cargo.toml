@@ -8,7 +8,7 @@ publish.workspace = true
 [dependencies]
 gilb-db = { workspace = true }
 sqlx = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
