@@ -62,7 +62,9 @@ npm run tauri build                        # release .dmg/.msi signed per tauri.
 
 Capture defaults are controlled by env vars consumed by
 `RecordingSettings::from_env`: `CAPTURE_EVENTS`, `CAPTURE_MOUSE_MOVE`,
-`CAPTURE_CLIPBOARD`, `CAPTURE_TREE_SNAPSHOTS`. Logging: `RUST_LOG=...`
+`CAPTURE_CLIPBOARD`, `CAPTURE_TREE_SNAPSHOTS`, `CAPTURE_SCREENSHOTS`
+(opt-in, default off — heaviest PII modality; also requires the macOS
+Screen Recording permission). Logging: `RUST_LOG=...`
 (defaults: `info,gilb=debug` in the Tauri shell, `info` in the CLI).
 
 The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`).
@@ -84,9 +86,17 @@ gilb-a11y ───► gilb-core, gilb-config, gilb-events, gilb-db
                text_buffer, activity_feed, budget, tree/, password_masking;
                bin gilb-a11y-cli)
 
-gilb-engine ─► all crates above
+gilb-shipper ─► gilb-db, gilb-events
+              (background egress: cursor over unshipped actions/screenshots →
+               JSONL / multipart POST to gilb-web ingest; retry/backoff with a
+               Transient/Permanent/Auth error taxonomy, poison-row dead-letter,
+               masking-on-egress, retention prune + local janitor)
+
+gilb-engine ─► all crates above + gilb-shipper
               (Engine — long-lived process-wide object; owns the DB pool,
-               EventBus, current CaptureSession; spawns the writer task)
+               EventBus, current CaptureSession; spawns the writer task, the
+               always-on janitor, and — when ~/.gilb/credentials.json exists
+               or a sign-in happens in-session — the shipper loop)
 
 gilb-helper ─► gilb-config
               (privileged daemon over unix-socket IPC;

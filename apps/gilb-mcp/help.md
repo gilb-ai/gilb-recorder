@@ -13,7 +13,7 @@ The main table is `actions`. One row per atomic user action:
 - `captured_at` — ISO 8601 UTC timestamp (e.g. `2026-05-22T22:04:35.802740Z`)
 - `kind` — one of:
   - `click` — mouse button down. Has `element_role`, `element_name`,
-    `element_value`, `element_identifier` when the AX worker enriched the
+    `element_value`, `element_id` when the AX worker enriched the
     click with element context. `extra.button` / `extra.x` / `extra.y` are
     the button + screen point; `extra.click_count` is the burst count
     (1=single, 2=double, 3=triple, …); `extra.modifiers` is a held-modifier
@@ -26,10 +26,12 @@ The main table is `actions`. One row per atomic user action:
     held-modifier bitfield as `click` (SHIFT=1, CTRL=2, OPT=4, CMD=8, CAPS=16,
     FN=32).
   - `scroll` — wheel event. `extra.delta_x`, `extra.delta_y`.
-  - `clipboard` — `text_content` is the clipboard string (PII-redacted).
-    `clipboard_op` is the op ("copy"; cut/paste detection deferred) and
-    `content_hash` is sha256 (hex) of the raw pre-redaction text, for
-    copy↔paste linking across rows.
+  - `clipboard` — `text_content` is the clipboard string (PII-redacted,
+    capped at 64 KiB with a `…[truncated N bytes]` marker for huge copies).
+    `clipboard_op` is the op ("copy"; cut/paste detection deferred). A
+    `content_hash` of the raw text exists in the DB for server-side
+    copy↔paste linking but is NOT returned by these tools (hashing
+    pre-redaction text would make short secrets guessable).
   - `focus_change` — frontmost app changed; useful as an activity boundary.
   - `system` — lifecycle marker. `extra.system` is `idle_start` / `idle_end` /
     `alive` (lock/unlock/recording arrive later). Segment cases/sessions on these.

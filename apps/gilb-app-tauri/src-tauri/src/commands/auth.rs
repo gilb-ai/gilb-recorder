@@ -136,7 +136,6 @@ pub fn handle_callback(app: &AppHandle, url: &url::Url) {
         gilb_web_url: url_field.unwrap_or(pending.gilb_web_url),
         token,
         employee,
-        analyze_interval_secs: None,
     };
 
     if let Err(err) = save_credentials(&creds) {
