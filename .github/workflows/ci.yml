@@ -8,9 +8,9 @@ name: CI
 #                  sees that code, so without this job the macOS a11y path was only
 #                  ever compiled at release time (release.yml, on a v* tag).
 # Runs on every PR and on pushes to main / epic-v2 (the active integration branch).
-# The Tauri crates (gilb-app-tauri, gilb-shell-tauri) are excluded from both jobs:
-# they need GTK/WebKit on Linux and are validated by windows-build.yml (smoke) and
-# release.yml (full signed build) instead.
+# The Tauri crates (gilb-app-tauri, gilb-shell-tauri) are excluded from the Linux
+# job (they need GTK/WebKit there) but ARE compiled by macos-check — release.yml
+# only runs on tags, so without that step a broken Tauri build ships unnoticed.
 
 on:
   pull_request:
@@ -62,3 +62,9 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri
+
+      # Compile (don't test) the Tauri crates so PRs catch build breakage —
+      # release.yml only runs on tags, which is too late. `cargo check` skips
+      # the frontend/bundler, which is all we need for type/link coverage.
+      - name: Check Tauri crates
+        run: cargo check -p gilb-app-tauri -p gilb-shell-tauri

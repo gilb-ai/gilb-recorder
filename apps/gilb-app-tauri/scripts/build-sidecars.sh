@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Build the sidecar CLIs (gilb-mcp, gilb-analyzer) and stage them under the
+# Build the sidecar CLIs (gilb-mcp) and stage them under the
 # names Tauri expects for `bundle.externalBin` (binaries/<base>-<target-triple>).
 #
-# Both ship inside the .app so a DMG install carries the whole local pipeline:
-#   <App>.app/Contents/MacOS/gilb-mcp       — read-only MCP over the recorder DB
-#   <App>.app/Contents/MacOS/gilb-analyzer  — Shannon (slice / find / run)
-# The operator runs the analyzer from there (it spawns `claude -p`, which must be
-# installed + signed in separately, and points --mcp-config at the bundled mcp).
+# The sidecar ships inside the .app:
+#   <App>.app/Contents/MacOS/gilb-mcp — read-only MCP over the recorder DB,
+#   pointed at by the operator's Claude Code --mcp-config.
 #
 # Target detection — TAURI_ENV_TARGET_TRIPLE is set by `tauri build`
 # when invoked with `--target`. For plain host builds (no flag) we
@@ -41,11 +39,11 @@ case "$TARGET" in
 esac
 
 # Sidecar crates to build + stage. Each is its own workspace bin.
-SIDECARS=(gilb-mcp gilb-analyzer)
+SIDECARS=(gilb-mcp)
 
 build_one() {
   cd "$WORKSPACE_ROOT"
-  cargo build --release --target "$1" -p gilb-mcp -p gilb-analyzer
+  cargo build --release --target "$1" -p gilb-mcp
 }
 
 case "$TARGET" in
