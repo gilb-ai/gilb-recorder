@@ -41,6 +41,11 @@ use crate::{ElementResolver, FocusProvider};
 /// How long we wait between drop-stat publishes on the health bus.
 const DROP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Cap on stored clipboard text. Bounds the largest possible `actions` row so
+/// no single row can exceed the shipper's byte budget / the web ingest 4MB
+/// body cap (a >cap row would be a permanent 413 → dead-letter).
+const CLIPBOARD_TEXT_MAX_BYTES: usize = 64 * 1024;
+
 pub struct Normalizer {
     pub session_id: SessionId,
     pub writer_tx: mpsc::Sender<WriterMessage>,
@@ -145,19 +150,23 @@ impl Normalizer {
                     }
                     // Screenshot cadence poll: capture iff the machine says so
                     // and the current context is neither idle nor excluded.
+                    // The worker RE-CHECKS exclusion at grab time — this check
+                    // is only the first gate (the snapshot here can be stale).
                     if let Some(tx) = &self.screenshot_tx {
                         let snap = self.focus.current();
-                        let excluded = snap
-                            .app
-                            .bundle_id
-                            .as_deref()
-                            .map(is_excluded_app)
-                            .unwrap_or(false)
-                            || snap.focused_secure
-                            || snap.focused_role.as_deref().map(is_secure_role).unwrap_or(false);
-                        if shot_cadence.poll(Instant::now(), screen_idle, excluded) {
-                            let _ = tx.try_send(crate::screenshot::ScreenshotRequest {
+                        let excluded = crate::password_masking::is_screenshot_excluded(&snap);
+                        if shot_cadence.poll(Instant::now(), screen_idle, excluded)
+                            && tx.try_send(crate::screenshot::ScreenshotRequest {
                                 app: snap.app.clone(),
+                                requested_at: Instant::now(),
+                            }).is_err()
+                        {
+                            // Queue full: the shot is lost but the cadence
+                            // already advanced — surface it instead of
+                            // silently under-sampling.
+                            self.event_bus.publish_health(HealthEvent::DroppedEvent {
+                                reason: "screenshot_tx_full".into(),
+                                count: 1,
                             });
                         }
                     }
@@ -429,8 +438,14 @@ impl Normalizer {
         // survives `redact_pii` on the shipped `text_content`. Step-1 op is
         // always "copy" (NSPasteboard can't distinguish copy/cut).
         let content_hash = change.text.as_deref().and_then(clipboard_content_hash);
+        // Cap the stored text: one copy of a huge CSV/log would otherwise
+        // produce a row larger than the ingest body cap — a permanent 413
+        // the shipper can only dead-letter. 64 KiB keeps every realistic
+        // "what did they copy" answer; the hash above still covers the full
+        // original for copy↔paste linking. Truncate on a char boundary.
         let text = change
             .text
+            .map(truncate_clipboard_text)
             .map(|t| redact_pii(&t))
             .filter(|t| !t.is_empty());
         let action = Action {
@@ -500,6 +515,20 @@ impl Normalizer {
     }
 }
 
+/// Cap stored clipboard text at [`CLIPBOARD_TEXT_MAX_BYTES`], cutting on a
+/// char boundary and appending a marker with the dropped byte count. Applied
+/// BEFORE `redact_pii` (the hash of the full original is taken separately).
+fn truncate_clipboard_text(t: String) -> String {
+    if t.len() <= CLIPBOARD_TEXT_MAX_BYTES {
+        return t;
+    }
+    let mut end = CLIPBOARD_TEXT_MAX_BYTES;
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…[truncated {} bytes]", &t[..end], t.len() - end)
+}
+
 /// sha256 (hex) of a raw clipboard string, or `None` for empty input.
 ///
 /// Computed from the PRE-redaction bytes so copy↔paste linking via
@@ -543,5 +572,24 @@ mod tests {
             clipboard_content_hash("invoice-123"),
             clipboard_content_hash("invoice-456")
         );
+    }
+
+    #[test]
+    fn clipboard_text_is_capped_on_char_boundary() {
+        // Under the cap → untouched.
+        assert_eq!(truncate_clipboard_text("short".into()), "short");
+        // Over the cap → truncated with a marker; total stays bounded.
+        let big = "x".repeat(CLIPBOARD_TEXT_MAX_BYTES + 500);
+        let out = truncate_clipboard_text(big);
+        assert!(out.len() < CLIPBOARD_TEXT_MAX_BYTES + 64);
+        assert!(out.ends_with("…[truncated 500 bytes]"));
+        // Multi-byte char straddling the cap → cut moves back to a boundary
+        // (no panic, valid UTF-8).
+        let mut s = "a".repeat(CLIPBOARD_TEXT_MAX_BYTES - 1);
+        s.push('é'); // 2 bytes: spans the cap boundary
+        s.push_str(&"b".repeat(100));
+        let out = truncate_clipboard_text(s);
+        assert!(out.starts_with(&"a".repeat(CLIPBOARD_TEXT_MAX_BYTES - 1)));
+        assert!(out.contains("[truncated"));
     }
 }

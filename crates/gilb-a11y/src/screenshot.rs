@@ -32,14 +32,24 @@ pub struct Grab {
 
 /// A request the normalizer sends to the screenshot worker when the cadence
 /// fires: capture now, tagging the row with the current foreground app.
+/// `requested_at` lets the worker drop stale requests — a grab that would run
+/// seconds after the decision may capture a completely different context.
 #[derive(Debug, Clone)]
 pub struct ScreenshotRequest {
     pub app: gilb_core::AppInfo,
+    pub requested_at: Instant,
 }
 
-/// Grabs the frontmost window as an encoded image. Prod impl is macOS-only;
-/// tests use a mock. Returns `None` when the grab isn't possible (no window,
-/// permission missing, unsupported platform).
+/// Grabs the screen as an encoded image. Prod impl is macOS-only; tests use a
+/// mock. Returns `None` when the grab isn't possible (no display, permission
+/// missing, unsupported platform).
+///
+/// PRIVACY NOTE: the v1 macOS impl captures the **entire main display** — not
+/// just the frontmost window. Notification banners and any window merely
+/// visible on that display are included. The exclusion gate (checked at
+/// decision time AND re-checked at grab time) covers only the frontmost app;
+/// a window-scoped grab (`CGWindowListCreateImage`) is the planned fix, and
+/// until then the worker suppresses capture entirely on multi-display setups.
 pub trait ScreenGrabber: Send {
     fn grab(&mut self) -> Option<Grab>;
 }
@@ -114,10 +124,12 @@ impl ScreenshotCadence {
             return false;
         }
 
-        // Coalesce: if we shot very recently, drop this one.
+        // Coalesce: if we shot very recently, DEFER (keep `pending` armed) so
+        // the settled context still gets its shot once the gap clears —
+        // dropping it outright would leave a new context unphotographed until
+        // the heartbeat (up to minutes later).
         if let Some(t) = self.last_capture {
             if now.duration_since(t) < self.min_gap {
-                self.pending = None;
                 return false;
             }
         }
@@ -167,14 +179,19 @@ mod tests {
     }
 
     #[test]
-    fn rapid_switching_coalesces_via_min_gap() {
+    fn rapid_switching_defers_to_settled_context_after_min_gap() {
         let mut c = cadence();
         let t = Instant::now();
         c.on_boundary(t);
         assert!(c.poll(t + Duration::from_millis(120), false, false)); // first shot
-                                                                       // Second boundary 300ms later → settles but is < 1s min-gap → dropped.
+                                                                       // Second boundary 300ms later → settles but is < 1s min-gap → deferred.
         c.on_boundary(t + Duration::from_millis(300));
         assert!(!c.poll(t + Duration::from_millis(450), false, false));
+        // Once the min-gap clears, the deferred shot of the settled context
+        // fires — the new context is NOT left waiting for the heartbeat.
+        assert!(c.poll(t + Duration::from_millis(1200), false, false));
+        // Consumed: no repeat.
+        assert!(!c.poll(t + Duration::from_millis(1300), false, false));
     }
 
     #[test]
