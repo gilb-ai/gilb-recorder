@@ -64,8 +64,10 @@ struct EngineInner {
     platform: Box<dyn CapturePlatform>,
     state: Mutex<Option<ActiveSession>>,
     /// Shutdown signal for the background shipper (GILB-96). `None` when the
-    /// device isn't onboarded (no credentials) → no shipper running.
-    shipper_shutdown: Option<oneshot::Sender<()>>,
+    /// device isn't onboarded (no credentials) → no shipper running. Behind a
+    /// Mutex because sign-in / sign-out swap the shipper in-session
+    /// ([`Engine::start_shipper`] / [`Engine::stop_shipper`]).
+    shipper_shutdown: Mutex<Option<oneshot::Sender<()>>>,
     /// Shutdown for the always-on local janitor (unshipped cap + orphan sweep).
     janitor_shutdown: Option<oneshot::Sender<()>>,
 }
@@ -75,7 +77,7 @@ impl Drop for EngineInner {
         // Signal the background loops to exit on engine shutdown. (The oneshot
         // receivers also resolve if the senders are merely dropped, so dropping
         // the Engine stops the loops either way.)
-        if let Some(tx) = self.shipper_shutdown.take() {
+        if let Some(tx) = self.shipper_shutdown.lock().take() {
             let _ = tx.send(());
         }
         if let Some(tx) = self.janitor_shutdown.take() {
@@ -105,50 +107,6 @@ impl Engine {
         let db = open_db(&db_path).await?;
         let event_bus = EventBus::new();
         let platform = current_platform();
-        // If the device is onboarded (has gilb-web credentials), start a
-        // background shipper that drains the local buffer to /api/v1/ingest.
-        // No credentials → no shipper; capture still works, events buffer.
-        //
-        // Credentials are read once, here. A device that onboards *after* the
-        // Engine is open won't ship until the next app start — acceptable while
-        // onboarding is a first-run step; revisit if login moves in-session.
-        let shipper_shutdown = match load_credentials() {
-            Ok(Some(creds)) => {
-                let dest: Arc<dyn gilb_shipper::Destination> = Arc::new(HttpDestination::new(
-                    creds.gilb_web_url.clone(),
-                    creds.token.clone(),
-                ));
-                let shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination> = Arc::new(
-                    HttpScreenshotDestination::new(creds.gilb_web_url, creds.token),
-                );
-                let (tx, rx) = oneshot::channel();
-                // The JoinHandle is intentionally dropped: the loop is detached
-                // and stopped via `tx` (the oneshot in `shipper_shutdown`) on
-                // Engine drop. A batch in flight at shutdown is abandoned, not
-                // awaited — the server dedups by event_id, so it re-ships next
-                // launch.
-                spawn_loop(
-                    db.clone(),
-                    dest,
-                    shot_dest,
-                    ShipperOpts {
-                        interval: SHIP_INTERVAL,
-                        batch: SHIP_BATCH,
-                        event_bus: Some(event_bus.clone()),
-                        ..Default::default()
-                    },
-                    rx,
-                );
-                Some(tx)
-            }
-            Ok(None) => None,
-            Err(err) => {
-                // A corrupted credentials file is NOT "not onboarded" — say so,
-                // or a broken shipper looks identical to a fresh install.
-                warn!(?err, "failed to load credentials; shipper NOT started");
-                None
-            }
-        };
         // The janitor runs regardless of onboarding: it caps unshipped
         // screenshots and sweeps orphaned JPEGs — the only bound on disk
         // growth for a device that never ships.
@@ -160,16 +118,76 @@ impl Engine {
             gilb_shipper::spawn_janitor(db.clone(), dir, JANITOR_INTERVAL, rx);
             Some(tx)
         };
-        Ok(Self {
+        let engine = Self {
             inner: Arc::new(EngineInner {
                 db,
                 event_bus,
                 platform,
                 state: Mutex::new(None),
-                shipper_shutdown,
+                shipper_shutdown: Mutex::new(None),
                 janitor_shutdown,
             }),
-        })
+        };
+        // If the device is onboarded (has gilb-web credentials), start the
+        // background shipper. No credentials → no shipper; capture still
+        // works, events buffer locally. Sign-in/sign-out later in the session
+        // swap the shipper via start_shipper/stop_shipper — no restart needed.
+        match load_credentials() {
+            Ok(Some(creds)) => engine.start_shipper(creds.gilb_web_url, creds.token),
+            Ok(None) => {}
+            Err(err) => {
+                // A corrupted credentials file is NOT "not onboarded" — say so,
+                // or a broken shipper looks identical to a fresh install.
+                warn!(?err, "failed to load credentials; shipper NOT started");
+            }
+        }
+        Ok(engine)
+    }
+
+    /// Start (or replace) the background shipper with these credentials.
+    /// Called at open when the device is already onboarded, and by the auth
+    /// deep-link callback right after sign-in — shipping begins immediately,
+    /// not at the next app launch.
+    pub fn start_shipper(&self, gilb_web_url: impl Into<String>, token: impl Into<String>) {
+        let gilb_web_url = gilb_web_url.into();
+        let token = token.into();
+        let dest: Arc<dyn gilb_shipper::Destination> =
+            Arc::new(HttpDestination::new(gilb_web_url.clone(), token.clone()));
+        let shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination> =
+            Arc::new(HttpScreenshotDestination::new(gilb_web_url, token));
+        let (tx, rx) = oneshot::channel();
+        // The JoinHandle is intentionally dropped: the loop is detached and
+        // stopped via `tx` on Engine drop / stop_shipper. A batch in flight at
+        // shutdown is abandoned, not awaited — the server dedups by event_id,
+        // so it re-ships next time.
+        spawn_loop(
+            self.inner.db.clone(),
+            dest,
+            shot_dest,
+            ShipperOpts {
+                interval: SHIP_INTERVAL,
+                batch: SHIP_BATCH,
+                event_bus: Some(self.inner.event_bus.clone()),
+                ..Default::default()
+            },
+            rx,
+        );
+        // Replace (and thereby stop) any previous shipper — e.g. re-sign-in
+        // with a fresh token.
+        if let Some(old) = self.inner.shipper_shutdown.lock().replace(tx) {
+            let _ = old.send(());
+        }
+        info!("shipper started");
+    }
+
+    /// Stop the background shipper. Called on sign-out: the in-memory token
+    /// must die with the session — before this, a signed-out device kept
+    /// shipping until the next app restart. Idempotent.
+    pub fn stop_shipper(&self) {
+        if let Some(tx) = self.inner.shipper_shutdown.lock().take() {
+            let _ = tx.send(());
+            info!("shipper stopped (sign-out)");
+        }
     }
 
     pub fn db(&self) -> &Db {

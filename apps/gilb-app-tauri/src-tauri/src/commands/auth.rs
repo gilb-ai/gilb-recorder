@@ -82,8 +82,12 @@ pub async fn auth_status() -> Result<AuthStatus, String> {
 
 /// Sign out: delete the credentials file, returning the recorder to Tier-1.
 #[tauri::command]
-pub async fn sign_out(app: AppHandle) -> Result<(), String> {
+pub async fn sign_out(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     clear_credentials().map_err(|e| e.to_string())?;
+    // Stop the running shipper NOW — it holds the token in memory and would
+    // otherwise keep shipping the activity log until the next app restart,
+    // after the user believes they've returned to local-only.
+    state.engine.stop_shipper();
     // Drop the email line from the tray menu (the frontend refreshes itself).
     crate::tray::refresh(&app);
     Ok(())
@@ -149,6 +153,11 @@ pub fn handle_callback(app: &AppHandle, url: &url::Url) {
     }
 
     info!(employee = ?creds.employee, "recorder signed in");
+    // Start shipping immediately — before this, a fresh sign-in didn't take
+    // effect until the next app launch (Engine read credentials once at open).
+    app_state
+        .engine
+        .start_shipper(creds.gilb_web_url.clone(), creds.token.clone());
     let _ = app.emit(
         "auth",
         AuthStatus {
