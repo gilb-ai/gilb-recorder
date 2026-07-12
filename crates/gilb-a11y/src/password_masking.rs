@@ -74,6 +74,24 @@ pub fn is_secure_role(role: &str) -> bool {
     role.eq_ignore_ascii_case(AX_SECURE_TEXT_FIELD)
 }
 
+/// Screenshot exclusion gate over a focus snapshot: excluded app frontmost,
+/// or a secure/password field focused. ONE definition shared by the
+/// normalizer (decision time) and the screenshot worker (grab time) so the
+/// two checks can never drift apart.
+pub fn is_screenshot_excluded(snap: &crate::focus::FocusSnapshot) -> bool {
+    snap.app
+        .bundle_id
+        .as_deref()
+        .map(is_excluded_app)
+        .unwrap_or(false)
+        || snap.focused_secure
+        || snap
+            .focused_role
+            .as_deref()
+            .map(is_secure_role)
+            .unwrap_or(false)
+}
+
 /// Returns `true` when an element name or identifier looks like a password
 /// field by string match.
 pub fn is_password_field(name: Option<&str>, identifier: Option<&str>) -> bool {

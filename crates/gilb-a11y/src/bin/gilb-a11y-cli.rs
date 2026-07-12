@@ -82,6 +82,13 @@ async fn main() -> Result<()> {
                         warn!(?err, "failed to insert tree_snapshot");
                     }
                 }
+                WriterMessage::Screenshot(shot) => {
+                    if let Err(err) =
+                        gilb_db::screenshots::insert_screenshot(&db_for_writer, &shot).await
+                    {
+                        warn!(?err, "failed to insert screenshot");
+                    }
+                }
             }
         }
     });

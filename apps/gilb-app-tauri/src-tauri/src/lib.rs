@@ -1,6 +1,5 @@
 //! gilb Tauri shell — wires the UI to `gilb-engine`.
 
-mod analyzer_supervisor;
 mod commands;
 mod events;
 mod logging;
@@ -130,14 +129,7 @@ pub fn run() {
         .build(tauri::generate_context!());
 
     match result {
-        Ok(app) => app.run(|handle, event| match event {
-            // On quit, ask the analyzer supervisor to stop the daemon (best
-            // effort — the daemon's own parent-death guard is the hard backstop).
-            tauri::RunEvent::ExitRequested { .. } => {
-                if let Some(state) = handle.try_state::<state::AppState>() {
-                    state.analyzer.set_active(false);
-                }
-            }
+        Ok(app) => app.run(|_handle, event| match event {
             // Hard-exit once the event loop has fully stopped, skipping the libc
             // atexit / C++ static-destructor phase. whisper.cpp keeps a global
             // ggml Metal device whose static destructor frees its residency sets

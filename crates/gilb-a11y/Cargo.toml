@@ -24,6 +24,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
+sha2 = "0.10"
 async-trait = "0.1"
 
 # CLI bin only
@@ -32,6 +33,7 @@ clap = { version = "4", features = ["derive"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.25"
 core-foundation = "0.10"
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 core-foundation-sys = "0.8"
 foreign-types-shared = "0.3"
 accessibility-sys = "0.2"

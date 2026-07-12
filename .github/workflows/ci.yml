@@ -1,21 +1,27 @@
 name: CI
 
-# Fast Linux checks for the Rust workspace. Runs on every PR (and on main) and
-# is the required status check for branch protection — main stays green and
-# shippable. The Tauri crates (gilb-app-tauri and gilb-shell-tauri) are
-# excluded: they need GTK/WebKit system libs to compile on Linux and only ship
-# on macOS/Windows, where windows-build.yml (smoke) and release.yml validate them.
+# Rust workspace checks. Two jobs:
+#  * check      — fast Linux clippy/fmt/test (the required branch-protection gate).
+#  * macos-check — compiles + tests the macOS-only capture code that lives behind
+#                  `cfg(target_os = "macos")` (gilb-a11y platform/macos: event_tap,
+#                  ax_worker, focus, keyboard, pasteboard, …). The Linux job never
+#                  sees that code, so without this job the macOS a11y path was only
+#                  ever compiled at release time (release.yml, on a v* tag).
+# Runs on every PR and on pushes to main / epic-v2 (the active integration branch).
+# The Tauri crates (gilb-app-tauri, gilb-shell-tauri) are excluded from the Linux
+# job (they need GTK/WebKit there) but ARE compiled by macos-check — release.yml
+# only runs on tags, so without that step a broken Tauri build ships unnoticed.
 
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, epic-v2]
 
 jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -33,3 +39,38 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri
+
+  macos-check:
+    # Verifies the cfg(target_os = "macos") capture code the Linux job can't
+    # compile. clippy is enough to type-check the FFI (event_tap/ax_worker);
+    # tests run the platform-neutral suites (the macOS FFI has no unit tests
+    # that need TCC/accessibility permission).
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Clippy (macOS)
+        run: cargo clippy --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri
+
+      # Compile (don't test) the Tauri crates so PRs catch build breakage —
+      # release.yml only runs on tags, which is too late. `cargo check` skips
+      # the frontend/bundler, which is all we need for type/link coverage.
+      # tauri-build still validates that bundle.externalBin files exist, so
+      # stub the gilb-mcp sidecar instead of paying for a release build of it.
+      - name: Check Tauri crates
+        run: |
+          host=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p apps/gilb-app-tauri/src-tauri/binaries
+          touch "apps/gilb-app-tauri/src-tauri/binaries/gilb-mcp-$host"
+          cargo check -p gilb-app-tauri -p gilb-shell-tauri

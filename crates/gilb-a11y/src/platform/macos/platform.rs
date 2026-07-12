@@ -97,6 +97,35 @@ impl CapturePlatform for MacosPlatform {
             (None, None)
         };
 
+        // Screenshot worker (GILB-80) — same pattern as the snapshot worker;
+        // grab + JPEG encode run on the blocking pool. Opt-in only, and gated
+        // on the Screen Recording TCC grant: without it CGDisplay silently
+        // returns wallpaper-only frames, so capturing would ship useless
+        // bytes at full cadence with nothing telling the user why.
+        let (screenshot_tx, screenshot_handle, screenshot_stop) = if ctx
+            .settings
+            .capture_screenshots
+        {
+            if permissions::screen_recording_granted() {
+                let (tx, h, stop) = super::screencap::spawn_worker(
+                    ctx.session_id,
+                    ctx.writer_tx.clone(),
+                    ctx.event_bus.clone(),
+                    self.focus.clone(),
+                );
+                (Some(tx), Some(h), Some(stop))
+            } else {
+                warn!("capture_screenshots enabled but Screen Recording permission missing; screenshots disabled for this session");
+                ctx.event_bus.publish_health(HealthEvent::DroppedEvent {
+                    reason: "screen_recording_permission_missing".into(),
+                    count: 1,
+                });
+                (None, None, None)
+            }
+        } else {
+            (None, None, None)
+        };
+
         let normalizer = Normalizer {
             session_id: ctx.session_id,
             writer_tx: ctx.writer_tx,
@@ -106,6 +135,7 @@ impl CapturePlatform for MacosPlatform {
             focus_provider: Box::new(MacFocus),
             element_resolver: Box::new(ax_worker),
             snapshot_tx,
+            screenshot_tx,
         };
 
         // Shutdown choreography:
@@ -125,6 +155,23 @@ impl CapturePlatform for MacosPlatform {
             if let Some(handle) = snapshot_handle {
                 if let Err(err) = tokio::time::timeout(Duration::from_secs(2), handle).await {
                     warn!(?err, "snapshot worker did not stop in time");
+                }
+            }
+            if let Some(mut handle) = screenshot_handle {
+                // Discard queued grab requests FIRST — "I pressed Stop" must
+                // mean "screen grabs stopped", not "up to 8 more happen".
+                if let Some(stop) = &screenshot_stop {
+                    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+                }
+                if tokio::time::timeout(Duration::from_secs(2), &mut handle)
+                    .await
+                    .is_err()
+                {
+                    // Do NOT leave it running detached — a wedged grab would
+                    // keep capturing after Stop. Abort kills it at the next
+                    // await point.
+                    warn!("screenshot worker did not stop in time; aborting");
+                    handle.abort();
                 }
             }
             drop(ax_handle);

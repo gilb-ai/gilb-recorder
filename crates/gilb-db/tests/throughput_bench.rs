@@ -77,6 +77,8 @@ fn synthetic_action(session_id: i64, i: usize) -> Action {
         password_flag: false,
         tree_snapshot_id: None,
         extra_json: None,
+        clipboard_op: None,
+        content_hash: None,
     }
 }
 

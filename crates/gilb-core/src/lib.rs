@@ -25,6 +25,10 @@ pub enum ActionKind {
     Scroll,
     Clipboard,
     FocusChange,
+    /// Lifecycle marker (idle/alive/lock/unlock/recording). The specific
+    /// signal rides in `extra_json.system` (see gilb-a11y `idle` + the macOS
+    /// `session` source). Lets the server segment cases/sessions for mining.
+    System,
     Debug,
 }
 
@@ -37,6 +41,7 @@ impl ActionKind {
             ActionKind::Scroll => "scroll",
             ActionKind::Clipboard => "clipboard",
             ActionKind::FocusChange => "focus_change",
+            ActionKind::System => "system",
             ActionKind::Debug => "debug",
         }
     }
@@ -59,6 +64,22 @@ pub struct TreeSnapshot {
     /// Serialized tree as JSON. Shape is intentionally not part of the
     /// schema — it's a blob the analyzer LLM parses on demand.
     pub root_json: String,
+}
+
+/// Metadata for a captured screenshot (GILB-80). The encoded image bytes live
+/// on disk at `image_path`; only this small row crosses the writer channel and
+/// later ships (GILB-93). Sampled on focus boundaries, never continuous.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Screenshot {
+    pub session_id: SessionId,
+    pub captured_at: DateTime<Utc>,
+    pub app: AppInfo,
+    /// Stable id linking this shot to nearby actions server-side.
+    pub screenshot_id: String,
+    /// Absolute path to the encoded image file on the local disk.
+    pub image_path: String,
+    pub width: i64,
+    pub height: i64,
 }
 
 /// Foreground app context attached to every event.
@@ -99,6 +120,66 @@ pub struct SelectionRange {
     pub end: usize,
 }
 
+/// Modifier-key flags (SHIFT/CTRL/OPT/CMD/CAPS/FN) as a compact u8 bitfield.
+/// Cross-platform type used by the macOS CGEventFlags decoder (GILB-64) and
+/// the RawEvent (GILB-65). `from_cg_flags` is macOS-only (the flag constants
+/// are CGEventFlags).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Modifiers(pub u8);
+
+impl Modifiers {
+    pub const SHIFT: u8 = 1 << 0;
+    pub const CTRL: u8 = 1 << 1;
+    pub const OPT: u8 = 1 << 2;
+    pub const CMD: u8 = 1 << 3;
+    pub const CAPS: u8 = 1 << 4;
+    pub const FN: u8 = 1 << 5;
+
+    pub fn new() -> Self {
+        Self(0)
+    }
+
+    pub fn has_shift(&self) -> bool {
+        self.0 & Self::SHIFT != 0
+    }
+    pub fn has_ctrl(&self) -> bool {
+        self.0 & Self::CTRL != 0
+    }
+    pub fn has_opt(&self) -> bool {
+        self.0 & Self::OPT != 0
+    }
+    pub fn has_cmd(&self) -> bool {
+        self.0 & Self::CMD != 0
+    }
+    pub fn any_modifier(&self) -> bool {
+        self.0 & (Self::CMD | Self::CTRL) != 0
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn from_cg_flags(flags: u64) -> Self {
+        let mut m = 0u8;
+        if flags & 0x20000 != 0 {
+            m |= Self::SHIFT;
+        }
+        if flags & 0x40000 != 0 {
+            m |= Self::CTRL;
+        }
+        if flags & 0x80000 != 0 {
+            m |= Self::OPT;
+        }
+        if flags & 0x100000 != 0 {
+            m |= Self::CMD;
+        }
+        if flags & 0x10000 != 0 {
+            m |= Self::CAPS;
+        }
+        if flags & 0x800000 != 0 {
+            m |= Self::FN;
+        }
+        Self(m)
+    }
+}
+
 /// A single captured action, before it has been persisted.
 ///
 /// The `id` and `session_id` are assigned by the write queue / engine.
@@ -113,6 +194,14 @@ pub struct Action {
     pub password_flag: bool,
     pub tree_snapshot_id: Option<TreeSnapshotId>,
     pub extra_json: Option<serde_json::Value>,
+    /// Clipboard operation kind ("copy"/"cut"/"paste"); `Some` only for
+    /// `Clipboard` actions. Step-1: always "copy" — NSPasteboard can't tell
+    /// copy from cut; cut/paste detection is deferred.
+    pub clipboard_op: Option<String>,
+    /// sha256 (hex) of the raw clipboard text BEFORE PII redaction; `Some`
+    /// only for `Clipboard` actions. Lets copy↔paste linking survive
+    /// redaction of the shipped `text_content`.
+    pub content_hash: Option<String>,
 }
 
 /// Anything the capture pipeline can hand to the engine writer.
@@ -121,9 +210,15 @@ pub struct Action {
 /// writer fans in [`crate::TreeSnapshot`]s too. Keep this enum small —
 /// we route on the variant in the writer's hot loop.
 #[derive(Debug, Clone)]
+// `Action` is ~408 B; the `clipboard_op`/`content_hash` fields pushed it past
+// clippy's variant-size threshold. This enum is only ever moved through a
+// tokio mpsc channel as a heap-managed slot, so the inline size carries no
+// stack/perf cost — boxing the variant would just add a per-event allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum WriterMessage {
     Action(Action),
     TreeSnapshot(TreeSnapshot),
+    Screenshot(Screenshot),
 }
 
 impl From<Action> for WriterMessage {
@@ -135,6 +230,12 @@ impl From<Action> for WriterMessage {
 impl From<TreeSnapshot> for WriterMessage {
     fn from(s: TreeSnapshot) -> Self {
         WriterMessage::TreeSnapshot(s)
+    }
+}
+
+impl From<Screenshot> for WriterMessage {
+    fn from(s: Screenshot) -> Self {
+        WriterMessage::Screenshot(s)
     }
 }
 
@@ -150,6 +251,8 @@ impl Action {
             password_flag: false,
             tree_snapshot_id: None,
             extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
         }
     }
 }

@@ -10,6 +10,7 @@ pub mod macos {
     pub mod pasteboard;
     pub mod permissions;
     mod platform;
+    pub mod screencap;
 
     pub use platform::MacosPlatform;
 }

@@ -11,6 +11,7 @@
 
 pub mod actions;
 pub mod meetings;
+pub mod screenshots;
 pub mod sessions;
 pub mod transcripts;
 pub mod tree_snapshots;
@@ -112,6 +113,9 @@ pub async fn write_batch(db: &Db, batch: &[WriterMessage]) -> Result<()> {
             }
             WriterMessage::TreeSnapshot(snap) => {
                 tree_snapshots::insert_tree_snapshot_with(&mut *tx, snap).await?;
+            }
+            WriterMessage::Screenshot(shot) => {
+                screenshots::insert_screenshot_with(&mut *tx, shot).await?;
             }
         }
     }

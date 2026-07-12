@@ -147,6 +147,9 @@ fn run_thread(
 }
 
 fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Option<RawEvent> {
+    // Modifier flags (SHIFT/CTRL/OPT/CMD/CAPS/FN) ride on every CGEvent; decode
+    // them once for whichever RawEvent we build (GILB-64).
+    let modifiers = gilb_core::Modifiers::from_cg_flags(event.get_flags().bits());
     let raw = match etype {
         CGEventType::KeyDown => {
             let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
@@ -154,6 +157,7 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
             RawEvent::KeyDown {
                 special: super::keyboard::special_key_from_macos_keycode(keycode),
                 text,
+                modifiers,
             }
         }
         CGEventType::LeftMouseDown | CGEventType::RightMouseDown | CGEventType::OtherMouseDown => {
@@ -167,6 +171,13 @@ fn decode_event(etype: CGEventType, event: &core_graphics::event::CGEvent) -> Op
                 button,
                 x: p.x,
                 y: p.y,
+                // macOS computes click-burst state natively (1=single, 2=double,
+                // 3=triple, …); read it straight off the event rather than
+                // re-deriving timing ourselves (GILB-63).
+                click_count: event
+                    .get_integer_value_field(EventField::MOUSE_EVENT_CLICK_STATE)
+                    .max(1) as u32,
+                modifiers,
             }
         }
         CGEventType::ScrollWheel => {

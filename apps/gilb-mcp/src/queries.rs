@@ -218,8 +218,14 @@ pub struct ActionRow {
     pub element_role: Option<String>,
     pub element_name: Option<String>,
     pub element_value: Option<String>,
+    /// AX identifier of the element (`accessibilityIdentifier`), when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub element_id: Option<String>,
     pub text_content: Option<String>,
     pub password_flag: bool,
+    /// Clipboard rows only: the operation ("copy" for now).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clipboard_op: Option<String>,
     pub extra: Option<serde_json::Value>,
 }
 
@@ -239,8 +245,10 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
         element_role: r.try_get("element_role").ok(),
         element_name: r.try_get("element_name").ok(),
         element_value: r.try_get("element_value").ok(),
+        element_id: r.try_get("element_id").ok(),
         text_content: r.try_get("text_content").ok(),
         password_flag: pwd != 0,
+        clipboard_op: r.try_get("clipboard_op").ok(),
         extra,
     }
 }
@@ -248,9 +256,14 @@ fn row_to_action(r: sqlx::sqlite::SqliteRow) -> ActionRow {
 /// SQL fragment that masks `element_value` and `text_content` when
 /// `password_flag = 1`. The masking happens column-side, so even ill-behaved
 /// callers can't read the underlying text.
+///
+/// `content_hash` is deliberately NOT selected: it's sha256 of the
+/// pre-redaction clipboard text, so short/guessable secrets would be
+/// dictionary-attackable through it. It exists for server-side copy↔paste
+/// linking, not for local reads.
 const ACTION_COLUMNS: &str = r#"
     id, session_id, captured_at, kind, app_bundle_id, app_name, window_title, browser_url,
-    element_role, element_name,
+    element_role, element_name, element_id, clipboard_op,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE element_value END AS element_value,
     CASE WHEN password_flag = 1 THEN '[masked]' ELSE text_content  END AS text_content,
     password_flag, extra_json

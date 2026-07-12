@@ -21,10 +21,6 @@ const MODELS_DIR_NAME: &str = "models";
 /// enables on-device meeting transcription.
 pub const TRANSCRIBE_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
-/// Default cadence for the analyzer's incremental upload when the server
-/// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
-pub const DEFAULT_ANALYZE_INTERVAL_SECS: u64 = 3600;
-
 /// Toggles controlled by `CAPTURE_*` env vars or the future config file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordingSettings {
@@ -36,6 +32,10 @@ pub struct RecordingSettings {
     pub capture_clipboard: bool,
     /// Persist tree snapshots. Default: enabled.
     pub capture_tree_snapshots: bool,
+    /// Sample screenshots on focus boundaries (GILB-80). Opt-in — **default
+    /// disabled**: visual capture is the heaviest PII modality and must be
+    /// consciously enabled.
+    pub capture_screenshots: bool,
     /// Seconds the pre-record countdown popup fills before auto-arming.
     /// Default: 5.
     pub countdown_seconds: u32,
@@ -51,6 +51,7 @@ impl Default for RecordingSettings {
             capture_mouse_move: false,
             capture_clipboard: true,
             capture_tree_snapshots: true,
+            capture_screenshots: false,
             countdown_seconds: DEFAULT_COUNTDOWN_SECONDS,
         }
     }
@@ -71,6 +72,9 @@ impl RecordingSettings {
         }
         if let Some(v) = env_bool("CAPTURE_TREE_SNAPSHOTS") {
             s.capture_tree_snapshots = v;
+        }
+        if let Some(v) = env_bool("CAPTURE_SCREENSHOTS") {
+            s.capture_screenshots = v;
         }
         if let Some(v) = std::env::var("GILB_COUNTDOWN_SECONDS")
             .ok()
@@ -167,10 +171,13 @@ pub fn transcribe_model_path() -> Result<PathBuf> {
     Ok(models_dir()?.join(TRANSCRIBE_MODEL_FILE))
 }
 
-/// Enterprise credentials written by the recorder's auth flow and read by the
-/// analyzer ("Shannon") to know where to push and how to authenticate. Stored
-/// at `$HOME/.gilb/credentials.json`. Its presence is also the gate that
-/// activates the analyzer — absent means Tier-1 (local-only, nothing uploaded).
+/// gilb-web credentials written by the recorder's auth flow (the
+/// `gilb://auth/callback` deep link) and read by the Engine to run the
+/// background **shipper** (`gilb-shipper`), which drains the local buffer to
+/// `POST /api/v1/ingest`. Stored at `$HOME/.gilb/credentials.json`. Its
+/// presence at Engine open — or a sign-in during the session — is what
+/// activates shipping; absent means local-only, nothing leaves the device.
+/// The shipping cadence is fixed client-side (60s; see `gilb-engine`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
     /// Base URL of the gilb-web instance to push to.
@@ -181,19 +188,6 @@ pub struct Credentials {
     /// token; this is only for local display/logs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub employee: Option<String>,
-    /// Server-controlled cadence for the analyzer's incremental upload, in
-    /// seconds. Delivered with credentials so the cadence is tuned from
-    /// gilb-web; absent ⇒ [`DEFAULT_ANALYZE_INTERVAL_SECS`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analyze_interval_secs: Option<u64>,
-}
-
-impl Credentials {
-    /// Effective upload cadence: server value, or the hourly default.
-    pub fn interval_secs(&self) -> u64 {
-        self.analyze_interval_secs
-            .unwrap_or(DEFAULT_ANALYZE_INTERVAL_SECS)
-    }
 }
 
 /// Resolve `$HOME/.gilb/credentials.json`.
@@ -287,66 +281,6 @@ pub fn clear_credentials() -> Result<()> {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e).with_context(|| format!("failed to remove {}", path.display())),
-    }
-}
-
-/// When an analyzer job fires.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Trigger {
-    /// Run on a rolling window every `secs` seconds.
-    Interval { secs: u64 },
-    /// Run once per finished meeting (event-driven).
-    MeetingEnd,
-}
-
-/// One analysis job served by gilb-web: a prompt, when to run it, and where to
-/// post the findings. The recorder runs `name`'s prompt as `claude -p` over
-/// gilb-mcp and forwards what it emits to `post_to`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Job {
-    /// Stable id, e.g. `"therblig-finder"` / `"meeting-facts"`.
-    pub name: String,
-    /// Emit-only prompt body (the recorder appends the window/params trigger).
-    pub prompt: String,
-    pub trigger: Trigger,
-    /// gilb-web endpoint findings are POSTed to (e.g. `/api/v1/therbligs`).
-    pub post_to: String,
-}
-
-impl Job {
-    /// Cadence for an interval job; hourly default otherwise.
-    pub fn interval_secs(&self) -> u64 {
-        match self.trigger {
-            Trigger::Interval { secs } => secs,
-            _ => DEFAULT_ANALYZE_INTERVAL_SECS,
-        }
-    }
-}
-
-/// Server-delivered analyzer configuration fetched from gilb-web
-/// (`GET /api/v1/analyzer/config`) by the analyzer ("Shannon").
-///
-/// **Deliberately not persisted.** Prompts are private, so the config is never
-/// written to the filesystem — it lives only in process memory for the lifetime
-/// of a run (the daemon keeps the last good copy in-memory across ticks and uses
-/// `etag` for a conditional refresh). `version`/`jobs` mirror the wire body;
-/// `etag` is the cache validator echoed back as `If-None-Match`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AnalyzerConfig {
-    /// Monotonic server version — logged next to each produced finding so we
-    /// know which config generation made it.
-    pub version: i64,
-    /// The analysis jobs to run (prompt + trigger + destination each).
-    pub jobs: Vec<Job>,
-    /// ETag of the last response, sent back as `If-None-Match` to get a cheap
-    /// `304 Not Modified` when the config is unchanged.
-    pub etag: Option<String>,
-}
-
-impl AnalyzerConfig {
-    /// Look up a job by name (e.g. `"therblig-finder"`).
-    pub fn job(&self, name: &str) -> Option<&Job> {
-        self.jobs.iter().find(|j| j.name == name)
     }
 }
 
@@ -516,39 +450,5 @@ mod tests {
         assert!(!leftover, "temp files must be cleaned up");
 
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn analyzer_config_job_lookup_and_interval() {
-        let cfg = AnalyzerConfig {
-            version: 1,
-            jobs: vec![
-                Job {
-                    name: "therblig-finder".to_string(),
-                    prompt: "find them".to_string(),
-                    trigger: Trigger::Interval { secs: 900 },
-                    post_to: "/api/v1/therbligs".to_string(),
-                },
-                Job {
-                    name: "meeting-facts".to_string(),
-                    prompt: "extract".to_string(),
-                    trigger: Trigger::MeetingEnd,
-                    post_to: "/api/v1/meeting_facts".to_string(),
-                },
-            ],
-            etag: None,
-        };
-
-        let finder = cfg.job("therblig-finder").unwrap();
-        assert_eq!(finder.prompt, "find them");
-        assert_eq!(finder.interval_secs(), 900);
-        assert_eq!(finder.post_to, "/api/v1/therbligs");
-
-        // MeetingEnd has no interval → hourly default.
-        assert_eq!(
-            cfg.job("meeting-facts").unwrap().interval_secs(),
-            DEFAULT_ANALYZE_INTERVAL_SECS
-        );
-        assert!(cfg.job("nope").is_none());
     }
 }

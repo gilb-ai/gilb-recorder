@@ -105,6 +105,8 @@ impl CapturePlatform for WindowsPlatform {
             focus_provider: Box::new(WindowsFocusProvider),
             element_resolver: Box::new(uia_worker),
             snapshot_tx,
+            // Windows screenshot capture not implemented (stub backend).
+            screenshot_tx: None,
         };
 
         // Shutdown choreography:

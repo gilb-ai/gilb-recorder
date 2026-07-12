@@ -23,11 +23,12 @@
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use gilb_config::RecordingSettings;
-use gilb_core::{Action, ActionKind, AppInfo, ElementContext, SessionId, WriterMessage};
+use gilb_core::{Action, ActionKind, AppInfo, ElementContext, Modifiers, SessionId, WriterMessage};
 use gilb_events::{EventBus, HealthEvent};
 
 use crate::events::{ClipboardChange, MouseButton, RawEvent};
@@ -39,6 +40,11 @@ use crate::{ElementResolver, FocusProvider};
 
 /// How long we wait between drop-stat publishes on the health bus.
 const DROP_REPORT_INTERVAL: Duration = Duration::from_secs(1);
+
+/// Cap on stored clipboard text. Bounds the largest possible `actions` row so
+/// no single row can exceed the shipper's byte budget / the web ingest 4MB
+/// body cap (a >cap row would be a permanent 413 → dead-letter).
+const CLIPBOARD_TEXT_MAX_BYTES: usize = 64 * 1024;
 
 pub struct Normalizer {
     pub session_id: SessionId,
@@ -55,6 +61,10 @@ pub struct Normalizer {
     /// We `try_send` on focus change (lossy: a backed-up worker drops
     /// the hop rather than parking the normalizer task).
     pub snapshot_tx: Option<mpsc::Sender<AppInfo>>,
+    /// `Some` when `settings.capture_screenshots` is enabled — the platform
+    /// wires this to the screenshot worker. Fed by the [`ScreenshotCadence`]
+    /// on boundaries; lossy `try_send` so a busy grabber never parks us.
+    pub screenshot_tx: Option<mpsc::Sender<crate::screenshot::ScreenshotRequest>>,
 }
 
 impl Normalizer {
@@ -77,6 +87,16 @@ impl Normalizer {
 
         let mut drops_since_report: u64 = 0;
         let mut last_drop_report = Instant::now();
+        // Idle/alive lifecycle tracker — produces `system` actions the server
+        // segments cases/sessions on (GILB-77). macOS lock/unlock/sleep/wake
+        // signals come from platform/macos/session.rs (later).
+        let mut idle = crate::idle::IdleTracker::new(Instant::now());
+
+        // Screenshot sampling (GILB-80): boundary-triggered cadence + a local
+        // idle flag (screenshots are suppressed while idle). Inert unless
+        // `screenshot_tx` is wired (capture_screenshots enabled).
+        let mut shot_cadence = crate::screenshot::ScreenshotCadence::default();
+        let mut screen_idle = false;
 
         loop {
             tokio::select! {
@@ -103,6 +123,9 @@ impl Normalizer {
                         self.flush_text(&mut buffer, FlushReason::FocusChange).await;
                         self.focus.update_app(app.clone());
                         self.emit_focus_change(app.clone()).await;
+                        // A new context appeared — schedule a screenshot after
+                        // it settles (the cadence machine gates the rest).
+                        shot_cadence.on_boundary(Instant::now());
                         if let Some(tx) = &self.snapshot_tx {
                             // Lossy: if the snapshot worker is still busy on
                             // the previous focus, we'd rather skip this hop
@@ -119,6 +142,34 @@ impl Normalizer {
                     }
                 }
                 _ = text_tick.tick() => {
+                    for sig in idle.tick(Instant::now()) {
+                        if sig == crate::idle::SystemSignal::IdleStart {
+                            screen_idle = true;
+                        }
+                        self.emit_system(sig).await;
+                    }
+                    // Screenshot cadence poll: capture iff the machine says so
+                    // and the current context is neither idle nor excluded.
+                    // The worker RE-CHECKS exclusion at grab time — this check
+                    // is only the first gate (the snapshot here can be stale).
+                    if let Some(tx) = &self.screenshot_tx {
+                        let snap = self.focus.current();
+                        let excluded = crate::password_masking::is_screenshot_excluded(&snap);
+                        if shot_cadence.poll(Instant::now(), screen_idle, excluded)
+                            && tx.try_send(crate::screenshot::ScreenshotRequest {
+                                app: snap.app.clone(),
+                                requested_at: Instant::now(),
+                            }).is_err()
+                        {
+                            // Queue full: the shot is lost but the cadence
+                            // already advanced — surface it instead of
+                            // silently under-sampling.
+                            self.event_bus.publish_health(HealthEvent::DroppedEvent {
+                                reason: "screenshot_tx_full".into(),
+                                count: 1,
+                            });
+                        }
+                    }
                     if buffer.should_timeout(Instant::now()) {
                         self.flush_text(&mut buffer, FlushReason::Timeout).await;
                     }
@@ -134,11 +185,19 @@ impl Normalizer {
                     }
                 }
                 Some(ev) = raw_rx.recv() => {
+                    screen_idle = false;
                     self.handle_raw(ev, &mut buffer, &mut drops_since_report).await;
+                    if let Some(sig) = idle.on_input(Instant::now()) {
+                        self.emit_system(sig).await;
+                    }
                 }
                 Some(change) = clip_rx.recv() => {
                     if self.settings.capture_clipboard {
+                        screen_idle = false;
                         self.handle_clipboard(change, &mut drops_since_report).await;
+                        if let Some(sig) = idle.on_input(Instant::now()) {
+                            self.emit_system(sig).await;
+                        }
                     }
                 }
                 else => break,
@@ -158,11 +217,15 @@ impl Normalizer {
         }
 
         match ev {
-            RawEvent::KeyDown { special, text } => {
+            RawEvent::KeyDown {
+                special,
+                text,
+                modifiers,
+            } => {
                 if let Some(special) = special {
                     if special.is_navigation() {
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
-                        self.emit_key(special, &snap, drops).await;
+                        self.emit_key(special, modifiers, &snap, drops).await;
                         return;
                     }
                     if matches!(special, SpecialKey::Backspace | SpecialKey::Delete) {
@@ -171,7 +234,7 @@ impl Normalizer {
                         // For Phase 1 we just flush, which over-counts edits
                         // but never leaks more than typed.
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
-                        self.emit_key(special, &snap, drops).await;
+                        self.emit_key(special, modifiers, &snap, drops).await;
                         return;
                     }
                 }
@@ -185,9 +248,16 @@ impl Normalizer {
                     || snap.focused_secure;
                 buffer.push(&s, masked);
             }
-            RawEvent::MouseDown { button, x, y } => {
+            RawEvent::MouseDown {
+                button,
+                x,
+                y,
+                click_count,
+                modifiers,
+            } => {
                 self.flush_text(buffer, FlushReason::Click).await;
-                self.emit_click(button, x, y, &snap, drops).await;
+                self.emit_click(button, x, y, click_count, modifiers, &snap, drops)
+                    .await;
             }
             RawEvent::Scroll { delta_x, delta_y } => {
                 self.emit_scroll(delta_x, delta_y, &snap, drops).await;
@@ -232,15 +302,20 @@ impl Normalizer {
                 "flush_reason": format!("{:?}", flushed.reason),
                 "char_count": flushed.text.chars().count(),
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_blocking(action).await;
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn emit_click(
         &self,
         button: MouseButton,
         x: f64,
         y: f64,
+        click_count: u32,
+        modifiers: Modifiers,
         snap: &FocusSnapshot,
         drops: &mut u64,
     ) {
@@ -277,12 +352,22 @@ impl Normalizer {
                 "button": format!("{:?}", button),
                 "x": x,
                 "y": y,
+                "click_count": click_count,
+                "modifiers": modifiers.0,
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
 
-    async fn emit_key(&self, special: SpecialKey, snap: &FocusSnapshot, drops: &mut u64) {
+    async fn emit_key(
+        &self,
+        special: SpecialKey,
+        modifiers: Modifiers,
+        snap: &FocusSnapshot,
+        drops: &mut u64,
+    ) {
         let action = Action {
             session_id: self.session_id,
             captured_at: Utc::now(),
@@ -297,7 +382,10 @@ impl Normalizer {
             tree_snapshot_id: None,
             extra_json: Some(serde_json::json!({
                 "key": format!("{:?}", special),
+                "modifiers": modifiers.0,
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
@@ -316,6 +404,8 @@ impl Normalizer {
                 "delta_x": dx,
                 "delta_y": dy,
             })),
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_lossy(action, drops);
     }
@@ -331,6 +421,8 @@ impl Normalizer {
             password_flag: false,
             tree_snapshot_id: None,
             extra_json: None,
+            clipboard_op: None,
+            content_hash: None,
         };
         self.emit_blocking(action).await;
     }
@@ -342,8 +434,18 @@ impl Normalizer {
                 return;
             }
         }
+        // Hash the RAW clipboard text BEFORE redaction so copy↔paste linking
+        // survives `redact_pii` on the shipped `text_content`. Step-1 op is
+        // always "copy" (NSPasteboard can't distinguish copy/cut).
+        let content_hash = change.text.as_deref().and_then(clipboard_content_hash);
+        // Cap the stored text: one copy of a huge CSV/log would otherwise
+        // produce a row larger than the ingest body cap — a permanent 413
+        // the shipper can only dead-letter. 64 KiB keeps every realistic
+        // "what did they copy" answer; the hash above still covers the full
+        // original for copy↔paste linking. Truncate on a char boundary.
         let text = change
             .text
+            .map(truncate_clipboard_text)
             .map(|t| redact_pii(&t))
             .filter(|t| !t.is_empty());
         let action = Action {
@@ -358,6 +460,8 @@ impl Normalizer {
             extra_json: Some(serde_json::json!({
                 "change_count": change.change_count,
             })),
+            clipboard_op: Some("copy".to_string()),
+            content_hash,
         };
         self.emit_lossy(action, drops);
     }
@@ -378,6 +482,27 @@ impl Normalizer {
         }
     }
 
+    /// Persist a lifecycle `system` action (idle/alive now; lock/unlock/recording
+    /// arrive from the macOS session source later). Carries the foreground app so
+    /// the server can correlate; no text/element PII.
+    async fn emit_system(&self, signal: crate::idle::SystemSignal) {
+        let snap = self.focus.current();
+        let action = Action {
+            session_id: self.session_id,
+            captured_at: Utc::now(),
+            kind: ActionKind::System,
+            app: snap.app.clone(),
+            element: ElementContext::default(),
+            text_content: None,
+            password_flag: false,
+            tree_snapshot_id: None,
+            extra_json: Some(serde_json::json!({ "system": signal.as_str() })),
+            clipboard_op: None,
+            content_hash: None,
+        };
+        self.emit_blocking(action).await;
+    }
+
     fn emit_lossy(&self, action: Action, drops: &mut u64) {
         Self::log_emit(&action);
         if self
@@ -387,5 +512,84 @@ impl Normalizer {
         {
             *drops += 1;
         }
+    }
+}
+
+/// Cap stored clipboard text at [`CLIPBOARD_TEXT_MAX_BYTES`], cutting on a
+/// char boundary and appending a marker with the dropped byte count. Applied
+/// BEFORE `redact_pii` (the hash of the full original is taken separately).
+fn truncate_clipboard_text(t: String) -> String {
+    if t.len() <= CLIPBOARD_TEXT_MAX_BYTES {
+        return t;
+    }
+    let mut end = CLIPBOARD_TEXT_MAX_BYTES;
+    while !t.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…[truncated {} bytes]", &t[..end], t.len() - end)
+}
+
+/// sha256 (hex) of a raw clipboard string, or `None` for empty input.
+///
+/// Computed from the PRE-redaction bytes so copy↔paste linking via
+/// `content_hash` survives `redact_pii` on the shipped `text_content`.
+fn clipboard_content_hash(text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut hasher = Sha256::new();
+    hasher.update(text.as_bytes());
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clipboard_content_hash_is_deterministic_and_skips_empty() {
+        // sha256("hello") == 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        assert_eq!(
+            clipboard_content_hash("hello").as_deref(),
+            Some("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+        );
+        // Empty input → None (no hash, no linking value).
+        assert_eq!(clipboard_content_hash(""), None);
+        // Same raw text → same hash (stable across calls; redaction of the
+        // shipped text_content does not affect it).
+        assert_eq!(
+            clipboard_content_hash("invoice-123"),
+            clipboard_content_hash("invoice-123")
+        );
+        // Different text → different hash.
+        assert_ne!(
+            clipboard_content_hash("invoice-123"),
+            clipboard_content_hash("invoice-456")
+        );
+    }
+
+    #[test]
+    fn clipboard_text_is_capped_on_char_boundary() {
+        // Under the cap → untouched.
+        assert_eq!(truncate_clipboard_text("short".into()), "short");
+        // Over the cap → truncated with a marker; total stays bounded.
+        let big = "x".repeat(CLIPBOARD_TEXT_MAX_BYTES + 500);
+        let out = truncate_clipboard_text(big);
+        assert!(out.len() < CLIPBOARD_TEXT_MAX_BYTES + 64);
+        assert!(out.ends_with("…[truncated 500 bytes]"));
+        // Multi-byte char straddling the cap → cut moves back to a boundary
+        // (no panic, valid UTF-8).
+        let mut s = "a".repeat(CLIPBOARD_TEXT_MAX_BYTES - 1);
+        s.push('é'); // 2 bytes: spans the cap boundary
+        s.push_str(&"b".repeat(100));
+        let out = truncate_clipboard_text(s);
+        assert!(out.starts_with(&"a".repeat(CLIPBOARD_TEXT_MAX_BYTES - 1)));
+        assert!(out.contains("[truncated"));
     }
 }
