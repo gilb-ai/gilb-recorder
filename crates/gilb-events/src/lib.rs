@@ -24,11 +24,22 @@ pub enum PermissionEvent {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HealthEvent {
     Started,
-    Stopped { reason: String },
-    DroppedEvent { reason: String, count: u64 },
-    AxQueryTimeout { ms: u64 },
+    Stopped {
+        reason: String,
+    },
+    DroppedEvent {
+        reason: String,
+        count: u64,
+    },
+    AxQueryTimeout {
+        ms: u64,
+    },
     SleepDetected,
     WakeDetected,
+    /// The shipper got 401/403 from gilb-web — the token is invalid or
+    /// revoked. Shipping is stalled (nothing leaves the device) until the
+    /// user re-onboards; the UI should surface a re-sign-in prompt.
+    ShipperAuthFailed,
 }
 
 /// Outcome of the pre-record countdown popup. `Armed` means the user let the

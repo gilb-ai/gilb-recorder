@@ -7,6 +7,7 @@ publish.workspace = true
 
 [dependencies]
 gilb-db = { workspace = true }
+gilb-events = { workspace = true }
 sqlx = { workspace = true }
 reqwest = { workspace = true, features = ["multipart"] }
 tokio = { workspace = true }

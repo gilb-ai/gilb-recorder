@@ -25,7 +25,7 @@ use gilb_config::{load_credentials, RecordingSettings};
 use gilb_core::{SessionId, WriterMessage};
 use gilb_db::{actions, open_db, screenshots, sessions, tree_snapshots, write_batch, Db};
 use gilb_events::EventBus;
-use gilb_shipper::{spawn_loop, HttpDestination, HttpScreenshotDestination, ShipConfig};
+use gilb_shipper::{spawn_loop, HttpDestination, HttpScreenshotDestination, ShipperOpts};
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
 
@@ -48,6 +48,10 @@ const SHIP_INTERVAL: Duration = Duration::from_secs(60);
 /// Max actions per shipping pass — absorbs a burst, well under the web
 /// endpoint's 4MB body cap (GILB-96/97).
 const SHIP_BATCH: i64 = 2000;
+/// Local-maintenance cadence (unshipped screenshot cap + orphan file sweep).
+/// Runs regardless of onboarding — it's what bounds disk growth on a device
+/// that never ships.
+const JANITOR_INTERVAL: Duration = Duration::from_secs(3600);
 
 #[derive(Clone)]
 pub struct Engine {
@@ -62,14 +66,19 @@ struct EngineInner {
     /// Shutdown signal for the background shipper (GILB-96). `None` when the
     /// device isn't onboarded (no credentials) → no shipper running.
     shipper_shutdown: Option<oneshot::Sender<()>>,
+    /// Shutdown for the always-on local janitor (unshipped cap + orphan sweep).
+    janitor_shutdown: Option<oneshot::Sender<()>>,
 }
 
 impl Drop for EngineInner {
     fn drop(&mut self) {
-        // Signal the shipper loop to exit on engine shutdown. (The oneshot
-        // receiver also resolves if this sender is merely dropped, so dropping
-        // the Engine stops the loop either way.)
+        // Signal the background loops to exit on engine shutdown. (The oneshot
+        // receivers also resolve if the senders are merely dropped, so dropping
+        // the Engine stops the loops either way.)
         if let Some(tx) = self.shipper_shutdown.take() {
+            let _ = tx.send(());
+        }
+        if let Some(tx) = self.janitor_shutdown.take() {
             let _ = tx.send(());
         }
     }
@@ -103,8 +112,8 @@ impl Engine {
         // Credentials are read once, here. A device that onboards *after* the
         // Engine is open won't ship until the next app start — acceptable while
         // onboarding is a first-run step; revisit if login moves in-session.
-        let shipper_shutdown = match load_credentials().ok().flatten() {
-            Some(creds) => {
+        let shipper_shutdown = match load_credentials() {
+            Ok(Some(creds)) => {
                 let dest: Arc<dyn gilb_shipper::Destination> = Arc::new(HttpDestination::new(
                     creds.gilb_web_url.clone(),
                     creds.token.clone(),
@@ -122,14 +131,34 @@ impl Engine {
                     db.clone(),
                     dest,
                     shot_dest,
-                    SHIP_INTERVAL,
-                    SHIP_BATCH,
-                    ShipConfig::default(),
+                    ShipperOpts {
+                        interval: SHIP_INTERVAL,
+                        batch: SHIP_BATCH,
+                        event_bus: Some(event_bus.clone()),
+                        ..Default::default()
+                    },
                     rx,
                 );
                 Some(tx)
             }
-            None => None,
+            Ok(None) => None,
+            Err(err) => {
+                // A corrupted credentials file is NOT "not onboarded" — say so,
+                // or a broken shipper looks identical to a fresh install.
+                warn!(?err, "failed to load credentials; shipper NOT started");
+                None
+            }
+        };
+        // The janitor runs regardless of onboarding: it caps unshipped
+        // screenshots and sweeps orphaned JPEGs — the only bound on disk
+        // growth for a device that never ships.
+        let janitor_shutdown = {
+            let (tx, rx) = oneshot::channel();
+            let dir = gilb_config::data_dir()
+                .map(|d| d.join("screenshots"))
+                .unwrap_or_else(|_| std::path::PathBuf::from("screenshots"));
+            gilb_shipper::spawn_janitor(db.clone(), dir, JANITOR_INTERVAL, rx);
+            Some(tx)
         };
         Ok(Self {
             inner: Arc::new(EngineInner {
@@ -138,6 +167,7 @@ impl Engine {
                 platform,
                 state: Mutex::new(None),
                 shipper_shutdown,
+                janitor_shutdown,
             }),
         })
     }
