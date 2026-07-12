@@ -66,5 +66,11 @@ jobs:
       # Compile (don't test) the Tauri crates so PRs catch build breakage —
       # release.yml only runs on tags, which is too late. `cargo check` skips
       # the frontend/bundler, which is all we need for type/link coverage.
+      # tauri-build still validates that bundle.externalBin files exist, so
+      # stub the gilb-mcp sidecar instead of paying for a release build of it.
       - name: Check Tauri crates
-        run: cargo check -p gilb-app-tauri -p gilb-shell-tauri
+        run: |
+          host=$(rustc -vV | sed -n 's|host: ||p')
+          mkdir -p apps/gilb-app-tauri/src-tauri/binaries
+          touch "apps/gilb-app-tauri/src-tauri/binaries/gilb-mcp-$host"
+          cargo check -p gilb-app-tauri -p gilb-shell-tauri
