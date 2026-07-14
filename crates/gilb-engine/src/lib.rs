@@ -155,6 +155,21 @@ impl Engine {
             Arc::new(HttpDestination::new(gilb_web_url.clone(), token.clone()));
         let shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination> =
             Arc::new(HttpScreenshotDestination::new(gilb_web_url, token));
+        self.start_shipper_with(dest, shot_dest);
+    }
+
+    /// Start (or replace) the background shipper with caller-supplied
+    /// destinations. This is the auth-agnostic entry point: a host whose
+    /// server uses a different token scheme (e.g. short-lived JWTs behind a
+    /// refresh flow) builds its destinations around its own
+    /// `gilb_shipper::TokenProvider` and still gets the engine-managed
+    /// lifecycle ([`Engine::stop_shipper`], replace-on-re-sign-in, shutdown
+    /// on drop).
+    pub fn start_shipper_with(
+        &self,
+        dest: Arc<dyn gilb_shipper::Destination>,
+        shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination>,
+    ) {
         let (tx, rx) = oneshot::channel();
         // The JoinHandle is intentionally dropped: the loop is detached and
         // stopped via `tx` on Engine drop / stop_shipper. A batch in flight at

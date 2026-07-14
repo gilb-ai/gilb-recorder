@@ -126,34 +126,76 @@ pub trait Destination: Send + Sync {
     async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError>;
 }
 
-/// POSTs JSONL batches to gilb-web `/api/v1/ingest` with a Bearer ApiToken.
+/// Supplies the Bearer token for each send — the seam that keeps the HTTP
+/// destinations agnostic of the server's auth scheme. gilb-web uses a static
+/// long-lived ApiToken ([`StaticToken`]); a host with short-lived tokens
+/// (e.g. a 1-hour JWT behind a refresh flow) implements this to return a
+/// currently-valid token per request.
+#[async_trait]
+pub trait TokenProvider: Send + Sync {
+    /// Return a token valid right now. Classify failures like a send:
+    /// no credentials / refresh rejected → [`SendError::Auth`]; a network
+    /// failure while refreshing → [`SendError::Transient`].
+    async fn bearer_token(&self) -> std::result::Result<String, SendError>;
+}
+
+/// The static long-lived token gilb-web issues at onboarding.
+pub struct StaticToken(pub String);
+
+#[async_trait]
+impl TokenProvider for StaticToken {
+    async fn bearer_token(&self) -> std::result::Result<String, SendError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// POSTs JSONL batches to `{base}/api/v1/ingest` with a Bearer token from a
+/// [`TokenProvider`], fetched fresh per request.
 pub struct HttpDestination {
     client: reqwest::Client,
     ingest_url: String,
-    token: String,
+    token: Arc<dyn TokenProvider>,
+    /// Extra headers sent with every request (e.g. `X-App-Version`).
+    headers: Vec<(String, String)>,
 }
 
 impl HttpDestination {
     pub fn new(gilb_web_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_provider(gilb_web_url, Arc::new(StaticToken(token.into())))
+    }
+
+    pub fn with_provider(gilb_web_url: impl Into<String>, token: Arc<dyn TokenProvider>) -> Self {
         Self {
             client: http_client(),
             ingest_url: format!(
                 "{}/api/v1/ingest",
                 gilb_web_url.into().trim_end_matches('/')
             ),
-            token: token.into(),
+            token,
+            headers: Vec::new(),
         }
+    }
+
+    /// Add a header sent with every request.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 
 #[async_trait]
 impl Destination for HttpDestination {
     async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError> {
-        let resp = self
+        let token = self.token.bearer_token().await?;
+        let mut req = self
             .client
             .post(&self.ingest_url)
-            .bearer_auth(&self.token)
-            .header("Content-Type", "application/x-jsonlines")
+            .bearer_auth(&token)
+            .header("Content-Type", "application/x-jsonlines");
+        for (name, value) in &self.headers {
+            req = req.header(name, value);
+        }
+        let resp = req
             .body(jsonl_body.to_string())
             .send()
             .await
@@ -641,23 +683,37 @@ pub trait ScreenshotDestination: Send + Sync {
     ) -> std::result::Result<(), SendError>;
 }
 
-/// Multipart POST to gilb-web `/api/v1/ingest/screenshots` with a Bearer token.
+/// Multipart POST to `{base}/api/v1/ingest/screenshots` with a Bearer token
+/// from a [`TokenProvider`], fetched fresh per request.
 pub struct HttpScreenshotDestination {
     client: reqwest::Client,
     ingest_url: String,
-    token: String,
+    token: Arc<dyn TokenProvider>,
+    /// Extra headers sent with every request (e.g. `X-App-Version`).
+    headers: Vec<(String, String)>,
 }
 
 impl HttpScreenshotDestination {
     pub fn new(gilb_web_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_provider(gilb_web_url, Arc::new(StaticToken(token.into())))
+    }
+
+    pub fn with_provider(gilb_web_url: impl Into<String>, token: Arc<dyn TokenProvider>) -> Self {
         Self {
             client: http_client(),
             ingest_url: format!(
                 "{}/api/v1/ingest/screenshots",
                 gilb_web_url.into().trim_end_matches('/')
             ),
-            token: token.into(),
+            token,
+            headers: Vec::new(),
         }
+    }
+
+    /// Add a header sent with every request.
+    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.push((name.into(), value.into()));
+        self
     }
 }
 
@@ -678,10 +734,12 @@ impl ScreenshotDestination for HttpScreenshotDestination {
         let form = reqwest::multipart::Form::new()
             .text("meta", meta_json.to_string())
             .part("image", part);
-        let resp = self
-            .client
-            .post(&self.ingest_url)
-            .bearer_auth(&self.token)
+        let token = self.token.bearer_token().await?;
+        let mut req = self.client.post(&self.ingest_url).bearer_auth(&token);
+        for (name, value) in &self.headers {
+            req = req.header(name, value);
+        }
+        let resp = req
             .multipart(form)
             .send()
             .await
@@ -1036,6 +1094,31 @@ mod tests {
     use std::sync::Mutex;
 
     use uuid::Uuid;
+
+    /// A failing [`TokenProvider`] short-circuits the send with its own
+    /// classification — no HTTP request is attempted (the URL below isn't
+    /// routable, so reaching the network would surface as Transient instead).
+    #[tokio::test]
+    async fn token_provider_failure_classifies_before_network() {
+        struct NoCreds;
+        #[async_trait]
+        impl TokenProvider for NoCreds {
+            async fn bearer_token(&self) -> std::result::Result<String, SendError> {
+                Err(SendError::Auth(anyhow::anyhow!("not signed in")))
+            }
+        }
+        let dest = HttpDestination::with_provider("http://invalid.invalid", Arc::new(NoCreds));
+        match dest.send("{}\n").await {
+            Err(SendError::Auth(_)) => {}
+            other => panic!("expected Auth error from the provider, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn static_token_provider_returns_token() {
+        let tok = StaticToken("gilb_abc".into()).bearer_token().await.unwrap();
+        assert_eq!(tok, "gilb_abc");
+    }
 
     /// Mock destination that fails the first N sends, then succeeds. Records
     /// every body it received (so tests can assert call count + JSONL shape).
