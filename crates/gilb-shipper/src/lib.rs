@@ -90,8 +90,10 @@ impl std::error::Error for AuthFailed {}
 
 /// Classify an HTTP response status. 2xx is handled by callers; here:
 /// 5xx/408/429 → [`SendError::Transient`], 401/403 → [`SendError::Auth`],
-/// any other 4xx → [`SendError::Permanent`].
-fn classify_status(status: reqwest::StatusCode, err: anyhow::Error) -> SendError {
+/// any other 4xx → [`SendError::Permanent`]. Public so a host implementing
+/// its own [`Destination`] keeps the same taxonomy [`send_with_retry`] and
+/// the dead-letter logic assume.
+pub fn classify_status(status: reqwest::StatusCode, err: anyhow::Error) -> SendError {
     use reqwest::StatusCode as S;
     if status.is_server_error() || status == S::REQUEST_TIMEOUT || status == S::TOO_MANY_REQUESTS {
         SendError::Transient(err)
@@ -136,7 +138,26 @@ pub trait TokenProvider: Send + Sync {
     /// Return a token valid right now. Classify failures like a send:
     /// no credentials / refresh rejected → [`SendError::Auth`]; a network
     /// failure while refreshing → [`SendError::Transient`].
+    ///
+    /// Called once per HTTP request — that is per body-split chunk, per
+    /// screenshot, and per retry attempt (so a token refreshed mid-backoff is
+    /// picked up). Implementations MUST be cheap on the hot path: cache the
+    /// token and refresh only when it nears expiry, or a busy tick will
+    /// hammer the refresh endpoint dozens of times. The destinations bound
+    /// each call with the HTTP timeout, so a hung implementation degrades to
+    /// a [`SendError::Transient`] instead of wedging the shipper loop.
     async fn bearer_token(&self) -> std::result::Result<String, SendError>;
+}
+
+/// Bound a [`TokenProvider`] call by [`HTTP_TIMEOUT`] — the loop's liveness
+/// invariant (see [`http_client`]) must hold for the token fetch too, since a
+/// provider may do network I/O (refresh) with no timeout of its own.
+async fn bearer_token_bounded(
+    provider: &dyn TokenProvider,
+) -> std::result::Result<String, SendError> {
+    tokio::time::timeout(HTTP_TIMEOUT, provider.bearer_token())
+        .await
+        .map_err(|_| SendError::Transient(anyhow::anyhow!("token provider timed out")))?
 }
 
 /// The static long-lived token gilb-web issues at onboarding.
@@ -149,6 +170,25 @@ impl TokenProvider for StaticToken {
     }
 }
 
+/// Parse a static header pair at construction time. Panicking here is
+/// deliberate: the pairs are host build config, and an invalid one deferred
+/// to `.send()` would classify as Transient — retried forever for an error
+/// that can never succeed.
+fn parse_header(
+    name: impl AsRef<str>,
+    value: impl AsRef<str>,
+) -> (reqwest::header::HeaderName, reqwest::header::HeaderValue) {
+    let name: reqwest::header::HeaderName = name
+        .as_ref()
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid header name {:?}: {e}", name.as_ref()));
+    let value: reqwest::header::HeaderValue = value
+        .as_ref()
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid header value for {name}: {e}"));
+    (name, value)
+}
+
 /// POSTs JSONL batches to `{base}/api/v1/ingest` with a Bearer token from a
 /// [`TokenProvider`], fetched fresh per request.
 pub struct HttpDestination {
@@ -156,7 +196,7 @@ pub struct HttpDestination {
     ingest_url: String,
     token: Arc<dyn TokenProvider>,
     /// Extra headers sent with every request (e.g. `X-App-Version`).
-    headers: Vec<(String, String)>,
+    headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
 }
 
 impl HttpDestination {
@@ -176,9 +216,11 @@ impl HttpDestination {
         }
     }
 
-    /// Add a header sent with every request.
-    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.push((name.into(), value.into()));
+    /// Add a header sent with every request. Appends (does not replace) —
+    /// don't pass `Authorization`/`Content-Type`, which the destination sets
+    /// itself. Panics on an invalid name/value (host build config error).
+    pub fn header(mut self, name: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.headers.push(parse_header(name, value));
         self
     }
 }
@@ -186,7 +228,7 @@ impl HttpDestination {
 #[async_trait]
 impl Destination for HttpDestination {
     async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError> {
-        let token = self.token.bearer_token().await?;
+        let token = bearer_token_bounded(self.token.as_ref()).await?;
         let mut req = self
             .client
             .post(&self.ingest_url)
@@ -578,6 +620,30 @@ pub fn is_auth_error(err: &anyhow::Error) -> bool {
     err.root_cause().downcast_ref::<AuthFailed>().is_some()
 }
 
+/// One pass's contribution to the auth latch in [`spawn_loop`]: shipping
+/// anything proves the token works; an auth failure starts/continues an
+/// outage; an empty queue or a non-auth failure says nothing about the token.
+enum PassOutcome {
+    Neutral,
+    Shipped,
+    AuthFailed(anyhow::Error),
+}
+
+fn pass_outcome(res: Result<usize>, what: &str) -> PassOutcome {
+    match res {
+        Ok(0) => PassOutcome::Neutral,
+        Ok(n) => {
+            info!(n, what, "shipper shipped");
+            PassOutcome::Shipped
+        }
+        Err(e) if is_auth_error(&e) => PassOutcome::AuthFailed(e),
+        Err(e) => {
+            warn!(error = %e, what, "shipper pass failed; will retry next tick");
+            PassOutcome::Neutral
+        }
+    }
+}
+
 pub fn spawn_loop(
     db: Db,
     dest: Arc<dyn Destination>,
@@ -596,26 +662,6 @@ pub fn spawn_loop(
         // Rising-edge latch: publish ShipperAuthFailed once per outage, not
         // every 60s tick while the token stays bad.
         let mut auth_down = false;
-        let on_result = |res: Result<usize>, what: &str, auth_down: &mut bool| match res {
-            Ok(0) => *auth_down = false,
-            Ok(n) => {
-                *auth_down = false;
-                info!(n, what, "shipper shipped");
-            }
-            Err(e) => {
-                if is_auth_error(&e) {
-                    if !*auth_down {
-                        *auth_down = true;
-                        tracing::error!(error = %e, "shipper auth failed (401/403); shipping stalled until re-onboarding");
-                        if let Some(bus) = &opts.event_bus {
-                            bus.publish_health(gilb_events::HealthEvent::ShipperAuthFailed);
-                        }
-                    }
-                } else {
-                    warn!(error = %e, what, "shipper pass failed; will retry next tick");
-                }
-            }
-        };
         loop {
             tokio::select! {
                 biased;
@@ -624,12 +670,38 @@ pub fn spawn_loop(
                     break;
                 }
                 _ = tick.tick() => {
-                    let r = run_once(&db, dest.as_ref(), opts.batch, &opts.cfg).await;
-                    on_result(r, "events", &mut auth_down);
+                    let events = pass_outcome(
+                        run_once(&db, dest.as_ref(), opts.batch, &opts.cfg).await,
+                        "events",
+                    );
                     // Screenshots ship on the same tick via their own cursor,
                     // smaller batch (images are heavy). Independent of events.
-                    let r = run_once_screenshots(&db, shot_dest.as_ref(), opts.screenshot_batch, &opts.cfg).await;
-                    on_result(r, "screenshots", &mut auth_down);
+                    let shots = pass_outcome(
+                        run_once_screenshots(&db, shot_dest.as_ref(), opts.screenshot_batch, &opts.cfg).await,
+                        "screenshots",
+                    );
+                    // Latch update from both passes together. An empty pass is
+                    // NEUTRAL: an always-empty screenshot queue must not clear
+                    // the latch the events pass just set, or the health event
+                    // re-publishes every tick during one outage. Only a
+                    // successful ship (auth demonstrably works) clears it.
+                    let auth_failure = match (&events, &shots) {
+                        (PassOutcome::AuthFailed(e), _) | (_, PassOutcome::AuthFailed(e)) => Some(e),
+                        _ => None,
+                    };
+                    if let Some(e) = auth_failure {
+                        if !auth_down {
+                            auth_down = true;
+                            tracing::error!(error = %e, "shipper auth failed (401/403); shipping stalled until re-onboarding");
+                            if let Some(bus) = &opts.event_bus {
+                                bus.publish_health(gilb_events::HealthEvent::ShipperAuthFailed);
+                            }
+                        }
+                    } else if matches!(events, PassOutcome::Shipped)
+                        || matches!(shots, PassOutcome::Shipped)
+                    {
+                        auth_down = false;
+                    }
                 }
                 _ = prune_tick.tick() => {
                     match prune_shipped(&db, opts.retain).await {
@@ -690,7 +762,7 @@ pub struct HttpScreenshotDestination {
     ingest_url: String,
     token: Arc<dyn TokenProvider>,
     /// Extra headers sent with every request (e.g. `X-App-Version`).
-    headers: Vec<(String, String)>,
+    headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
 }
 
 impl HttpScreenshotDestination {
@@ -710,9 +782,11 @@ impl HttpScreenshotDestination {
         }
     }
 
-    /// Add a header sent with every request.
-    pub fn header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.push((name.into(), value.into()));
+    /// Add a header sent with every request. Appends (does not replace) —
+    /// don't pass `Authorization`/`Content-Type`, which the destination sets
+    /// itself. Panics on an invalid name/value (host build config error).
+    pub fn header(mut self, name: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.headers.push(parse_header(name, value));
         self
     }
 }
@@ -734,7 +808,7 @@ impl ScreenshotDestination for HttpScreenshotDestination {
         let form = reqwest::multipart::Form::new()
             .text("meta", meta_json.to_string())
             .part("image", part);
-        let token = self.token.bearer_token().await?;
+        let token = bearer_token_bounded(self.token.as_ref()).await?;
         let mut req = self.client.post(&self.ingest_url).bearer_auth(&token);
         for (name, value) in &self.headers {
             req = req.header(name, value);
@@ -1507,6 +1581,57 @@ mod tests {
         assert!(res.is_err(), "ship failure must propagate");
         // Cursor NOT advanced → row is still unshipped (retried next pass).
         assert_eq!(fetch_unshipped(&db, 10).await.unwrap().len(), 1);
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    /// Regression: an auth outage publishes ShipperAuthFailed ONCE, even
+    /// though the screenshot pass keeps returning Ok(0) (empty queue) every
+    /// tick — an empty pass is neutral and must not reset the latch.
+    #[tokio::test]
+    async fn spawn_loop_auth_latch_survives_empty_screenshot_pass() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let session_id = gilb_db::sessions::start_session(&db).await.unwrap();
+        insert_click(&db, session_id, 0).await;
+
+        let bus = gilb_events::EventBus::new();
+        let mut health = bus.subscribe_health();
+
+        let dest: Arc<dyn Destination> = Arc::new(MockDestination::fail_auth());
+        let shot_dest: Arc<dyn ScreenshotDestination> = Arc::new(MockShotDest::always_ok());
+        let (tx, rx) = oneshot::channel();
+        let handle = spawn_loop(
+            db.clone(),
+            dest,
+            shot_dest,
+            ShipperOpts {
+                interval: Duration::from_millis(20),
+                batch: 10,
+                cfg: ShipConfig {
+                    max_retries: 0,
+                    base_backoff: Duration::ZERO,
+                    ..Default::default()
+                },
+                event_bus: Some(bus.clone()),
+                ..Default::default()
+            },
+            rx,
+        );
+
+        // Run through many ticks of the same outage.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = tx.send(());
+        handle.await.unwrap();
+
+        let mut published = 0;
+        while let Ok(msg) = health.try_recv() {
+            if matches!(msg.payload, gilb_events::HealthEvent::ShipperAuthFailed) {
+                published += 1;
+            }
+        }
+        assert_eq!(published, 1, "one outage → one ShipperAuthFailed");
 
         db.close().await;
         cleanup(&path);

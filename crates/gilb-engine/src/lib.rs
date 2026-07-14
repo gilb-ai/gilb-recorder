@@ -27,6 +27,11 @@ use gilb_db::{actions, open_db, screenshots, sessions, tree_snapshots, write_bat
 use gilb_events::EventBus;
 use gilb_shipper::{spawn_loop, HttpDestination, HttpScreenshotDestination, ShipperOpts};
 
+// Hosts building their own destinations for [`Engine::start_shipper_with`]
+// need gilb-shipper's traits; re-export the crate so they don't have to carry
+// a separately-versioned direct dependency that must unify with ours.
+pub use gilb_shipper;
+
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
 
 /// Flush the writer buffer once it holds this many messages. Bounds the size
