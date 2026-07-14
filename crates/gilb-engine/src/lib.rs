@@ -27,6 +27,11 @@ use gilb_db::{actions, open_db, screenshots, sessions, tree_snapshots, write_bat
 use gilb_events::EventBus;
 use gilb_shipper::{spawn_loop, HttpDestination, HttpScreenshotDestination, ShipperOpts};
 
+// Hosts building their own destinations for [`Engine::start_shipper_with`]
+// need gilb-shipper's traits; re-export the crate so they don't have to carry
+// a separately-versioned direct dependency that must unify with ours.
+pub use gilb_shipper;
+
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
 
 /// Flush the writer buffer once it holds this many messages. Bounds the size
@@ -155,6 +160,21 @@ impl Engine {
             Arc::new(HttpDestination::new(gilb_web_url.clone(), token.clone()));
         let shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination> =
             Arc::new(HttpScreenshotDestination::new(gilb_web_url, token));
+        self.start_shipper_with(dest, shot_dest);
+    }
+
+    /// Start (or replace) the background shipper with caller-supplied
+    /// destinations. This is the auth-agnostic entry point: a host whose
+    /// server uses a different token scheme (e.g. short-lived JWTs behind a
+    /// refresh flow) builds its destinations around its own
+    /// `gilb_shipper::TokenProvider` and still gets the engine-managed
+    /// lifecycle ([`Engine::stop_shipper`], replace-on-re-sign-in, shutdown
+    /// on drop).
+    pub fn start_shipper_with(
+        &self,
+        dest: Arc<dyn gilb_shipper::Destination>,
+        shot_dest: Arc<dyn gilb_shipper::ScreenshotDestination>,
+    ) {
         let (tx, rx) = oneshot::channel();
         // The JoinHandle is intentionally dropped: the loop is detached and
         // stopped via `tx` on Engine drop / stop_shipper. A batch in flight at

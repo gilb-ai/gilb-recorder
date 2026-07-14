@@ -90,8 +90,10 @@ impl std::error::Error for AuthFailed {}
 
 /// Classify an HTTP response status. 2xx is handled by callers; here:
 /// 5xx/408/429 → [`SendError::Transient`], 401/403 → [`SendError::Auth`],
-/// any other 4xx → [`SendError::Permanent`].
-fn classify_status(status: reqwest::StatusCode, err: anyhow::Error) -> SendError {
+/// any other 4xx → [`SendError::Permanent`]. Public so a host implementing
+/// its own [`Destination`] keeps the same taxonomy [`send_with_retry`] and
+/// the dead-letter logic assume.
+pub fn classify_status(status: reqwest::StatusCode, err: anyhow::Error) -> SendError {
     use reqwest::StatusCode as S;
     if status.is_server_error() || status == S::REQUEST_TIMEOUT || status == S::TOO_MANY_REQUESTS {
         SendError::Transient(err)
@@ -126,34 +128,116 @@ pub trait Destination: Send + Sync {
     async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError>;
 }
 
-/// POSTs JSONL batches to gilb-web `/api/v1/ingest` with a Bearer ApiToken.
+/// Supplies the Bearer token for each send — the seam that keeps the HTTP
+/// destinations agnostic of the server's auth scheme. gilb-web uses a static
+/// long-lived ApiToken ([`StaticToken`]); a host with short-lived tokens
+/// (e.g. a 1-hour JWT behind a refresh flow) implements this to return a
+/// currently-valid token per request.
+#[async_trait]
+pub trait TokenProvider: Send + Sync {
+    /// Return a token valid right now. Classify failures like a send:
+    /// no credentials / refresh rejected → [`SendError::Auth`]; a network
+    /// failure while refreshing → [`SendError::Transient`].
+    ///
+    /// Called once per HTTP request — that is per body-split chunk, per
+    /// screenshot, and per retry attempt (so a token refreshed mid-backoff is
+    /// picked up). Implementations MUST be cheap on the hot path: cache the
+    /// token and refresh only when it nears expiry, or a busy tick will
+    /// hammer the refresh endpoint dozens of times. The destinations bound
+    /// each call with the HTTP timeout, so a hung implementation degrades to
+    /// a [`SendError::Transient`] instead of wedging the shipper loop.
+    async fn bearer_token(&self) -> std::result::Result<String, SendError>;
+}
+
+/// Bound a [`TokenProvider`] call by [`HTTP_TIMEOUT`] — the loop's liveness
+/// invariant (see [`http_client`]) must hold for the token fetch too, since a
+/// provider may do network I/O (refresh) with no timeout of its own.
+async fn bearer_token_bounded(
+    provider: &dyn TokenProvider,
+) -> std::result::Result<String, SendError> {
+    tokio::time::timeout(HTTP_TIMEOUT, provider.bearer_token())
+        .await
+        .map_err(|_| SendError::Transient(anyhow::anyhow!("token provider timed out")))?
+}
+
+/// The static long-lived token gilb-web issues at onboarding.
+pub struct StaticToken(pub String);
+
+#[async_trait]
+impl TokenProvider for StaticToken {
+    async fn bearer_token(&self) -> std::result::Result<String, SendError> {
+        Ok(self.0.clone())
+    }
+}
+
+/// Parse a static header pair at construction time. Panicking here is
+/// deliberate: the pairs are host build config, and an invalid one deferred
+/// to `.send()` would classify as Transient — retried forever for an error
+/// that can never succeed.
+fn parse_header(
+    name: impl AsRef<str>,
+    value: impl AsRef<str>,
+) -> (reqwest::header::HeaderName, reqwest::header::HeaderValue) {
+    let name: reqwest::header::HeaderName = name
+        .as_ref()
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid header name {:?}: {e}", name.as_ref()));
+    let value: reqwest::header::HeaderValue = value
+        .as_ref()
+        .parse()
+        .unwrap_or_else(|e| panic!("invalid header value for {name}: {e}"));
+    (name, value)
+}
+
+/// POSTs JSONL batches to `{base}/api/v1/ingest` with a Bearer token from a
+/// [`TokenProvider`], fetched fresh per request.
 pub struct HttpDestination {
     client: reqwest::Client,
     ingest_url: String,
-    token: String,
+    token: Arc<dyn TokenProvider>,
+    /// Extra headers sent with every request (e.g. `X-App-Version`).
+    headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
 }
 
 impl HttpDestination {
     pub fn new(gilb_web_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_provider(gilb_web_url, Arc::new(StaticToken(token.into())))
+    }
+
+    pub fn with_provider(gilb_web_url: impl Into<String>, token: Arc<dyn TokenProvider>) -> Self {
         Self {
             client: http_client(),
             ingest_url: format!(
                 "{}/api/v1/ingest",
                 gilb_web_url.into().trim_end_matches('/')
             ),
-            token: token.into(),
+            token,
+            headers: Vec::new(),
         }
+    }
+
+    /// Add a header sent with every request. Appends (does not replace) —
+    /// don't pass `Authorization`/`Content-Type`, which the destination sets
+    /// itself. Panics on an invalid name/value (host build config error).
+    pub fn header(mut self, name: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.headers.push(parse_header(name, value));
+        self
     }
 }
 
 #[async_trait]
 impl Destination for HttpDestination {
     async fn send(&self, jsonl_body: &str) -> std::result::Result<(), SendError> {
-        let resp = self
+        let token = bearer_token_bounded(self.token.as_ref()).await?;
+        let mut req = self
             .client
             .post(&self.ingest_url)
-            .bearer_auth(&self.token)
-            .header("Content-Type", "application/x-jsonlines")
+            .bearer_auth(&token)
+            .header("Content-Type", "application/x-jsonlines");
+        for (name, value) in &self.headers {
+            req = req.header(name, value);
+        }
+        let resp = req
             .body(jsonl_body.to_string())
             .send()
             .await
@@ -536,6 +620,30 @@ pub fn is_auth_error(err: &anyhow::Error) -> bool {
     err.root_cause().downcast_ref::<AuthFailed>().is_some()
 }
 
+/// One pass's contribution to the auth latch in [`spawn_loop`]: shipping
+/// anything proves the token works; an auth failure starts/continues an
+/// outage; an empty queue or a non-auth failure says nothing about the token.
+enum PassOutcome {
+    Neutral,
+    Shipped,
+    AuthFailed(anyhow::Error),
+}
+
+fn pass_outcome(res: Result<usize>, what: &str) -> PassOutcome {
+    match res {
+        Ok(0) => PassOutcome::Neutral,
+        Ok(n) => {
+            info!(n, what, "shipper shipped");
+            PassOutcome::Shipped
+        }
+        Err(e) if is_auth_error(&e) => PassOutcome::AuthFailed(e),
+        Err(e) => {
+            warn!(error = %e, what, "shipper pass failed; will retry next tick");
+            PassOutcome::Neutral
+        }
+    }
+}
+
 pub fn spawn_loop(
     db: Db,
     dest: Arc<dyn Destination>,
@@ -554,26 +662,6 @@ pub fn spawn_loop(
         // Rising-edge latch: publish ShipperAuthFailed once per outage, not
         // every 60s tick while the token stays bad.
         let mut auth_down = false;
-        let on_result = |res: Result<usize>, what: &str, auth_down: &mut bool| match res {
-            Ok(0) => *auth_down = false,
-            Ok(n) => {
-                *auth_down = false;
-                info!(n, what, "shipper shipped");
-            }
-            Err(e) => {
-                if is_auth_error(&e) {
-                    if !*auth_down {
-                        *auth_down = true;
-                        tracing::error!(error = %e, "shipper auth failed (401/403); shipping stalled until re-onboarding");
-                        if let Some(bus) = &opts.event_bus {
-                            bus.publish_health(gilb_events::HealthEvent::ShipperAuthFailed);
-                        }
-                    }
-                } else {
-                    warn!(error = %e, what, "shipper pass failed; will retry next tick");
-                }
-            }
-        };
         loop {
             tokio::select! {
                 biased;
@@ -582,12 +670,38 @@ pub fn spawn_loop(
                     break;
                 }
                 _ = tick.tick() => {
-                    let r = run_once(&db, dest.as_ref(), opts.batch, &opts.cfg).await;
-                    on_result(r, "events", &mut auth_down);
+                    let events = pass_outcome(
+                        run_once(&db, dest.as_ref(), opts.batch, &opts.cfg).await,
+                        "events",
+                    );
                     // Screenshots ship on the same tick via their own cursor,
                     // smaller batch (images are heavy). Independent of events.
-                    let r = run_once_screenshots(&db, shot_dest.as_ref(), opts.screenshot_batch, &opts.cfg).await;
-                    on_result(r, "screenshots", &mut auth_down);
+                    let shots = pass_outcome(
+                        run_once_screenshots(&db, shot_dest.as_ref(), opts.screenshot_batch, &opts.cfg).await,
+                        "screenshots",
+                    );
+                    // Latch update from both passes together. An empty pass is
+                    // NEUTRAL: an always-empty screenshot queue must not clear
+                    // the latch the events pass just set, or the health event
+                    // re-publishes every tick during one outage. Only a
+                    // successful ship (auth demonstrably works) clears it.
+                    let auth_failure = match (&events, &shots) {
+                        (PassOutcome::AuthFailed(e), _) | (_, PassOutcome::AuthFailed(e)) => Some(e),
+                        _ => None,
+                    };
+                    if let Some(e) = auth_failure {
+                        if !auth_down {
+                            auth_down = true;
+                            tracing::error!(error = %e, "shipper auth failed (401/403); shipping stalled until re-onboarding");
+                            if let Some(bus) = &opts.event_bus {
+                                bus.publish_health(gilb_events::HealthEvent::ShipperAuthFailed);
+                            }
+                        }
+                    } else if matches!(events, PassOutcome::Shipped)
+                        || matches!(shots, PassOutcome::Shipped)
+                    {
+                        auth_down = false;
+                    }
                 }
                 _ = prune_tick.tick() => {
                     match prune_shipped(&db, opts.retain).await {
@@ -641,23 +755,39 @@ pub trait ScreenshotDestination: Send + Sync {
     ) -> std::result::Result<(), SendError>;
 }
 
-/// Multipart POST to gilb-web `/api/v1/ingest/screenshots` with a Bearer token.
+/// Multipart POST to `{base}/api/v1/ingest/screenshots` with a Bearer token
+/// from a [`TokenProvider`], fetched fresh per request.
 pub struct HttpScreenshotDestination {
     client: reqwest::Client,
     ingest_url: String,
-    token: String,
+    token: Arc<dyn TokenProvider>,
+    /// Extra headers sent with every request (e.g. `X-App-Version`).
+    headers: Vec<(reqwest::header::HeaderName, reqwest::header::HeaderValue)>,
 }
 
 impl HttpScreenshotDestination {
     pub fn new(gilb_web_url: impl Into<String>, token: impl Into<String>) -> Self {
+        Self::with_provider(gilb_web_url, Arc::new(StaticToken(token.into())))
+    }
+
+    pub fn with_provider(gilb_web_url: impl Into<String>, token: Arc<dyn TokenProvider>) -> Self {
         Self {
             client: http_client(),
             ingest_url: format!(
                 "{}/api/v1/ingest/screenshots",
                 gilb_web_url.into().trim_end_matches('/')
             ),
-            token: token.into(),
+            token,
+            headers: Vec::new(),
         }
+    }
+
+    /// Add a header sent with every request. Appends (does not replace) —
+    /// don't pass `Authorization`/`Content-Type`, which the destination sets
+    /// itself. Panics on an invalid name/value (host build config error).
+    pub fn header(mut self, name: impl AsRef<str>, value: impl AsRef<str>) -> Self {
+        self.headers.push(parse_header(name, value));
+        self
     }
 }
 
@@ -678,10 +808,12 @@ impl ScreenshotDestination for HttpScreenshotDestination {
         let form = reqwest::multipart::Form::new()
             .text("meta", meta_json.to_string())
             .part("image", part);
-        let resp = self
-            .client
-            .post(&self.ingest_url)
-            .bearer_auth(&self.token)
+        let token = bearer_token_bounded(self.token.as_ref()).await?;
+        let mut req = self.client.post(&self.ingest_url).bearer_auth(&token);
+        for (name, value) in &self.headers {
+            req = req.header(name, value);
+        }
+        let resp = req
             .multipart(form)
             .send()
             .await
@@ -1036,6 +1168,31 @@ mod tests {
     use std::sync::Mutex;
 
     use uuid::Uuid;
+
+    /// A failing [`TokenProvider`] short-circuits the send with its own
+    /// classification — no HTTP request is attempted (the URL below isn't
+    /// routable, so reaching the network would surface as Transient instead).
+    #[tokio::test]
+    async fn token_provider_failure_classifies_before_network() {
+        struct NoCreds;
+        #[async_trait]
+        impl TokenProvider for NoCreds {
+            async fn bearer_token(&self) -> std::result::Result<String, SendError> {
+                Err(SendError::Auth(anyhow::anyhow!("not signed in")))
+            }
+        }
+        let dest = HttpDestination::with_provider("http://invalid.invalid", Arc::new(NoCreds));
+        match dest.send("{}\n").await {
+            Err(SendError::Auth(_)) => {}
+            other => panic!("expected Auth error from the provider, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn static_token_provider_returns_token() {
+        let tok = StaticToken("gilb_abc".into()).bearer_token().await.unwrap();
+        assert_eq!(tok, "gilb_abc");
+    }
 
     /// Mock destination that fails the first N sends, then succeeds. Records
     /// every body it received (so tests can assert call count + JSONL shape).
@@ -1424,6 +1581,57 @@ mod tests {
         assert!(res.is_err(), "ship failure must propagate");
         // Cursor NOT advanced → row is still unshipped (retried next pass).
         assert_eq!(fetch_unshipped(&db, 10).await.unwrap().len(), 1);
+
+        db.close().await;
+        cleanup(&path);
+    }
+
+    /// Regression: an auth outage publishes ShipperAuthFailed ONCE, even
+    /// though the screenshot pass keeps returning Ok(0) (empty queue) every
+    /// tick — an empty pass is neutral and must not reset the latch.
+    #[tokio::test]
+    async fn spawn_loop_auth_latch_survives_empty_screenshot_pass() {
+        let path = temp_db_path();
+        let db = gilb_db::open_db(&path).await.expect("open_db");
+        let session_id = gilb_db::sessions::start_session(&db).await.unwrap();
+        insert_click(&db, session_id, 0).await;
+
+        let bus = gilb_events::EventBus::new();
+        let mut health = bus.subscribe_health();
+
+        let dest: Arc<dyn Destination> = Arc::new(MockDestination::fail_auth());
+        let shot_dest: Arc<dyn ScreenshotDestination> = Arc::new(MockShotDest::always_ok());
+        let (tx, rx) = oneshot::channel();
+        let handle = spawn_loop(
+            db.clone(),
+            dest,
+            shot_dest,
+            ShipperOpts {
+                interval: Duration::from_millis(20),
+                batch: 10,
+                cfg: ShipConfig {
+                    max_retries: 0,
+                    base_backoff: Duration::ZERO,
+                    ..Default::default()
+                },
+                event_bus: Some(bus.clone()),
+                ..Default::default()
+            },
+            rx,
+        );
+
+        // Run through many ticks of the same outage.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let _ = tx.send(());
+        handle.await.unwrap();
+
+        let mut published = 0;
+        while let Ok(msg) = health.try_recv() {
+            if matches!(msg.payload, gilb_events::HealthEvent::ShipperAuthFailed) {
+                published += 1;
+            }
+        }
+        assert_eq!(published, 1, "one outage → one ShipperAuthFailed");
 
         db.close().await;
         cleanup(&path);
