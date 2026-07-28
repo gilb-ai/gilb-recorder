@@ -15,6 +15,10 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 hound = "3"
+# speexdsp echo canceller for the offline mic-cleanup pass at stop() (D11 in
+# Rodnik's REALTIME_ASSIST doc). Builds the bundled C sources via cmake, which
+# the workspace already requires for whisper.cpp.
+aec-rs = "1"
 
 # macOS capture stack: ScreenCaptureKit video -> AVAssetWriter HEVC, SCStream
 # system audio + cpal mic -> mixed WAV. Compiled only on macOS; the non-macOS

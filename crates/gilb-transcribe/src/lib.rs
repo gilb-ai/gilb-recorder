@@ -311,6 +311,31 @@ mod local {
                 language: language.into(),
             })
         }
+
+        /// Transcribe an in-memory 16 kHz mono buffer — the realtime path:
+        /// live-tap segments are already pause-bounded, so there is no file to
+        /// read. Applies the same anti-hallucination filters as the file path
+        /// (silent input short-circuits, mostly-unvoiced segments dropped);
+        /// the model inference runs on the blocking pool.
+        pub async fn transcribe_buffer(&self, samples: Vec<f32>) -> Result<Vec<Utterance>> {
+            let mask = voiced_mask(&samples);
+            if voiced_secs(&mask) < MIN_VOICED_SECS {
+                return Ok(vec![]); // silent buffer — skip, no hallucinations
+            }
+
+            let ctx = self.ctx.clone();
+            let language = self.language.clone();
+            let raw = tokio::task::spawn_blocking(move || run_whisper(&ctx, &samples, &language))
+                .await
+                .context("whisper task join")??;
+
+            Ok(raw
+                .into_iter()
+                .filter(|u| {
+                    !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN
+                })
+                .collect())
+        }
     }
 
     /// Read a 16 kHz mono i16 wav as f32 in [-1, 1].
@@ -365,24 +390,7 @@ mod local {
     #[async_trait]
     impl Transcriber for LocalTranscriber {
         async fn transcribe(&self, audio_path: &Path) -> Result<Vec<Utterance>> {
-            let samples = read_wav_16k_mono(audio_path)?;
-            let mask = voiced_mask(&samples);
-            if voiced_secs(&mask) < MIN_VOICED_SECS {
-                return Ok(vec![]); // silent channel — skip, no hallucinations
-            }
-
-            let ctx = self.ctx.clone();
-            let language = self.language.clone();
-            let raw = tokio::task::spawn_blocking(move || run_whisper(&ctx, &samples, &language))
-                .await
-                .context("whisper task join")??;
-
-            Ok(raw
-                .into_iter()
-                .filter(|u| {
-                    !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN
-                })
-                .collect())
+            self.transcribe_buffer(read_wav_16k_mono(audio_path)?).await
         }
     }
 }

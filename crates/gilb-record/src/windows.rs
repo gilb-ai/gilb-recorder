@@ -15,10 +15,12 @@
 //! - **Audio** — two WASAPI capture clients (the default render endpoint in
 //!   loopback mode for *system* audio, the default capture endpoint for the
 //!   *mic*), both forced to mono 16-bit-float at [`CAPTURE_SAMPLE_RATE`] via
-//!   `AUTOCONVERTPCM`, are accumulated and, on stop, written as three 16 kHz
-//!   mono WAVs — the `audio.wav` mix plus `mic.wav` / `system.wav` sidecars —
-//!   through the host-tested helpers in [`crate::mix_to_mono_16k_dual`] /
-//!   [`crate::write_wav_16k_mono`], byte-compatible with the macOS sidecars.
+//!   `AUTOCONVERTPCM`, are accumulated (and, when a live tap is installed,
+//!   copied to it chunk-by-chunk) and, on stop, finalized through the
+//!   host-tested [`crate::finalize_meeting_audio`] /
+//!   [`crate::write_meeting_audio`]: the `audio.wav` mix plus the
+//!   echo-cancelled `mic.wav`, raw `mic-raw.wav` and `system.wav` sidecars,
+//!   byte-compatible with the macOS backend.
 //!
 //! The COM idioms (MTA threads, `Interface::cast`, `windows = "0.58"`) mirror
 //! the WASAPI meeting detector in `gilb-meeting/src/wasapi.rs`. As there, the
@@ -88,7 +90,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible,
 };
 
-use crate::{mix_to_mono_16k_dual, write_wav_16k_mono, ScreenAudioCapturer};
+use crate::{cancel_echo, finalize_meeting_audio, write_meeting_audio, AudioTap, ScreenAudioCapturer};
 
 /// Sample rate both WASAPI clients are forced to (via `AUTOCONVERTPCM`) so the
 /// two mono streams line up for [`mix_to_mono_16k`], which resamples 48 kHz
@@ -127,10 +129,14 @@ const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
 
 /// Shared, mono-`f32` PCM accumulators for the two audio sources. Both are at
 /// [`CAPTURE_SAMPLE_RATE`]; [`mix_to_mono_16k`] resamples and mixes on stop.
+/// `tap`, when installed, receives a copy of every chunk as it arrives (the
+/// live feed for the assist pipeline); riding inside the shared buffer handle
+/// it reaches both WASAPI threads without widening any signature.
 #[derive(Default)]
 struct AudioBuffers {
     mic: Vec<f32>,
     system: Vec<f32>,
+    tap: Option<Arc<AudioTap>>,
 }
 
 /// A running capture. The video thread owns the sink writer and muxes audio at
@@ -158,6 +164,8 @@ struct Session {
 #[derive(Default)]
 pub struct WindowsCapturer {
     session: Mutex<Option<Session>>,
+    /// Installed via `set_audio_tap`; picked up by the next `start`.
+    tap: Mutex<Option<Arc<AudioTap>>>,
 }
 
 impl WindowsCapturer {
@@ -167,6 +175,10 @@ impl WindowsCapturer {
 }
 
 impl ScreenAudioCapturer for WindowsCapturer {
+    fn set_audio_tap(&self, tap: Arc<AudioTap>) {
+        *self.tap.lock().expect("tap mutex poisoned") = Some(tap);
+    }
+
     // `app_bundle_id` scopes the screen capture to the call app's window (parity
     // with the macOS backend): the video thread resolves it to an `HWND` and
     // captures that window via `CreateForWindow` (monitor-independent, so the
@@ -184,7 +196,10 @@ impl ScreenAudioCapturer for WindowsCapturer {
         }
 
         let running = Arc::new(AtomicBool::new(true));
-        let audio = Arc::new(Mutex::new(AudioBuffers::default()));
+        let audio = Arc::new(Mutex::new(AudioBuffers {
+            tap: self.tap.lock().expect("tap mutex poisoned").clone(),
+            ..Default::default()
+        }));
 
         // System audio (render endpoint, loopback) and mic (capture endpoint)
         // each run a blocking WASAPI poll loop on a dedicated MTA thread.
@@ -235,36 +250,28 @@ impl ScreenAudioCapturer for WindowsCapturer {
             .audio
             .lock()
             .map_err(|_| anyhow!("audio buffer poisoned"))?;
-        // Both WASAPI clients run at CAPTURE_SAMPLE_RATE. Write three tracks to
-        // match the macOS backend: the mix (`audio.wav`, also the transcription
-        // source) plus separate mic/system sidecars for speaker-aware analysis.
-        // `mix_*_dual` with an empty second source just resamples the first.
-        let mixed = mix_to_mono_16k_dual(
+        // Both WASAPI clients run at CAPTURE_SAMPLE_RATE. The shared finalizer
+        // resamples to 16 kHz, echo-cancels the mic against the system audio
+        // (D11), and yields the mix plus mic/mic-raw/system sidecars to match
+        // the macOS backend.
+        let tracks = finalize_meeting_audio(
             &buffers.mic,
             CAPTURE_SAMPLE_RATE,
             &buffers.system,
             CAPTURE_SAMPLE_RATE,
         );
-        let mic_only = mix_to_mono_16k_dual(&buffers.mic, CAPTURE_SAMPLE_RATE, &[], 1);
-        let sys_only = mix_to_mono_16k_dual(&buffers.system, CAPTURE_SAMPLE_RATE, &[], 1);
-
-        let dir = session
-            .audio_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        write_wav_16k_mono(&session.audio_path, &mixed).context("write mixed meeting audio")?;
-        write_wav_16k_mono(&dir.join("mic.wav"), &mic_only).context("write mic track")?;
-        write_wav_16k_mono(&dir.join("system.wav"), &sys_only).context("write system track")?;
+        write_meeting_audio(&session.audio_path, &tracks)?;
 
         // Mix for the mp4 audio track, kept at the native 48 kHz capture rate:
         // the Media Foundation AAC encoder only accepts 44.1/48 kHz, not the
-        // 16 kHz sidecar rate. Both sources are already mono at CAPTURE_SAMPLE_RATE
-        // and index-aligned, so sum-and-clamp per sample.
-        let n = buffers.mic.len().max(buffers.system.len());
+        // 16 kHz sidecar rate. Echo-cancel the mic here too (at 48 kHz) so the
+        // mp4's audible track matches the cleaned sidecars. Both sources are
+        // mono at CAPTURE_SAMPLE_RATE and index-aligned, so sum-and-clamp.
+        let mic48 = cancel_echo(&buffers.mic, &buffers.system, CAPTURE_SAMPLE_RATE);
+        let n = mic48.len().max(buffers.system.len());
         let mut mix48 = Vec::with_capacity(n);
         for i in 0..n {
-            let m = buffers.mic.get(i).copied().unwrap_or(0.0);
+            let m = mic48.get(i).copied().unwrap_or(0.0);
             let s = buffers.system.get(i).copied().unwrap_or(0.0);
             mix48.push(((m + s).clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16);
         }
@@ -389,11 +396,23 @@ unsafe fn capture_audio_inner(
                     let src = std::slice::from_raw_parts(data as *const f32, frames as usize);
                     chunk.copy_from_slice(src);
                 }
-                if let Ok(mut buf) = audio.lock() {
+                let tap = match audio.lock() {
+                    Ok(mut buf) => {
+                        if is_mic {
+                            buf.mic.extend_from_slice(&chunk);
+                        } else {
+                            buf.system.extend_from_slice(&chunk);
+                        }
+                        buf.tap.clone()
+                    }
+                    Err(_) => None,
+                };
+                // Outside the lock: the tap must never make capture wait.
+                if let Some(tap) = tap {
                     if is_mic {
-                        buf.mic.extend_from_slice(&chunk);
+                        tap.send_mic(&chunk, CAPTURE_SAMPLE_RATE);
                     } else {
-                        buf.system.extend_from_slice(&chunk);
+                        tap.send_system(&chunk, CAPTURE_SAMPLE_RATE);
                     }
                 }
             }

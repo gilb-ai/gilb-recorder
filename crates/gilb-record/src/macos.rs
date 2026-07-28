@@ -7,11 +7,13 @@
 //! see [`build_window_stream`] + [`spawn_window_watcher`]) into an AVAssetWriter
 //! encoding HEVC to `.mp4` ([`VideoWriter`]). Audio comes from two sources — the
 //! same `SCStream` carries *system* audio ([`system_audio_samples`]) and `cpal`
-//! carries the *mic* ([`spawn_mic_capture`]) — both accumulated and, on stop,
-//! written via the host-tested helpers in [`crate::mix_to_mono_16k`] /
-//! [`crate::write_wav_16k_mono`] as three sidecars: `mic.wav`, `system.wav`, and
-//! the `audio.wav` mix. The mix is then muxed into the `.mp4`
-//! ([`mux_audio_into_video`]) so the final video plays with sound.
+//! carries the *mic* ([`spawn_mic_capture`]) — both accumulated (and, when a
+//! live tap is installed, copied to it chunk-by-chunk) and, on stop, finalized
+//! via the host-tested [`crate::finalize_meeting_audio`] /
+//! [`crate::write_meeting_audio`]: the echo-cancelled `mic.wav`, the raw
+//! `mic-raw.wav` safety net, `system.wav`, and the `audio.wav` mix. The mix is
+//! then muxed into the `.mp4` ([`mux_audio_into_video`]) so the final video
+//! plays with sound.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,7 +47,7 @@ use screencapturekit::stream::output_type::SCStreamOutputType;
 use screencapturekit::stream::SCStream;
 use tracing::{info, warn};
 
-use crate::{mix_to_mono_16k_dual, write_wav_16k_mono, ScreenAudioCapturer};
+use crate::{finalize_meeting_audio, write_meeting_audio, AudioTap, ScreenAudioCapturer};
 
 /// Sample rate requested from ScreenCaptureKit's audio output and the `cpal`
 /// mic. Both streams are resampled to 16 kHz by [`mix_to_mono_16k`] on stop.
@@ -57,10 +59,14 @@ const CAPTURE_SAMPLE_RATE: u32 = 48_000;
 const VIDEO_FPS: i32 = 15;
 
 /// Shared, interleaved-to-mono PCM accumulators for the two audio sources.
+/// `tap`, when installed, receives a copy of every chunk as it arrives (the
+/// live feed for the assist pipeline); riding inside the shared buffer handle
+/// it reaches every capture callback without widening any signature.
 #[derive(Default)]
 struct AudioBuffers {
     mic: Vec<f32>,
     system: Vec<f32>,
+    tap: Option<Arc<AudioTap>>,
 }
 
 /// Upcast any objc2 object reference to `&AnyObject` (for heterogeneous
@@ -227,6 +233,8 @@ struct Session {
 #[derive(Default)]
 pub struct MacosCapturer {
     session: Mutex<Option<Session>>,
+    /// Installed via `set_audio_tap`; picked up by the next `start`.
+    tap: Mutex<Option<Arc<AudioTap>>>,
 }
 
 impl MacosCapturer {
@@ -248,8 +256,16 @@ impl SCStreamOutputTrait for CaptureSink {
         match of_type {
             SCStreamOutputType::Audio => {
                 if let Some(samples) = system_audio_samples(&sample) {
-                    if let Ok(mut buf) = self.audio.lock() {
-                        buf.system.extend_from_slice(&samples);
+                    let tap = match self.audio.lock() {
+                        Ok(mut buf) => {
+                            buf.system.extend_from_slice(&samples);
+                            buf.tap.clone()
+                        }
+                        Err(_) => None,
+                    };
+                    // Outside the lock: the tap must never make the writer wait.
+                    if let Some(tap) = tap {
+                        tap.send_system(&samples, CAPTURE_SAMPLE_RATE);
                     }
                 }
             }
@@ -455,6 +471,10 @@ fn spawn_window_watcher(
 }
 
 impl ScreenAudioCapturer for MacosCapturer {
+    fn set_audio_tap(&self, tap: Arc<AudioTap>) {
+        *self.tap.lock().expect("tap mutex poisoned") = Some(tap);
+    }
+
     fn start(
         &self,
         video_path: &Path,
@@ -466,7 +486,10 @@ impl ScreenAudioCapturer for MacosCapturer {
             return Err(anyhow!("capture already running"));
         }
 
-        let audio = Arc::new(Mutex::new(AudioBuffers::default()));
+        let audio = Arc::new(Mutex::new(AudioBuffers {
+            tap: self.tap.lock().expect("tap mutex poisoned").clone(),
+            ..Default::default()
+        }));
 
         let content =
             SCShareableContent::get().map_err(|e| anyhow!("query shareable content: {e}"))?;
@@ -649,27 +672,16 @@ impl ScreenAudioCapturer for MacosCapturer {
             .lock()
             .map_err(|_| anyhow!("audio buffer poisoned"))?;
         // Mic runs at the device rate; SCK system audio at CAPTURE_SAMPLE_RATE.
-        // Write three tracks: the mix (`<stamp>.wav`, also the transcription
-        // source) plus separate mic/system sidecars for speaker-aware analysis.
-        let mixed = mix_to_mono_16k_dual(
+        // The shared finalizer resamples both to 16 kHz, echo-cancels the mic
+        // against the system audio (D11), and yields the mix plus the
+        // mic/mic-raw/system sidecars for speaker-aware analysis.
+        let tracks = finalize_meeting_audio(
             &buffers.mic,
             session.sample_rate,
             &buffers.system,
             CAPTURE_SAMPLE_RATE,
         );
-        // Single channel each: `mix_*_dual` with an empty second source just
-        // resamples the first to 16 kHz.
-        let mic_only = mix_to_mono_16k_dual(&buffers.mic, session.sample_rate, &[], 1);
-        let sys_only = mix_to_mono_16k_dual(&buffers.system, CAPTURE_SAMPLE_RATE, &[], 1);
-
-        let dir = session
-            .audio_path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_default();
-        write_wav_16k_mono(&session.audio_path, &mixed).context("write mixed meeting audio")?;
-        write_wav_16k_mono(&dir.join("mic.wav"), &mic_only).context("write mic track")?;
-        write_wav_16k_mono(&dir.join("system.wav"), &sys_only).context("write system track")?;
+        write_meeting_audio(&session.audio_path, &tracks)?;
         drop(buffers);
 
         // Mux the mixed audio into the (silent) video synchronously, before
@@ -830,12 +842,21 @@ fn spawn_mic_capture(
         let stream = match device.build_input_stream(
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if let Ok(mut buf) = audio.lock() {
-                    // Downmix interleaved frames to mono by averaging channels.
-                    for frame in data.chunks(channels.max(1)) {
-                        let sum: f32 = frame.iter().copied().sum();
-                        buf.mic.push(sum / channels.max(1) as f32);
+                // Downmix interleaved frames to mono by averaging channels.
+                let mono: Vec<f32> = data
+                    .chunks(channels.max(1))
+                    .map(|frame| frame.iter().copied().sum::<f32>() / channels.max(1) as f32)
+                    .collect();
+                let tap = match audio.lock() {
+                    Ok(mut buf) => {
+                        buf.mic.extend_from_slice(&mono);
+                        buf.tap.clone()
                     }
+                    Err(_) => None,
+                };
+                // Outside the lock: the tap must never make the writer wait.
+                if let Some(tap) = tap {
+                    tap.send_mic(&mono, sample_rate);
                 }
             },
             err_fn,
