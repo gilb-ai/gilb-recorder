@@ -18,5 +18,6 @@ parking_lot = { workspace = true }
 gilb-config = { workspace = true }
 gilb-events = { workspace = true }
 gilb-pipeline = { workspace = true }
+gilb-record = { workspace = true }
 gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }

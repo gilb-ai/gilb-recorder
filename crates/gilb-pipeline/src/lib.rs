@@ -33,6 +33,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use gilb_db::{meetings::insert_meeting, Db};
@@ -117,6 +118,10 @@ pub trait MeetingUi: Send + Sync + 'static {
 pub struct PipelineHandles {
     pub stop_tx: mpsc::Sender<StopResolution>,
     pub detection_ctl_tx: mpsc::Sender<bool>,
+    /// Live audio tap, installed on the recorder at spawn. Inert until someone
+    /// subscribes (a broadcast send with no receivers is a no-op), so shells
+    /// without the assist feature pay nothing.
+    pub audio_tap: Arc<gilb_record::AudioTap>,
 }
 
 /// Owns the platform meeting detector and starts/stops it on demand, forwarding
@@ -262,9 +267,11 @@ pub fn meeting_pipeline(
 ) -> (PipelineHandles, impl Future<Output = ()> + Send) {
     let (stop_tx, stop_rx) = mpsc::channel::<StopResolution>(STOP_RESOLUTION_CAPACITY);
     let (ctl_tx, ctl_rx) = mpsc::channel::<bool>(DETECTION_CTL_CAPACITY);
+    let audio_tap = Arc::new(gilb_record::AudioTap::default());
     let handles = PipelineHandles {
         stop_tx,
         detection_ctl_tx: ctl_tx,
+        audio_tap: audio_tap.clone(),
     };
     let fut = run_bridge(
         ui,
@@ -274,6 +281,7 @@ pub fn meeting_pipeline(
         detection_initially_enabled,
         stop_rx,
         ctl_rx,
+        audio_tap,
     );
     (handles, fut)
 }
@@ -287,12 +295,14 @@ async fn run_bridge(
     detection_initially_enabled: bool,
     mut stop_rx: mpsc::Receiver<StopResolution>,
     ctl_rx: mpsc::Receiver<bool>,
+    audio_tap: Arc<gilb_record::AudioTap>,
 ) {
     // Subscribe to the recording channel *before* `bus` is moved into the
     // recorder: the bridge watches `Armed`/`Cancelled` to drive the indicator,
     // independently of the recorder's own subscription.
     let mut rec_rx = bus.subscribe_recording();
     let recorder = spawn_recorder(bus, db.clone(), data_dir);
+    recorder.set_audio_tap(audio_tap);
 
     #[cfg(target_os = "macos")]
     let detector = MacosDetector::new();

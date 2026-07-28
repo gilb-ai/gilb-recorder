@@ -34,6 +34,11 @@ pub use countdown::{
     StopCountdownTx,
 };
 pub use gilb_pipeline::{RecordingStatus, StopResolution};
+
+/// Managed Tauri state: the pipeline's live audio tap (see
+/// `gilb_record::AudioTap`). Shells with a realtime consumer (assist) fetch it
+/// via `app.state::<AudioTapHandle>()` and subscribe; everyone else ignores it.
+pub struct AudioTapHandle(pub std::sync::Arc<gilb_record::AudioTap>);
 pub use meeting::{ShellHooks, ShellMeetingUi};
 pub use privacy::open_privacy_pane;
 pub use settings::{get_meeting_detection, set_meeting_detection, MeetingControlTx};
@@ -75,5 +80,6 @@ pub fn spawn_meeting_pipeline<H: ShellHooks>(
     );
     app.manage(StopCountdownTx(handles.stop_tx));
     app.manage(MeetingControlTx(handles.detection_ctl_tx));
+    app.manage(AudioTapHandle(handles.audio_tap));
     tauri::async_runtime::spawn(bridge);
 }

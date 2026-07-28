@@ -14,7 +14,9 @@
     "@tauri-apps/plugin-autostart": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.10.1"
+    "@tauri-apps/plugin-updater": "^2.10.1",
+    "marked": "^15",
+    "dompurify": "^3"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2",

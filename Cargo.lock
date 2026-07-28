@@ -2233,6 +2233,7 @@ dependencies = [
  "gilb-db",
  "gilb-events",
  "gilb-pipeline",
+ "gilb-record",
  "parking_lot",
  "tauri",
  "tauri-plugin-opener",

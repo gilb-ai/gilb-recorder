@@ -23,6 +23,12 @@ export default defineConfig(async () => ({
         main: resolve(root, "index.html"),
         countdown: resolve(root, "countdown.html"),
         "stop-countdown": resolve(root, "stop-countdown.html"),
+        // The realtime-assist overlay, gated like the runtime feature flags:
+        // present unless the brand build compiles it out.
+        // @ts-expect-error process is a nodejs global
+        ...(process.env.VITE_FEATURE_ASSIST !== "0"
+          ? { assist: resolve(root, "assist.html") }
+          : {}),
       },
     },
   },
