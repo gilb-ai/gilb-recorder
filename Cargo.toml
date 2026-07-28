@@ -8,6 +8,7 @@ members = [
     "crates/gilb-config",
     "crates/gilb-events",
     "crates/gilb-a11y",
+    "crates/gilb-assist",
     "crates/gilb-db",
     "crates/gilb-engine",
     "crates/gilb-helper",

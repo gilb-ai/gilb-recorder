@@ -1,0 +1,19 @@
+[package]
+name = "gilb-assist"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shared orchestration for real-time meeting suggestions: turn accumulation, analysis threshold, throttling, [NO_RESP] discipline. Products supply config and model backend via traits."
+
+[dependencies]
+tokio = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+# Dyn-dispatched async traits (`Box<dyn AssistSession>`) so products can plug
+# an HTTP provider or a local agent without the engine knowing which.
+async-trait = "0.1"
+
+[dev-dependencies]
+# test-util unlocks paused time (`start_paused`) for the throttle tests.
+tokio = { workspace = true, features = ["test-util"] }
