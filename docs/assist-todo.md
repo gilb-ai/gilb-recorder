@@ -74,3 +74,13 @@ owes, found while Rodnik adopted the stack first.
   ONNX/NeMo instead of the in-tree whisper.cpp.
 - [ ] **Segmenter knobs in one place** for field tuning: pause, min/max
   segment, overlap, Silero threshold, queue depth (REALTIME_ASSIST §6.8).
+- [ ] **STT queue fairness.** Both channels share one queue with a
+  drop-oldest policy (`max_queue = 4`), so a talkative remote side can push
+  out the short "yeah"/"right" segments from the mic. Left as is on purpose —
+  a per-channel quota is only worth it if real meetings show mic turns being
+  lost. Decide with data, not in advance.
+- [ ] **One ONNX session for both Silero instances.** Voice detection keeps
+  per-channel recurrent state, so the pipeline builds two `SileroVad`s and
+  therefore two ort sessions. Memory cost is negligible (~2 MB model), but
+  `voice_activity_detector` 0.2 exposes no way to share the session; revisit
+  if the crate grows one.
