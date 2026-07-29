@@ -62,7 +62,6 @@ const en = {
   "assist.empty": "Suggestions will appear here during the meeting.",
   "assist.thinking": "Thinking…",
   "assist.askPlaceholder": "Ask about the conversation… (Enter)",
-  "assist.clickThrough": "Ghost",
   "assist.hide": "Hide",
   "assist.error": "Assist error: {error}",
 
@@ -155,7 +154,6 @@ const ru: typeof en = {
   "assist.empty": "Подсказки появятся здесь во время встречи.",
   "assist.thinking": "Думаю…",
   "assist.askPlaceholder": "Спросить о разговоре… (Enter)",
-  "assist.clickThrough": "Прозрачно",
   "assist.hide": "Скрыть",
   "assist.error": "Ошибка подсказок: {error}",
 

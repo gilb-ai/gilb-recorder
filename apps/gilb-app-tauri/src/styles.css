@@ -787,7 +787,6 @@ body.assist-window {
   color: #f5f5f7;
   font-size: 13px;
 }
-body.ghost .assist { opacity: 0.75; }
 /* Dragging is the host's job (data-tauri-drag-region in assist.html);
    -webkit-app-region is a Chromium feature WKWebView does not implement. */
 .assist-bar {

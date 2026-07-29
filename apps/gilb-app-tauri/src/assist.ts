@@ -12,7 +12,7 @@ import { applyI18n, t } from "./i18n";
 //   assist://update  { text }     ready-to-render markdown
 //   assist://state   { loading }  spinner on/off
 //   assist://error   { message }
-// Commands: assist_ask(question), assist_set_click_through(on), assist_hide.
+// Commands: assist_ask(question), assist_hide.
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T | null;
@@ -24,7 +24,6 @@ function render(md: string): string {
 
 const responses: string[] = [];
 let shown = -1;
-let ghost = false;
 
 function show(idx: number) {
   const content = $("assist-content");
@@ -81,15 +80,9 @@ window.addEventListener("DOMContentLoaded", async () => {
   $("assist-prev")?.addEventListener("click", () => show(shown - 1));
   $("assist-next")?.addEventListener("click", () => show(shown + 1));
 
-  // Ghost mode = click-through. The window stops taking mouse events, so the
-  // only way back is the same global shortcut / tray — the button reflects
-  // the state it can no longer toggle off; Rust owns the real state.
-  $("assist-ghost")?.addEventListener("click", async () => {
-    ghost = !ghost;
-    document.body.classList.toggle("ghost", ghost);
-    await invoke("assist_set_click_through", { on: ghost });
-  });
-
+  // No click-through toggle: a window that ignores the mouse also ignores the
+  // button that would turn it back on, so the panel became inert until the app
+  // restarted. Dropped rather than papered over.
   $("assist-hide")?.addEventListener("click", () => invoke("assist_hide"));
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") invoke("assist_hide");
