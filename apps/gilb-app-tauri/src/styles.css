@@ -592,6 +592,16 @@ body.countdown-window {
   gap: 10px;
 }
 
+/* Real-time suggestions row inside the signed-in workspace card: the usual
+   label + switch line, with the model-download progress bar stacked under it
+   while a download runs. */
+.assist-row { margin: 0 0 12px; text-align: left; }
+.assist-row-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .key-input {
   width: 100%;
   border: 1px solid #d1d5db;

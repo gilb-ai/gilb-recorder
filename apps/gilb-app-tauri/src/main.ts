@@ -42,6 +42,11 @@ const SHOW_TRACKING_UI = FEATURE_TRACKING && FEATURE_TRACKING_UI;
 // permission prompt since the grant already exists.
 const FEATURE_TRACKING_AUTOSTART =
   import.meta.env.VITE_FEATURE_TRACKING_AUTOSTART !== "0";
+// Real-time meeting suggestions. The switch lives in the signed-in workspace
+// card — the feature runs on the workspace's prompt and provider — and the
+// backend decides whether to offer it at all (a shell without the assist
+// commands simply keeps the row hidden).
+const FEATURE_ASSIST = import.meta.env.VITE_FEATURE_ASSIST !== "0";
 
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
@@ -308,6 +313,74 @@ async function refreshAuth() {
     setText("auth-employee", s.employee ?? t("auth.thisDevice"));
     setText("auth-ws-url", s.gilb_web_url ?? "");
   }
+  if (FEATURE_ASSIST) refreshAssist();
+}
+
+// ----- real-time suggestions (workspace card) -----------------------------
+
+type AssistStatus = {
+  signed_in: boolean;
+  model_ready: boolean;
+  downloading: boolean;
+  percent: number;
+  enabled: boolean;
+};
+
+function renderAssist(s: AssistStatus | null) {
+  const row = $("assist-row");
+  if (!row) return;
+  // No status (or signed out): nothing to offer — the feature needs the
+  // workspace session for its prompt and provider.
+  if (!s || !s.signed_in) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+
+  const toggle = $<HTMLButtonElement>("toggle-assist");
+  const progress = $("assist-progress");
+  const bar = $("assist-progress-bar");
+
+  // While the model downloads the switch reads as on (the user asked for it)
+  // but stays disabled — flipping it mid-download has nothing to act on.
+  const on = s.enabled || s.downloading;
+  toggle?.setAttribute("aria-checked", on ? "true" : "false");
+  if (toggle) toggle.disabled = s.downloading;
+
+  if (s.downloading) {
+    progress?.removeAttribute("hidden");
+    if (bar) bar.style.width = `${Math.min(100, Math.max(0, s.percent))}%`;
+    setText("assist-desc", t("assist.descDownloading", { pct: s.percent }));
+    return;
+  }
+  progress?.setAttribute("hidden", "");
+  setText("assist-desc", s.enabled ? t("assist.descOn") : t("assist.descOff"));
+}
+
+async function refreshAssist() {
+  try {
+    renderAssist(await invoke<AssistStatus>("assist_status"));
+  } catch (err) {
+    // A shell without the assist commands (or before they're registered):
+    // keep the row hidden rather than showing a switch that does nothing.
+    console.warn("assist_status failed", err);
+    renderAssist(null);
+  }
+}
+
+// Turning on without the model starts its download; the backend pushes
+// progress and the final state back as `assist-status`.
+async function toggleAssist() {
+  const toggle = $<HTMLButtonElement>("toggle-assist");
+  const on = toggle?.getAttribute("aria-checked") === "true";
+  if (toggle) toggle.disabled = true;
+  try {
+    await invoke("assist_set_enabled", { on: !on });
+  } catch (err) {
+    setMessage(t("assist.error", { error: String(err) }), "error");
+  }
+  if (toggle) toggle.disabled = false;
+  refreshAssist();
 }
 
 async function connect() {
@@ -644,6 +717,11 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-rec-stop")?.addEventListener("click", stopMeetingRecording);
   $("btn-connect")?.addEventListener("click", connect);
   $("btn-signout")?.addEventListener("click", signOut);
+  if (FEATURE_ASSIST) {
+    $("toggle-assist")?.addEventListener("click", toggleAssist);
+    // Model download progress, sign-in/out and the pipeline coming up or down.
+    listen<AssistStatus>("assist-status", (e) => renderAssist(e.payload));
+  }
   if (FEATURE_SETTINGS) {
     $("btn-settings")?.addEventListener("click", openSettings);
   }
