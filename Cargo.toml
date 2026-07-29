@@ -9,6 +9,7 @@ members = [
     "crates/gilb-events",
     "crates/gilb-a11y",
     "crates/gilb-assist",
+    "crates/gilb-assist-audio",
     "crates/gilb-db",
     "crates/gilb-engine",
     "crates/gilb-helper",
@@ -98,6 +99,8 @@ gilb-core = { path = "crates/gilb-core" }
 gilb-config = { path = "crates/gilb-config" }
 gilb-events = { path = "crates/gilb-events" }
 gilb-a11y = { path = "crates/gilb-a11y" }
+gilb-assist = { path = "crates/gilb-assist" }
+gilb-assist-audio = { path = "crates/gilb-assist-audio" }
 gilb-db = { path = "crates/gilb-db" }
 gilb-engine = { path = "crates/gilb-engine" }
 gilb-helper = { path = "crates/gilb-helper" }

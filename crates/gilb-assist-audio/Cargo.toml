@@ -1,0 +1,30 @@
+[package]
+name = "gilb-assist-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Realtime audio front-end for live meeting suggestions: streaming resample, acoustic echo cancellation of the mic against system audio (speexdsp), VAD segmentation and the STT worker feeding gilb-assist"
+
+[dependencies]
+aec-rs = "1"
+anyhow = { workspace = true }
+rubato = "0.16"
+# The STT worker task; whisper itself comes in via the SegmentTranscriber
+# trait — either the app side or this crate's optional `whisper` feature.
+async-trait = "0.1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# The tap types the pipeline consumes and the shared assist engine it feeds.
+gilb-record = { workspace = true }
+gilb-assist = { workspace = true }
+gilb-transcribe = { workspace = true, optional = true }
+
+[features]
+# Real whisper.cpp transcription (heavy C++/GPU build); off for host tests.
+whisper = ["dep:gilb-transcribe", "gilb-transcribe/local-whisper"]
+
+[dev-dependencies]
+# test-util unlocks paused time for the idle-unload test.
+tokio = { workspace = true, features = ["test-util"] }
