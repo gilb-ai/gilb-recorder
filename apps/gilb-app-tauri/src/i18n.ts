@@ -70,7 +70,8 @@ const en = {
   // the speech model, so the off state says so up front.
   "assist.label": "Live suggestions",
   "assist.descOn": "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
-  "assist.descOff": "First turn-on downloads the speech recognition model (~570 MB).",
+  "assist.descOff": "Off — no suggestions during meetings.",
+  "assist.descNeedsModel": "First turn-on downloads the speech recognition model (~570 MB).",
   "assist.descDownloading": "Downloading the model… {pct}%",
   "capture.trackingLabel": "Activity tracking",
   "capture.trackingOn": "Activity tracking — on",
@@ -160,7 +161,8 @@ const ru: typeof en = {
 
   "assist.label": "Онлайн-подсказки",
   "assist.descOn": "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
-  "assist.descOff": "При первом включении скачается модель распознавания речи (~570 МБ).",
+  "assist.descOff": "Выключены — во время встречи подсказок не будет.",
+  "assist.descNeedsModel": "При первом включении скачается модель распознавания речи (~570 МБ).",
   "assist.descDownloading": "Загрузка модели… {pct}%",
   "capture.trackingLabel": "Отслеживание активности",
   "capture.trackingOn": "Отслеживание активности — включено",

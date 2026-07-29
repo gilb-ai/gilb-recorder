@@ -757,9 +757,18 @@ body.countdown-window {
   }
 }
 
-/* ---- assist overlay (assist.html) — transparent always-on-top panel ---- */
-body.assist-window {
+/* ---- assist overlay (assist.html) — transparent always-on-top panel ----
+   The window is built with transparent(true), but that only shows through if
+   nothing in the page paints a background. `:root` (and its dark-mode
+   override) sets the app surface colour for every other page, so both the
+   root element and the body have to be cleared here — a transparent body over
+   an opaque html still renders as a solid panel. The class selectors outrank
+   the `:root` / `body` rules above regardless of order. */
+html.assist-root,
+html.assist-root body.assist-window {
   background: transparent;
+}
+body.assist-window {
   margin: 0;
   overflow: hidden;
 }

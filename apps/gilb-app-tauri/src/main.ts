@@ -354,7 +354,14 @@ function renderAssist(s: AssistStatus | null) {
     return;
   }
   progress?.setAttribute("hidden", "");
-  setText("assist-desc", s.enabled ? t("assist.descOn") : t("assist.descOff"));
+  // Three states, not two: on, off, and off-because-the-model-is-missing —
+  // the ~570 MB warning is only true before the first download.
+  const desc = s.enabled
+    ? "assist.descOn"
+    : s.model_ready
+      ? "assist.descOff"
+      : "assist.descNeedsModel";
+  setText("assist-desc", t(desc));
 }
 
 async function refreshAssist() {
