@@ -8,6 +8,8 @@
 //! `gilb_transcribe::LocalTranscriber::transcribe_buffer` and frees the model
 //! in `unload` (~570 MB) when no meeting is feeding segments.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -68,11 +70,20 @@ impl Default for SttWorkerConfig {
 #[derive(Clone)]
 pub struct SttWorkerHandle {
     tx: mpsc::UnboundedSender<(SttChannel, Segment)>,
+    keep_model: Arc<AtomicBool>,
 }
 
 impl SttWorkerHandle {
     pub fn push(&self, channel: SttChannel, segment: Segment) {
         let _ = self.tx.send((channel, segment));
+    }
+
+    /// Hold the model in memory regardless of the idle timer. Set while a
+    /// meeting is being recorded: a long pause in the conversation is normal,
+    /// and paying a ~570 MB reload for the first word after it would put the
+    /// suggestion seconds behind the discussion.
+    pub fn hold_model(&self, hold: bool) {
+        self.keep_model.store(hold, Ordering::SeqCst);
     }
 }
 
@@ -84,8 +95,9 @@ pub fn spawn_stt_worker<T: SegmentTranscriber>(
 ) -> (SttWorkerHandle, mpsc::UnboundedReceiver<RecognizedUtterance>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (out_tx, out_rx) = mpsc::unbounded_channel();
-    tokio::spawn(run(transcriber, config, rx, out_tx));
-    (SttWorkerHandle { tx }, out_rx)
+    let keep_model = Arc::new(AtomicBool::new(false));
+    tokio::spawn(run(transcriber, config, rx, out_tx, keep_model.clone()));
+    (SttWorkerHandle { tx, keep_model }, out_rx)
 }
 
 async fn run<T: SegmentTranscriber>(
@@ -93,6 +105,7 @@ async fn run<T: SegmentTranscriber>(
     config: SttWorkerConfig,
     mut rx: mpsc::UnboundedReceiver<(SttChannel, Segment)>,
     out: mpsc::UnboundedSender<RecognizedUtterance>,
+    keep_model: Arc<AtomicBool>,
 ) {
     let mut queue: std::collections::VecDeque<(SttChannel, Segment)> =
         std::collections::VecDeque::new();
@@ -130,7 +143,11 @@ async fn run<T: SegmentTranscriber>(
                 Some(item) => queue.push_back(item),
                 None => break, // all handles dropped, queue drained
             },
-            _ = tokio::time::sleep(config.idle_unload) => transcriber.unload(),
+            _ = tokio::time::sleep(config.idle_unload) => {
+                if !keep_model.load(Ordering::SeqCst) {
+                    transcriber.unload();
+                }
+            }
         }
     }
 }
@@ -230,6 +247,30 @@ mod tests {
         tokio::time::advance(Duration::from_secs(301)).await;
         tokio::task::yield_now().await; // let the fired timer run unload()
         assert!(unloaded.load(Ordering::SeqCst), "idle must unload the model");
+        drop(handle);
+    }
+
+    /// While a meeting holds the model, an idle stretch must not unload it.
+    #[tokio::test(start_paused = true)]
+    async fn hold_keeps_the_model_through_idle() {
+        let unloaded = Arc::new(AtomicBool::new(false));
+        let mock = GatedMock { gate: Arc::new(Semaphore::new(100)), unloaded: unloaded.clone() };
+        let (handle, mut rx) = spawn_stt_worker(mock, SttWorkerConfig::default());
+        handle.hold_model(true);
+
+        handle.push(SttChannel::Mic, seg(1));
+        assert_eq!(rx.recv().await.unwrap().text, "seg1");
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(3_600)).await;
+        tokio::task::yield_now().await;
+        assert!(!unloaded.load(Ordering::SeqCst), "a held model must stay loaded");
+
+        // Releasing the hold lets the next idle window unload it.
+        handle.hold_model(false);
+        tokio::time::advance(Duration::from_secs(301)).await;
+        tokio::task::yield_now().await;
+        assert!(unloaded.load(Ordering::SeqCst), "released model must unload when idle");
         drop(handle);
     }
 }

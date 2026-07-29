@@ -20,7 +20,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use tracing::warn;
+use tracing::{info, warn};
 
 /// The model's "nothing worth saying" marker. A reply that is empty or
 /// contains this substring must not touch the UI at all — the overlay staying
@@ -28,8 +28,10 @@ use tracing::warn;
 pub const NO_RESP: &str = "[NO_RESP]";
 
 /// Turns kept while analysis is disabled or failing before the oldest are
-/// dropped; keeps an unattended meeting from growing the buffer forever.
-const MAX_PENDING: usize = 200;
+/// dropped. Doubles as the cap on a single request: when the feature flag
+/// flips on mid-meeting, or the network returns after an outage, the model
+/// gets a few minutes of conversation rather than the whole hour.
+const MAX_PENDING: usize = 60;
 
 /// Who said a turn. Formatted as `me:`/`them:` in the model input, the same
 /// shape the Electron prototype used.
@@ -81,6 +83,12 @@ pub trait AssistSession: Send + Sync {
     /// Send accumulated turns (or a user question); `None` when the model has
     /// nothing to say. Returning the raw text is fine too — the engine also
     /// filters [`NO_RESP`] on its side.
+    ///
+    /// **Must be idempotent on failure.** After an `Err` the engine keeps the
+    /// turns buffered and calls `send` again with the same (or an extended)
+    /// input, so an implementation that appends to a conversation history has
+    /// to commit that append only once the call has succeeded — otherwise a
+    /// flaky network duplicates the same turns in the model's context.
     async fn send(&mut self, input: &str) -> Result<Option<String>>;
 }
 
@@ -107,9 +115,20 @@ impl Default for EngineParams {
     }
 }
 
+/// The model's view of a stretch of conversation: one `me:`/`them:` line per
+/// turn, the shape the Electron prototype established and the prompts expect.
+fn format_turns(turns: &[Turn]) -> String {
+    turns
+        .iter()
+        .map(|t| format!("{}: {}", t.speaker.as_str(), t.text))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 enum Cmd {
     Turn(Turn),
     Ask(String),
+    Reset,
     Shutdown,
 }
 
@@ -126,6 +145,14 @@ impl AssistHandle {
 
     pub fn ask(&self, question: String) {
         let _ = self.tx.send(Cmd::Ask(question));
+    }
+
+    /// Start a fresh conversation — call it when a new meeting begins. The
+    /// model must not carry one meeting's context (a different client, other
+    /// objections) into the next one, and the pending buffer belongs to the
+    /// meeting that produced it.
+    pub fn reset(&self) {
+        let _ = self.tx.send(Cmd::Reset);
     }
 
     pub fn shutdown(&self) {
@@ -186,8 +213,15 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
 
             match cmd {
                 Some(Cmd::Shutdown) => break,
+                Some(Cmd::Reset) => {
+                    session = None;
+                    pending.clear();
+                    last_analysis = None;
+                    info!("assist session reset (new meeting)");
+                    continue;
+                }
                 Some(Cmd::Ask(question)) => {
-                    self.converse(&mut session, &question).await;
+                    self.ask(&mut session, &mut pending, &question).await;
                     last_analysis = Some(Instant::now());
                 }
                 Some(Cmd::Turn(turn)) => {
@@ -225,16 +259,40 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             }
         }
 
-        let input = pending
-            .iter()
-            .map(|t| format!("{}: {}", t.speaker.as_str(), t.text))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let input = format_turns(pending);
         *last_analysis = Some(Instant::now());
         if self.converse(session, &input).await {
             pending.clear();
         }
         // On failure turns stay buffered; the next trigger retries them.
+    }
+
+    /// A user question (Ask). The turns still sitting below the analysis
+    /// threshold go in with it: "what do I answer?" is about what was *just*
+    /// said, and without them the model would answer about the previous
+    /// minute. Delivered turns are then dropped so the next analysis does not
+    /// repeat them.
+    async fn ask(
+        &self,
+        session: &mut Option<Box<dyn AssistSession>>,
+        pending: &mut Vec<Turn>,
+        question: &str,
+    ) {
+        if !self.config.enabled().await {
+            // The user typed and pressed Enter — silence would read as a bug.
+            let _ = self.events.send(AssistEvent::Error(
+                "the assistant is disabled for this workspace".into(),
+            ));
+            return;
+        }
+        let input = if pending.is_empty() {
+            question.to_string()
+        } else {
+            format!("{}\n\n{}", format_turns(pending), question)
+        };
+        if self.converse(session, &input).await {
+            pending.clear();
+        }
     }
 
     /// One round-trip to the model: open the session if needed, send, apply

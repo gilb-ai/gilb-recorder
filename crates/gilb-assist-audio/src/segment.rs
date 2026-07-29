@@ -2,12 +2,16 @@
 //! close the segment when a pause exceeds the threshold, force-close with
 //! overlap when someone talks without pausing. One instance per channel.
 //!
-//! gilb-transcribe's `voiced_mask` is batch-adaptive (its threshold comes from
-//! the RMS distribution of the whole buffer) and cannot run frame-by-frame, so
-//! the streaming path keeps its own energy VAD: a running noise-floor estimate
-//! (fast to fall, slow to rise) with the same 20 ms frame and the same absolute
-//! floor. The anti-hallucination filter carries over: segments with too little
-//! voiced time are dropped, never sent to whisper.
+//! The voice decision itself is pluggable ([`FrameVad`]): [`SileroVad`] when
+//! the `silero` feature is on, [`EnergyVad`] otherwise — gilb-transcribe's
+//! `voiced_mask` cannot serve here because its threshold is derived from the
+//! RMS distribution of a whole buffer, which a stream does not have. Whichever
+//! detector runs, its per-frame decisions travel out with the segment
+//! ([`Segment::voiced`]) so the transcription filters reuse them instead of
+//! detecting a second time. The anti-hallucination gate carries over from the
+//! batch path: segments with too little voiced time never reach whisper.
+//!
+//! [`SileroVad`]: crate::SileroVad
 
 use std::collections::VecDeque;
 
@@ -16,9 +20,12 @@ pub struct SegmenterConfig {
     /// Stream rate; the pipeline feeds 16 kHz.
     pub sample_rate: u32,
     /// VAD frame, samples. 320 @ 16 kHz = 20 ms — gilb-transcribe's VAD_FRAME.
+    /// A hint only: a detector that requires its own frame length wins (Silero
+    /// wants 512), so every other knob here is expressed in milliseconds.
     pub frame_size: usize,
-    /// Consecutive voiced frames that open a segment (debounces clicks).
-    pub open_frames: usize,
+    /// Speech that must be heard before a segment opens — debounces clicks and
+    /// keystrokes. Rounded up to whole detector frames.
+    pub open_ms: u32,
     /// Silence that closes a segment — the phrase boundary.
     pub close_pause_ms: u32,
     /// Force-close threshold for pauseless speech; without it a monologue
@@ -39,7 +46,7 @@ impl Default for SegmenterConfig {
         Self {
             sample_rate: 16_000,
             frame_size: 320,
-            open_frames: 2,
+            open_ms: 60,
             close_pause_ms: 700,
             max_segment_secs: 15.0,
             min_voiced_secs: 0.3,
@@ -84,6 +91,7 @@ enum State {
 
 pub struct Segmenter {
     cfg: SegmenterConfig,
+    open_frames: usize,
     /// The detector's frame; equals `cfg.frame_size` unless the detector
     /// requires its own (Silero wants 512 samples).
     frame_size: usize,
@@ -110,6 +118,9 @@ pub trait FrameVad: Send {
         None
     }
     fn is_voiced(&mut self, frame: &[f32]) -> bool;
+    /// Forget everything learned from the audio so far (new meeting): the
+    /// noise-floor estimate, or a neural detector's recurrent state.
+    fn reset(&mut self) {}
 }
 
 /// Absolute silence floor, matching gilb-transcribe's threshold clamp.
@@ -133,6 +144,10 @@ impl Default for EnergyVad {
 }
 
 impl FrameVad for EnergyVad {
+    fn reset(&mut self) {
+        self.noise_floor = ABS_FLOOR;
+    }
+
     fn is_voiced(&mut self, frame: &[f32]) -> bool {
         let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
         if rms < self.noise_floor {
@@ -157,6 +172,7 @@ impl Segmenter {
         let close_frames = (cfg.close_pause_ms as f32 / frame_ms).ceil() as usize;
         let max_frames = (cfg.max_segment_secs * 1000.0 / frame_ms).ceil() as usize;
         let min_voiced_frames = (cfg.min_voiced_secs * 1000.0 / frame_ms).ceil() as usize;
+        let open_frames = ((cfg.open_ms as f32 / frame_ms).ceil() as usize).max(1);
         let pre_roll_samples =
             (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / frame_size
                 * frame_size;
@@ -166,6 +182,7 @@ impl Segmenter {
             cfg.overlap_ms as usize * cfg.sample_rate as usize / 1000 / frame_size * frame_size;
         Self {
             frame_size,
+            open_frames,
             close_frames,
             max_frames,
             min_voiced_frames,
@@ -177,6 +194,17 @@ impl Segmenter {
             vad,
             cfg,
         }
+    }
+
+    /// Drop every trace of the previous stream: the half-open segment, the
+    /// partial frame, the stream clock and the detector's learned state. Called
+    /// at a meeting boundary — timestamps are meant to be offsets from the
+    /// meeting start, and one meeting's noise floor says nothing about the next.
+    pub fn reset(&mut self) {
+        self.state = State::idle();
+        self.fifo.clear();
+        self.consumed = 0;
+        self.vad.reset();
     }
 
     /// Feed a chunk of any length; returns the segments it closed.
@@ -225,7 +253,7 @@ impl Segmenter {
                     pre_roll_flags.pop_front();
                 }
                 *consecutive_voiced = if voiced { *consecutive_voiced + 1 } else { 0 };
-                if *consecutive_voiced >= self.cfg.open_frames {
+                if *consecutive_voiced >= self.open_frames {
                     let buf: Vec<f32> = pre_roll.iter().copied().collect();
                     let flags: Vec<bool> = pre_roll_flags.iter().copied().collect();
                     let voiced_frames = *consecutive_voiced;
@@ -272,7 +300,10 @@ impl Segmenter {
                     let carry_flags = full_flags[overlap_start / self.frame_size..].to_vec();
                     self.state = State::Active {
                         start_sample: start + overlap_start as u64,
-                        voiced_frames: carry.len() / self.frame_size,
+                        // Only the voiced frames carry over: crediting the whole
+                        // tail would let a following stretch of silence clear
+                        // the min-voiced gate and reach whisper.
+                        voiced_frames: carry_flags.iter().filter(|v| **v).count(),
                         silence_frames: 0,
                         buf: carry,
                         flags: carry_flags,
@@ -405,6 +436,63 @@ mod tests {
         let mut seg = Segmenter::new(SegmenterConfig::default());
         let got = feed(&mut seg, &stream);
         assert!(got.is_empty(), "100 ms blip must be filtered out");
+    }
+
+    /// A forced split must not credit its silent tail as speech: the carried
+    /// overlap plus the silence that follows is not an utterance.
+    #[test]
+    fn forced_split_does_not_emit_a_silent_tail() {
+        // Pauseless speech long enough to force one split, then silence.
+        let mut stream = silence(SR / 2);
+        stream.extend(noise(SR * 16, 0.2, 21));
+        stream.extend(silence(SR * 2));
+
+        let mut seg = Segmenter::new(SegmenterConfig::default());
+        let mut got = feed(&mut seg, &stream);
+        got.extend(seg.flush());
+
+        // The forced cut lands ~15 s in; what follows is the ~1 s tail of real
+        // speech, and after it only silence. No segment may be mostly silence.
+        for s in &got {
+            let voiced = s.voiced.iter().filter(|v| **v).count() as f32
+                * s.vad_frame_size as f32
+                / SR as f32;
+            assert!(
+                voiced >= SegmenterConfig::default().min_voiced_secs,
+                "segment {:.2}..{:.2} carries only {:.2} s of speech",
+                s.start_secs,
+                s.end_secs,
+                voiced
+            );
+        }
+    }
+
+    /// reset() forgets the half-open segment and restarts the stream clock.
+    #[test]
+    fn reset_drops_the_open_segment_and_the_clock() {
+        let mut seg = Segmenter::new(SegmenterConfig::default());
+        // Speech with no closing pause: a segment is open, nothing emitted.
+        assert!(feed(&mut seg, &noise(SR * 2, 0.2, 31)).is_empty());
+
+        seg.reset();
+
+        // The dropped audio must not reappear, and timestamps start over.
+        let mut stream = noise(SR, 0.2, 32);
+        stream.extend(silence(SR * 2));
+        let got = feed(&mut seg, &stream);
+        assert_eq!(got.len(), 1);
+        assert!(
+            got[0].start_secs < 0.3,
+            "clock must restart at the boundary, got {:.2}",
+            got[0].start_secs
+        );
+        // 1 s of speech plus the closing pause — not the 2 s fed before the
+        // reset, which would push this past 3 s.
+        assert!(
+            got[0].end_secs - got[0].start_secs < 2.0,
+            "old audio leaked in: segment is {:.2} s",
+            got[0].end_secs - got[0].start_secs
+        );
     }
 
     /// flush() closes the segment that was still accumulating.

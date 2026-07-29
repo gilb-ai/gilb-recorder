@@ -21,8 +21,10 @@ tracing = { workspace = true }
 # the release pipeline must account for.
 voice_activity_detector = { version = "0.2", optional = true }
 
-# The tap types the pipeline consumes and the shared assist engine it feeds.
+# The tap types the pipeline consumes, the shared assist engine it feeds, and
+# the recording bus that marks meeting boundaries.
 gilb-record = { workspace = true }
+gilb-events = { workspace = true }
 gilb-assist = { workspace = true }
 gilb-transcribe = { workspace = true, optional = true }
 

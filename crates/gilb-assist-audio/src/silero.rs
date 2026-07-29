@@ -47,4 +47,10 @@ impl FrameVad for SileroVad {
     fn is_voiced(&mut self, frame: &[f32]) -> bool {
         self.inner.predict(frame.iter().copied()) > THRESHOLD
     }
+
+    /// Clear the model's recurrent state — the ONNX session stays loaded, so a
+    /// meeting boundary costs nothing.
+    fn reset(&mut self) {
+        self.inner.reset();
+    }
 }

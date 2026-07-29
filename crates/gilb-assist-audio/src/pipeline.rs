@@ -14,8 +14,10 @@
 //! never involved.
 
 use gilb_assist::{AssistHandle, Speaker, Turn};
+use gilb_events::{EventBus, RecordingEvent};
 use gilb_record::{AudioChunk, AudioTap};
 use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
@@ -39,27 +41,67 @@ pub struct AssistPipelineConfig {
 pub struct AssistPipeline {
     audio_task: JoinHandle<()>,
     turns_task: JoinHandle<()>,
-    /// Exposed so the app can inject synthetic segments in diagnostics.
-    pub worker: SttWorkerHandle,
+    /// Watches the recording bus for meeting boundaries; `None` when no bus
+    /// was supplied (tests, and any host that has no meeting lifecycle).
+    boundary_task: Option<JoinHandle<()>>,
 }
 
 impl Drop for AssistPipeline {
     fn drop(&mut self) {
         self.audio_task.abort();
         self.turns_task.abort();
+        if let Some(task) = &self.boundary_task {
+            task.abort();
+        }
     }
 }
 
 /// Wire the tap through resample → AEC → segmentation → STT into the assist
 /// engine. Chunks flow once the recorder starts feeding the tap; the pipeline
 /// survives across meetings (the model unloads itself when idle).
+///
+/// `bus` supplies the meeting boundary. Without it the pipeline still works,
+/// but every meeting inherits the previous one's state: the model would keep
+/// answering in the context of the earlier conversation, timestamps would keep
+/// counting from the app's start, and the echo canceller would stay converged
+/// on a room that may no longer be the one in use.
 pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
     tap: &AudioTap,
     transcriber: T,
     assist: AssistHandle,
     config: AssistPipelineConfig,
+    bus: Option<EventBus>,
 ) -> AssistPipeline {
     let (worker, mut utterances) = spawn_stt_worker(transcriber, config.worker);
+
+    // Capacity 1 is enough: several boundaries in a row mean the same thing as
+    // one, and a full channel is a reset already on its way.
+    let (reset_tx, reset_rx) = mpsc::channel::<()>(1);
+    let boundary_task = bus.map(|bus| {
+        let assist = assist.clone();
+        let worker = worker.clone();
+        tokio::spawn(async move {
+            let mut rx = bus.subscribe_recording();
+            loop {
+                match rx.recv().await {
+                    Ok(msg) => match msg.payload {
+                        RecordingEvent::Armed { meeting_id } => {
+                            info!(meeting_id, "assist: new meeting, resetting state");
+                            assist.reset();
+                            let _ = reset_tx.try_send(());
+                            // Pauses inside a meeting must not cost a reload.
+                            worker.hold_model(true);
+                        }
+                        RecordingEvent::Cancelled { .. } => worker.hold_model(false),
+                    },
+                    // A lagged boundary is still a boundary; the next recv
+                    // delivers whatever is current.
+                    Err(RecvError::Lagged(_)) => continue,
+                    Err(RecvError::Closed) => break,
+                }
+            }
+        })
+    });
 
     let mic_rx = tap.subscribe_mic();
     let sys_rx = tap.subscribe_system();
@@ -68,7 +110,8 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
         sys_rx,
         config.aec,
         config.segmenter,
-        worker.clone(),
+        worker,
+        reset_rx,
     ));
 
     let turns_task = tokio::spawn(async move {
@@ -88,7 +131,7 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
     AssistPipeline {
         audio_task,
         turns_task,
-        worker,
+        boundary_task,
     }
 }
 
@@ -151,6 +194,7 @@ async fn audio_loop(
     aec_config: EchoCancellerConfig,
     seg_config: SegmenterConfig,
     worker: SttWorkerHandle,
+    mut reset_rx: mpsc::Receiver<()>,
 ) {
     let mut aec = EchoCanceller::new(&aec_config);
     let mut seg_mic = build_segmenter(seg_config.clone());
@@ -160,6 +204,16 @@ async fn audio_loop(
 
     loop {
         tokio::select! {
+            // A meeting boundary: drop the carried stream state. The detectors
+            // keep their loaded models — only what they learned is cleared.
+            Some(()) = reset_rx.recv() => {
+                aec.reset();
+                seg_mic.reset();
+                seg_sys.reset();
+                // Rebuilt from the next chunk, which carries its device rate.
+                mic_rs = None;
+                sys_rs = None;
+            },
             chunk = mic_rx.recv() => match chunk {
                 Ok(chunk) => {
                     let rs = match &mut mic_rs {
@@ -260,6 +314,7 @@ mod tests {
             StubStt,
             assist,
             AssistPipelineConfig::default(),
+            None,
         );
         tokio::task::yield_now().await; // let the tasks subscribe
 

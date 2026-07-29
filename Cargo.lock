@@ -2097,6 +2097,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "gilb-assist",
+ "gilb-events",
  "gilb-record",
  "gilb-transcribe",
  "hound",

@@ -14,6 +14,7 @@
 use std::collections::VecDeque;
 
 use aec_rs::{Aec, AecConfig};
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct EchoCancellerConfig {
@@ -44,6 +45,7 @@ impl Default for EchoCancellerConfig {
 }
 
 pub struct EchoCanceller {
+    config: EchoCancellerConfig,
     aec: Aec,
     frame_size: usize,
     /// Far-end samples the FIFO may hold before the oldest are dropped: the
@@ -55,6 +57,11 @@ pub struct EchoCanceller {
     near_frame: Vec<i16>,
     far_frame: Vec<i16>,
     out_frame: Vec<i16>,
+    /// Reference samples discarded because the far side ran too far ahead of
+    /// the near side. Counted, not ignored: sustained drops mean the two
+    /// capture paths are skewed by more than the filter tail, and cancellation
+    /// quietly stops working — the one failure here that looks like nothing.
+    dropped_far: usize,
 }
 
 // The speex states are plain heap-allocated C structs with no thread affinity;
@@ -73,6 +80,7 @@ impl EchoCanceller {
             enable_preprocess: config.enable_preprocess,
         });
         Self {
+            config: config.clone(),
             aec,
             frame_size: config.frame_size,
             max_far_backlog: filter_length as usize + config.sample_rate as usize / 2,
@@ -81,7 +89,16 @@ impl EchoCanceller {
             near_frame: vec![0; config.frame_size],
             far_frame: vec![0; config.frame_size],
             out_frame: vec![0; config.frame_size],
+            dropped_far: 0,
         }
+    }
+
+    /// Throw away the adaptive filter and both FIFOs. speexdsp exposes no
+    /// reset through `aec-rs`, so the state is rebuilt — cheap (a filter
+    /// allocation, no model). Called at a meeting boundary: a filter converged
+    /// on the previous room and device pair is worse than an empty one.
+    pub fn reset(&mut self) {
+        *self = Self::new(&self.config.clone());
     }
 
     /// Feed far-end samples: the system audio that the speakers are playing.
@@ -90,6 +107,15 @@ impl EchoCanceller {
         if self.far.len() > self.max_far_backlog {
             let excess = self.far.len() - self.max_far_backlog;
             self.far.drain(..excess);
+            self.dropped_far += excess;
+            // One line per second of lost reference, no more.
+            if self.dropped_far >= self.config.sample_rate as usize {
+                warn!(
+                    dropped_secs = self.dropped_far as f32 / self.config.sample_rate as f32,
+                    "echo canceller: far channel runs ahead of near; cancellation degraded"
+                );
+                self.dropped_far = 0;
+            }
         }
     }
 
