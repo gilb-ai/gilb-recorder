@@ -75,6 +75,9 @@ enum State {
 
 pub struct Segmenter {
     cfg: SegmenterConfig,
+    /// The detector's frame; equals `cfg.frame_size` unless the detector
+    /// requires its own (Silero wants 512 samples).
+    frame_size: usize,
     close_frames: usize,
     max_frames: usize,
     min_voiced_frames: usize,
@@ -85,9 +88,19 @@ pub struct Segmenter {
     fifo: Vec<f32>,
     /// Stream position, in samples, of the *end* of the last consumed frame.
     consumed: u64,
-    /// Running noise-floor RMS: drops instantly on quiet frames, creeps up
-    /// otherwise, so a long burst of speech does not become the new "silence".
-    noise_floor: f32,
+    vad: Box<dyn FrameVad>,
+}
+
+/// Frame-wise voice decision, pluggable per detector (D12): the energy
+/// detector below is the dependency-free default, Silero (feature `silero`)
+/// the robust one. The segmenter owns everything else — hysteresis, pauses,
+/// limits — so a detector only answers "is this frame speech?".
+pub trait FrameVad: Send {
+    /// Frame length the detector requires, if any; `None` = the config's.
+    fn required_frame_size(&self) -> Option<usize> {
+        None
+    }
+    fn is_voiced(&mut self, frame: &[f32]) -> bool;
 }
 
 /// Absolute silence floor, matching gilb-transcribe's threshold clamp.
@@ -97,26 +110,59 @@ const FLOOR_RISE: f32 = 1.001;
 /// A frame is voiced when its RMS clears the floor by this factor.
 const SNR_FACTOR: f32 = 3.0;
 
+/// RMS energy against a running noise floor: fast to fall, slow to rise, so a
+/// long burst of speech does not become the new "silence". Cheap and
+/// dependency-free, but anything loud (keyboard, music) reads as speech.
+pub struct EnergyVad {
+    noise_floor: f32,
+}
+
+impl Default for EnergyVad {
+    fn default() -> Self {
+        Self { noise_floor: ABS_FLOOR }
+    }
+}
+
+impl FrameVad for EnergyVad {
+    fn is_voiced(&mut self, frame: &[f32]) -> bool {
+        let rms = (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
+        if rms < self.noise_floor {
+            self.noise_floor = rms.max(ABS_FLOOR * 0.1);
+        } else {
+            self.noise_floor *= FLOOR_RISE;
+        }
+        rms > (self.noise_floor * SNR_FACTOR).max(ABS_FLOOR)
+    }
+}
+
 impl Segmenter {
     pub fn new(cfg: SegmenterConfig) -> Self {
-        let frame_ms = cfg.frame_size as f32 * 1000.0 / cfg.sample_rate as f32;
+        Self::with_vad(cfg, Box::new(EnergyVad::default()))
+    }
+
+    /// Build with an explicit detector; its required frame size (if any)
+    /// overrides the config's.
+    pub fn with_vad(cfg: SegmenterConfig, vad: Box<dyn FrameVad>) -> Self {
+        let frame_size = vad.required_frame_size().unwrap_or(cfg.frame_size);
+        let frame_ms = frame_size as f32 * 1000.0 / cfg.sample_rate as f32;
         let close_frames = (cfg.close_pause_ms as f32 / frame_ms).ceil() as usize;
         let max_frames = (cfg.max_segment_secs * 1000.0 / frame_ms).ceil() as usize;
         let min_voiced_frames = (cfg.min_voiced_secs * 1000.0 / frame_ms).ceil() as usize;
         let pre_roll_samples =
-            (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / cfg.frame_size
-                * cfg.frame_size;
+            (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / frame_size
+                * frame_size;
         let overlap_samples = cfg.overlap_ms as usize * cfg.sample_rate as usize / 1000;
         Self {
+            frame_size,
             close_frames,
             max_frames,
             min_voiced_frames,
             pre_roll_samples,
             overlap_samples,
             state: State::idle(),
-            fifo: Vec::with_capacity(cfg.frame_size),
+            fifo: Vec::with_capacity(frame_size),
             consumed: 0,
-            noise_floor: ABS_FLOOR,
+            vad,
             cfg,
         }
     }
@@ -126,14 +172,14 @@ impl Segmenter {
         let mut closed = Vec::new();
         let mut rest = samples;
         while !rest.is_empty() {
-            let need = self.cfg.frame_size - self.fifo.len();
+            let need = self.frame_size - self.fifo.len();
             let take = need.min(rest.len());
             self.fifo.extend_from_slice(&rest[..take]);
             rest = &rest[take..];
-            if self.fifo.len() == self.cfg.frame_size {
+            if self.fifo.len() == self.frame_size {
                 let frame = std::mem::replace(
                     &mut self.fifo,
-                    Vec::with_capacity(self.cfg.frame_size),
+                    Vec::with_capacity(self.frame_size),
                 );
                 self.consume_frame(frame, &mut closed);
             }
@@ -153,20 +199,13 @@ impl Segmenter {
     }
 
     fn consume_frame(&mut self, frame: Vec<f32>, closed: &mut Vec<Segment>) {
-        let rms =
-            (frame.iter().map(|s| s * s).sum::<f32>() / frame.len() as f32).sqrt();
-        if rms < self.noise_floor {
-            self.noise_floor = rms.max(ABS_FLOOR * 0.1);
-        } else {
-            self.noise_floor *= FLOOR_RISE;
-        }
-        let voiced = rms > (self.noise_floor * SNR_FACTOR).max(ABS_FLOOR);
+        let voiced = self.vad.is_voiced(&frame);
         self.consumed += frame.len() as u64;
 
         match &mut self.state {
             State::Idle { pre_roll, consecutive_voiced } => {
                 pre_roll.extend(frame.iter());
-                while pre_roll.len() > self.pre_roll_samples + self.cfg.frame_size {
+                while pre_roll.len() > self.pre_roll_samples + self.frame_size {
                     pre_roll.pop_front();
                 }
                 *consecutive_voiced = if voiced { *consecutive_voiced + 1 } else { 0 };
@@ -195,7 +234,7 @@ impl Segmenter {
                     let (buf, start, vf) = (std::mem::take(buf), *start_sample, *voiced_frames);
                     self.state = State::idle();
                     closed.extend(self.finish(buf, start, vf));
-                } else if buf.len() >= self.max_frames * self.cfg.frame_size {
+                } else if buf.len() >= self.max_frames * self.frame_size {
                     // Pauseless speech: emit, carry the tail so the forced cut
                     // does not lose the word it landed on.
                     let (full, start, vf) = (std::mem::take(buf), *start_sample, *voiced_frames);
@@ -203,7 +242,7 @@ impl Segmenter {
                     let carry = full[overlap_start..].to_vec();
                     self.state = State::Active {
                         start_sample: start + overlap_start as u64,
-                        voiced_frames: carry.len() / self.cfg.frame_size,
+                        voiced_frames: carry.len() / self.frame_size,
                         silence_frames: 0,
                         buf: carry,
                     };

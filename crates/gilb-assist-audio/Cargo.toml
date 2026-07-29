@@ -16,6 +16,12 @@ async-trait = "0.1"
 tokio = { workspace = true }
 tracing = { workspace = true }
 
+# Silero VAD (D12): a tiny neural voice detector, far more robust than the
+# energy VAD against keyboards/music/quiet speech. Optional — it pulls in
+# onnxruntime via `ort` (native lib, downloaded by its build script), which
+# the release pipeline must account for.
+voice_activity_detector = { version = "0.2", optional = true }
+
 # The tap types the pipeline consumes and the shared assist engine it feeds.
 gilb-record = { workspace = true }
 gilb-assist = { workspace = true }
@@ -24,7 +30,11 @@ gilb-transcribe = { workspace = true, optional = true }
 [features]
 # Real whisper.cpp transcription (heavy C++/GPU build); off for host tests.
 whisper = ["dep:gilb-transcribe", "gilb-transcribe/local-whisper"]
+# Neural VAD for segmentation; falls back to the energy VAD when unavailable.
+silero = ["dep:voice_activity_detector"]
 
 [dev-dependencies]
 # test-util unlocks paused time for the idle-unload test.
 tokio = { workspace = true, features = ["test-util"] }
+# Reads the real-speech fixture in the silero tests.
+hound = "3"

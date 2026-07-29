@@ -15,6 +15,8 @@ mod aec;
 mod pipeline;
 mod resample;
 mod segment;
+#[cfg(feature = "silero")]
+mod silero;
 mod stt_worker;
 #[cfg(feature = "whisper")]
 mod whisper;
@@ -22,7 +24,9 @@ mod whisper;
 pub use aec::{EchoCanceller, EchoCancellerConfig};
 pub use pipeline::{spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig};
 pub use resample::StreamResampler;
-pub use segment::{Segment, Segmenter, SegmenterConfig};
+pub use segment::{EnergyVad, FrameVad, Segment, Segmenter, SegmenterConfig};
+#[cfg(feature = "silero")]
+pub use silero::SileroVad;
 pub use stt_worker::{
     spawn_stt_worker, RecognizedUtterance, SegmentTranscriber, SttChannel, SttWorkerConfig,
     SttWorkerHandle,

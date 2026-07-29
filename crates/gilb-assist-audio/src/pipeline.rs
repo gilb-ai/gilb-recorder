@@ -92,6 +92,17 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
     }
 }
 
+/// Segmenter with the best available voice detector: Silero when the feature
+/// is compiled in and its model loads, the energy heuristic otherwise (D12).
+fn build_segmenter(cfg: SegmenterConfig) -> Segmenter {
+    #[cfg(feature = "silero")]
+    match crate::SileroVad::new() {
+        Ok(vad) => return Segmenter::with_vad(cfg, Box::new(vad)),
+        Err(e) => warn!(error = %e, "silero vad unavailable; using the energy vad"),
+    }
+    Segmenter::new(cfg)
+}
+
 /// A channel's resampler, recreated if the tap's reported rate changes
 /// (e.g. the user switches microphones mid-meeting).
 struct ChannelResampler {
@@ -142,8 +153,8 @@ async fn audio_loop(
     worker: SttWorkerHandle,
 ) {
     let mut aec = EchoCanceller::new(&aec_config);
-    let mut seg_mic = Segmenter::new(seg_config.clone());
-    let mut seg_sys = Segmenter::new(seg_config);
+    let mut seg_mic = build_segmenter(seg_config.clone());
+    let mut seg_sys = build_segmenter(seg_config);
     let mut mic_rs: Option<ChannelResampler> = None;
     let mut sys_rs: Option<ChannelResampler> = None;
 
@@ -218,9 +229,24 @@ mod tests {
             .collect()
     }
 
-    /// Tap → resample (48 kHz) → AEC → segmentation → STT stub → assist engine
-    /// with the echo backend: speech on the system channel must come out as a
-    /// `them:` suggestion.
+    /// Real conversational speech (16 kHz, from the silero-vad test corpus) —
+    /// works under both the energy and the Silero detector; white noise would
+    /// not survive Silero, correctly.
+    const SPEECH: &[u8] =
+        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/speech_16k.wav"));
+
+    fn speech_samples() -> Vec<f32> {
+        let mut reader = hound::WavReader::new(std::io::Cursor::new(SPEECH)).unwrap();
+        assert_eq!(reader.spec().sample_rate, 16_000);
+        reader
+            .samples::<i16>()
+            .map(|s| f32::from(s.unwrap()) / 32768.0)
+            .collect()
+    }
+
+    /// Tap → resample → AEC → segmentation → STT stub → assist engine with the
+    /// echo backend: speech on the system channel must come out as a `them:`
+    /// suggestion.
     #[tokio::test]
     async fn tap_to_suggestion_end_to_end() {
         let tap = AudioTap::new(1024);
@@ -237,12 +263,11 @@ mod tests {
         );
         tokio::task::yield_now().await; // let the tasks subscribe
 
-        // 1 s silence, 2 s "speech", 1.5 s silence — at 48 kHz, in 100 ms chunks.
-        let mut stream = noise(48_000, 0.001, 9);
-        stream.extend(noise(96_000, 0.2, 10));
-        stream.extend(noise(72_000, 0.001, 11));
-        for chunk in stream.chunks(4_800) {
-            tap.send_system(chunk, 48_000);
+        // Real speech, then silence long enough to close the last segment.
+        let mut stream = speech_samples();
+        stream.extend(noise(24_000, 0.001, 11));
+        for chunk in stream.chunks(1_600) {
+            tap.send_system(chunk, 16_000);
             tokio::task::yield_now().await;
         }
 
