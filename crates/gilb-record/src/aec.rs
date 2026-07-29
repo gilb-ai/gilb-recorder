@@ -1,4 +1,7 @@
-//! Acoustic echo cancellation over speexdsp (via the `aec-rs` crate).
+//! Acoustic echo cancellation over speexdsp (via the `aec-rs` crate) — the
+//! single speex wrapper both consumers share: the realtime assist pipeline
+//! (gilb-assist-audio, streaming) and this crate's offline finalization pass
+//! ([`crate::cancel_echo`]).
 //!
 //! speex's MDF canceller works on fixed-size i16 frames and needs the near-end
 //! (mic) and far-end (system audio) streams fed in lockstep. Capture callbacks

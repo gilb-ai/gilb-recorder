@@ -7,7 +7,6 @@ publish.workspace = true
 description = "Realtime audio front-end for live meeting suggestions: streaming resample, acoustic echo cancellation of the mic against system audio (speexdsp), VAD segmentation and the STT worker feeding gilb-assist"
 
 [dependencies]
-aec-rs = "1"
 anyhow = { workspace = true }
 rubato = "0.16"
 # The STT worker task; whisper itself comes in via the SegmentTranscriber

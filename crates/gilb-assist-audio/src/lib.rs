@@ -11,7 +11,6 @@
 //! through it: the invariant is that recording quality is untouched by the
 //! assist feature.
 
-mod aec;
 mod pipeline;
 mod resample;
 mod segment;
@@ -21,7 +20,7 @@ mod stt_worker;
 #[cfg(feature = "whisper")]
 mod whisper;
 
-pub use aec::{EchoCanceller, EchoCancellerConfig};
+pub use gilb_record::{EchoCanceller, EchoCancellerConfig};
 pub use pipeline::{spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig};
 pub use resample::StreamResampler;
 pub use segment::{EnergyVad, FrameVad, Segment, Segmenter, SegmenterConfig};

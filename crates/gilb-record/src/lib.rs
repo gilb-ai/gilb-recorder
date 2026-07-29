@@ -31,7 +31,9 @@ mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
 
+mod aec;
 mod tap;
+pub use aec::{EchoCanceller, EchoCancellerConfig};
 pub use tap::{AudioChunk, AudioTap};
 
 /// Target sample rate of the audio sidecar — 16 kHz mono, the rate downstream
@@ -236,32 +238,31 @@ pub fn cancel_echo(mic: &[f32], system: &[f32], sample_rate: u32) -> Vec<f32> {
         return mic.to_vec();
     }
     let frame = (sample_rate / 50) as usize; // 20 ms
-    let tail = (sample_rate / 5) as i32; // 200 ms filter, covers speaker→mic delay
-    let aec = aec_rs::Aec::new(&aec_rs::AecConfig {
-        frame_size: frame,
-        filter_length: tail,
+    let mut aec = EchoCanceller::new(&EchoCancellerConfig {
         sample_rate,
+        frame_size: frame,
+        tail_ms: 200, // covers speaker->mic delay
         // Pure cancellation only: denoise would alter the recording's character.
         enable_preprocess: false,
     });
 
-    let to_i16 = |s: f32| (s.clamp(-1.0, 1.0) * 32767.0) as i16;
+    // Frame-wise interleave keeps the canceller's bounded far FIFO holding
+    // exactly the matching reference audio — larger blocks would overflow it
+    // and silently misalign the tracks.
     let mut out = Vec::with_capacity(mic.len());
-    let mut near = vec![0i16; frame];
-    let mut far = vec![0i16; frame];
-    let mut cleaned = vec![0i16; frame];
-    let full_frames = mic.len() / frame;
-    for i in 0..full_frames {
-        let base = i * frame;
-        for j in 0..frame {
-            near[j] = to_i16(mic[base + j]);
-            // The far end may be shorter; silence cancels nothing.
-            far[j] = system.get(base + j).copied().map_or(0, to_i16);
+    let mut pos = 0;
+    while pos < mic.len() {
+        let end = (pos + frame).min(mic.len());
+        let far_end = end.min(system.len());
+        if pos < far_end {
+            aec.push_far(&system[pos..far_end]);
         }
-        aec.cancel_echo(&near, &far, &mut cleaned);
-        out.extend(cleaned.iter().map(|&s| f32::from(s) / 32768.0));
+        out.extend(aec.push_near(&mic[pos..end]));
+        pos = end;
     }
-    out.extend_from_slice(&mic[full_frames * frame..]);
+    // The sub-frame remainder stays buffered inside the canceller; the track
+    // must keep its length, so pass those samples through untouched.
+    out.extend_from_slice(&mic[out.len()..]);
     out
 }
 

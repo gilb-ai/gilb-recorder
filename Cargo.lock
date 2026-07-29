@@ -2094,7 +2094,6 @@ dependencies = [
 name = "gilb-assist-audio"
 version = "1.0.0"
 dependencies = [
- "aec-rs",
  "anyhow",
  "async-trait",
  "gilb-assist",
