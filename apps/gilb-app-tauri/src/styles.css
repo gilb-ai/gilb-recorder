@@ -770,6 +770,10 @@ html.assist-root body.assist-window {
 }
 body.assist-window {
   margin: 0;
+  /* The base body padding would inset the panel while `.assist` still claims
+     100vh, pushing the Ask field past the bottom edge — same reset as
+     `body.countdown-window`. */
+  padding: 0;
   overflow: hidden;
 }
 .assist {
@@ -808,6 +812,19 @@ body.assist-window {
 .assist-bar button:hover { background: rgba(255, 255, 255, 0.16); }
 .assist-title { font-weight: 600; flex: 1; }
 .assist-nav { display: flex; align-items: center; gap: 4px; color: #9ca3af; }
+/* display:flex would otherwise beat the UA `[hidden] { display: none }` —
+   the block is hidden until the first suggestion arrives. */
+.assist-nav[hidden] { display: none; }
+.assist-bar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: rgba(255, 255, 255, 0.04);
+}
+/* Newer suggestions than the one on screen: the forward arrow lights up. */
+.assist-bar button.has-new:not(:disabled) {
+  background: rgba(96, 165, 250, 0.35);
+  color: #eff6ff;
+}
 .assist-dot {
   width: 8px;
   height: 8px;

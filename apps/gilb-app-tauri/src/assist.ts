@@ -25,14 +25,31 @@ function render(md: string): string {
 const responses: string[] = [];
 let shown = -1;
 
+/// Counter, arrow states and the "there are newer ones" mark. The whole block
+/// stays hidden until the first suggestion — an empty "‹ ›" in a fresh panel
+/// explains nothing.
+function renderNav() {
+  const nav = $("assist-nav");
+  const pos = $("assist-pos");
+  const prev = $<HTMLButtonElement>("assist-prev");
+  const next = $<HTMLButtonElement>("assist-next");
+  const total = responses.length;
+  if (nav) nav.hidden = total === 0;
+  if (pos) pos.textContent = total === 0 ? "" : `${shown + 1}/${total}`;
+  // Disabled at the ends: an arrow that silently does nothing reads as broken.
+  if (prev) prev.disabled = shown <= 0;
+  if (next) next.disabled = shown >= total - 1;
+  // Unread suggestions sit past the one on screen.
+  next?.classList.toggle("has-new", shown < total - 1);
+}
+
 function show(idx: number) {
   const content = $("assist-content");
-  const pos = $("assist-pos");
   if (!content || idx < 0 || idx >= responses.length) return;
   shown = idx;
   content.innerHTML = render(responses[idx]);
   content.scrollTop = 0;
-  if (pos) pos.textContent = `${idx + 1}/${responses.length}`;
+  renderNav();
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
@@ -40,9 +57,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   const input = $<HTMLInputElement>("assist-input");
   if (input) input.placeholder = t("assist.askPlaceholder");
 
+  renderNav();
+
   await listen<{ text: string }>("assist://update", (e) => {
+    // Follow the newest one only while the newest is what's on screen;
+    // otherwise reading an older suggestion would be interrupted by every
+    // arrival. The counter and the lit ›-arrow say more is waiting.
+    const wasAtLatest = shown === responses.length - 1;
     responses.push(e.payload.text);
-    show(responses.length - 1);
+    if (wasAtLatest) show(responses.length - 1);
+    else renderNav();
     $("assist-error")?.setAttribute("hidden", "");
   });
 
