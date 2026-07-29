@@ -366,6 +366,10 @@ pub struct Preferences {
     /// Language for on-device meeting transcription: `"auto"` | `"ru"` | `"en"`.
     /// Passed to Whisper; `"auto"` detects the language from the first audio.
     pub transcription_language: String,
+    /// User-level switch for the real-time meeting assistant (suggestions
+    /// overlay). Independent of the server-side feature flag: `false` tears
+    /// the local pipeline down entirely, so no STT runs during meetings.
+    pub assist_enabled: bool,
 }
 
 impl Default for Preferences {
@@ -374,6 +378,7 @@ impl Default for Preferences {
             tracking_paused: false,
             meeting_detection_enabled: true,
             transcription_language: "auto".to_string(),
+            assist_enabled: true,
         }
     }
 }
