@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import DOMPurify from "dompurify";
 import { marked } from "marked";
 import { applyI18n, t } from "./i18n";
@@ -55,6 +56,25 @@ window.addEventListener("DOMContentLoaded", async () => {
     if (el) {
       el.textContent = t("assist.error", { error: e.payload.message });
       el.removeAttribute("hidden");
+    }
+  });
+
+  // Dragging by the title bar. data-tauri-drag-region does this on its own,
+  // but its invoke is fire-and-forget: if the host has not granted
+  // core:window:allow-start-dragging, the window simply refuses to move with
+  // nothing to show for it. Calling startDragging() ourselves surfaces that
+  // in the panel instead of failing silently.
+  $("assist-bar-region")?.addEventListener("mousedown", async (e) => {
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, input, a")) return; // let controls work
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (err) {
+      const el = $("assist-error");
+      if (el) {
+        el.textContent = t("assist.error", { error: String(err) });
+        el.removeAttribute("hidden");
+      }
     }
   });
 

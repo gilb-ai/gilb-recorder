@@ -778,12 +778,12 @@ body.assist-window {
   height: 100vh;
   box-sizing: border-box;
   border-radius: 12px;
-  /* No backdrop-filter here: inside a transparent window the webview has
-     nothing of its own to blur and samples the window's backing store, which
-     the compositor updates out of step with the page — the panel visibly
-     pulses. The frosted look comes from the native window effect the host
-     installs (NSVisualEffectView), so this layer only tints it. */
-  background: rgba(10, 12, 18, 0.72);
+  /* Plain alpha, deliberately: backdrop-filter inside a transparent window
+     has nothing of its own to blur and samples the window's backing store,
+     which the compositor updates out of step with the page — the panel
+     pulses. A native NSVisualEffectView backdrop was tried instead and made
+     the window opaque, so translucency lives here and only here. */
+  background: rgba(10, 12, 18, 0.55);
   color: #f5f5f7;
   font-size: 13px;
 }
