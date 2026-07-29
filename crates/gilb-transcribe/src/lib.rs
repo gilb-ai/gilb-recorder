@@ -64,6 +64,43 @@ pub fn voiced_secs(mask: &[bool]) -> f32 {
     mask.iter().filter(|&&v| v).count() as f32 * VAD_FRAME as f32 / 16_000.0
 }
 
+/// A frame-wise voiced mask that knows its own frame geometry, so masks from
+/// different detectors travel intact: the batch energy VAD uses
+/// [`VAD_FRAME`]-sample frames, Silero (gilb-assist-audio) 512-sample ones.
+/// Carrying the mask with the audio is what keeps VAD a single pass — the
+/// realtime path hands the segmenter's decisions to the transcription filters
+/// instead of re-detecting.
+#[derive(Debug, Clone)]
+pub struct VoicedMask {
+    /// Samples per mask frame, at 16 kHz.
+    pub frame_size: usize,
+    pub frames: Vec<bool>,
+}
+
+impl VoicedMask {
+    /// Compute with the batch energy detector ([`voiced_mask`]).
+    pub fn energy(samples: &[f32]) -> Self {
+        Self { frame_size: VAD_FRAME, frames: voiced_mask(samples) }
+    }
+
+    /// Total voiced seconds.
+    pub fn secs(&self) -> f32 {
+        self.frames.iter().filter(|&&v| v).count() as f32 * self.frame_size as f32 / 16_000.0
+    }
+
+    /// Fraction of frames overlapping `[t0, t1]` (seconds) that are voiced.
+    pub fn fraction(&self, t0: f32, t1: f32) -> f32 {
+        let secs_per_frame = self.frame_size as f32 / 16_000.0;
+        let lo = ((t0 / secs_per_frame).floor() as usize).min(self.frames.len());
+        let hi = ((t1 / secs_per_frame).ceil() as usize).min(self.frames.len());
+        if hi <= lo {
+            return 0.0;
+        }
+        let voiced = self.frames[lo..hi].iter().filter(|&&v| v).count();
+        voiced as f32 / (hi - lo) as f32
+    }
+}
+
 /// Fraction of frames overlapping `[t0, t1]` (seconds) that are voiced.
 pub fn voiced_fraction(mask: &[bool], t0: f32, t1: f32) -> f32 {
     let secs_per_frame = VAD_FRAME as f32 / 16_000.0;
@@ -286,10 +323,7 @@ mod local {
     use async_trait::async_trait;
     use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 
-    use crate::{
-        voiced_fraction, voiced_mask, voiced_secs, Transcriber, Utterance, MIN_VOICED_SECS,
-        SEG_VOICED_MIN,
-    };
+    use crate::{Transcriber, Utterance, VoicedMask, MIN_VOICED_SECS, SEG_VOICED_MIN};
 
     /// On-device transcriber holding a loaded whisper.cpp model. The model is
     /// loaded once (it costs ~hundreds of MB + seconds) and reused across calls;
@@ -318,8 +352,21 @@ mod local {
         /// (silent input short-circuits, mostly-unvoiced segments dropped);
         /// the model inference runs on the blocking pool.
         pub async fn transcribe_buffer(&self, samples: Vec<f32>) -> Result<Vec<Utterance>> {
-            let mask = voiced_mask(&samples);
-            if voiced_secs(&mask) < MIN_VOICED_SECS {
+            let mask = VoicedMask::energy(&samples);
+            self.transcribe_buffer_masked(samples, mask).await
+        }
+
+        /// Like [`Self::transcribe_buffer`], but the caller supplies the
+        /// voiced mask — the single-VAD-pass path: the realtime segmenter
+        /// already decided which frames are speech (possibly with Silero),
+        /// and those decisions drive the anti-hallucination filters here
+        /// instead of a second, disagreeing detector.
+        pub async fn transcribe_buffer_masked(
+            &self,
+            samples: Vec<f32>,
+            mask: VoicedMask,
+        ) -> Result<Vec<Utterance>> {
+            if mask.secs() < MIN_VOICED_SECS {
                 return Ok(vec![]); // silent buffer — skip, no hallucinations
             }
 
@@ -331,9 +378,7 @@ mod local {
 
             Ok(raw
                 .into_iter()
-                .filter(|u| {
-                    !u.text.is_empty() && voiced_fraction(&mask, u.t0, u.t1) >= SEG_VOICED_MIN
-                })
+                .filter(|u| !u.text.is_empty() && mask.fraction(u.t0, u.t1) >= SEG_VOICED_MIN)
                 .collect())
         }
     }

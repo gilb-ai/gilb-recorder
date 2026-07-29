@@ -56,16 +56,25 @@ pub struct Segment {
     /// Offset of the first sample from the start of the stream, seconds.
     pub start_secs: f64,
     pub end_secs: f64,
+    /// The detector's per-frame decisions over `samples` (frame =
+    /// `vad_frame_size`). Travels with the segment so downstream filters
+    /// reuse them — VAD runs exactly once per sample.
+    pub voiced: Vec<bool>,
+    pub vad_frame_size: usize,
 }
 
 enum State {
     Idle {
         /// Recent audio ring so an opening segment starts pre_roll_ms early.
         pre_roll: VecDeque<f32>,
+        /// Per-frame flags matching `pre_roll` (one per full frame in it).
+        pre_roll_flags: VecDeque<bool>,
         consecutive_voiced: usize,
     },
     Active {
         buf: Vec<f32>,
+        /// Per-frame flags matching `buf`.
+        flags: Vec<bool>,
         /// Stream position of buf[0], in samples.
         start_sample: u64,
         voiced_frames: usize,
@@ -151,7 +160,10 @@ impl Segmenter {
         let pre_roll_samples =
             (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / frame_size
                 * frame_size;
-        let overlap_samples = cfg.overlap_ms as usize * cfg.sample_rate as usize / 1000;
+        // Rounded to whole frames: the carried tail must keep its per-frame
+        // flags aligned with its samples.
+        let overlap_samples =
+            cfg.overlap_ms as usize * cfg.sample_rate as usize / 1000 / frame_size * frame_size;
         Self {
             frame_size,
             close_frames,
@@ -192,8 +204,8 @@ impl Segmenter {
         let state = std::mem::replace(&mut self.state, State::idle());
         match state {
             State::Idle { .. } => None,
-            State::Active { buf, start_sample, voiced_frames, .. } => {
-                self.finish(buf, start_sample, voiced_frames)
+            State::Active { buf, flags, start_sample, voiced_frames, .. } => {
+                self.finish(buf, flags, start_sample, voiced_frames)
             }
         }
     }
@@ -203,26 +215,33 @@ impl Segmenter {
         self.consumed += frame.len() as u64;
 
         match &mut self.state {
-            State::Idle { pre_roll, consecutive_voiced } => {
+            State::Idle { pre_roll, pre_roll_flags, consecutive_voiced } => {
                 pre_roll.extend(frame.iter());
+                pre_roll_flags.push_back(voiced);
                 while pre_roll.len() > self.pre_roll_samples + self.frame_size {
                     pre_roll.pop_front();
+                }
+                while pre_roll_flags.len() * self.frame_size > pre_roll.len() {
+                    pre_roll_flags.pop_front();
                 }
                 *consecutive_voiced = if voiced { *consecutive_voiced + 1 } else { 0 };
                 if *consecutive_voiced >= self.cfg.open_frames {
                     let buf: Vec<f32> = pre_roll.iter().copied().collect();
+                    let flags: Vec<bool> = pre_roll_flags.iter().copied().collect();
                     let voiced_frames = *consecutive_voiced;
                     let start_sample = self.consumed - buf.len() as u64;
                     self.state = State::Active {
                         buf,
+                        flags,
                         start_sample,
                         voiced_frames,
                         silence_frames: 0,
                     };
                 }
             }
-            State::Active { buf, start_sample, voiced_frames, silence_frames } => {
+            State::Active { buf, flags, start_sample, voiced_frames, silence_frames } => {
                 buf.extend_from_slice(&frame);
+                flags.push(voiced);
                 if voiced {
                     *voiced_frames += 1;
                     *silence_frames = 0;
@@ -231,29 +250,47 @@ impl Segmenter {
                 }
 
                 if *silence_frames >= self.close_frames {
-                    let (buf, start, vf) = (std::mem::take(buf), *start_sample, *voiced_frames);
+                    let (buf, flags, start, vf) = (
+                        std::mem::take(buf),
+                        std::mem::take(flags),
+                        *start_sample,
+                        *voiced_frames,
+                    );
                     self.state = State::idle();
-                    closed.extend(self.finish(buf, start, vf));
+                    closed.extend(self.finish(buf, flags, start, vf));
                 } else if buf.len() >= self.max_frames * self.frame_size {
                     // Pauseless speech: emit, carry the tail so the forced cut
                     // does not lose the word it landed on.
-                    let (full, start, vf) = (std::mem::take(buf), *start_sample, *voiced_frames);
+                    let (full, full_flags, start, vf) = (
+                        std::mem::take(buf),
+                        std::mem::take(flags),
+                        *start_sample,
+                        *voiced_frames,
+                    );
                     let overlap_start = full.len().saturating_sub(self.overlap_samples);
                     let carry = full[overlap_start..].to_vec();
+                    let carry_flags = full_flags[overlap_start / self.frame_size..].to_vec();
                     self.state = State::Active {
                         start_sample: start + overlap_start as u64,
                         voiced_frames: carry.len() / self.frame_size,
                         silence_frames: 0,
                         buf: carry,
+                        flags: carry_flags,
                     };
-                    closed.extend(self.finish(full, start, vf));
+                    closed.extend(self.finish(full, full_flags, start, vf));
                 }
             }
         }
     }
 
     /// Apply the anti-hallucination filter and stamp times.
-    fn finish(&self, buf: Vec<f32>, start_sample: u64, voiced_frames: usize) -> Option<Segment> {
+    fn finish(
+        &self,
+        buf: Vec<f32>,
+        flags: Vec<bool>,
+        start_sample: u64,
+        voiced_frames: usize,
+    ) -> Option<Segment> {
         if voiced_frames < self.min_voiced_frames {
             return None;
         }
@@ -262,13 +299,19 @@ impl Segmenter {
             start_secs: start_sample as f64 / sr,
             end_secs: (start_sample + buf.len() as u64) as f64 / sr,
             samples: buf,
+            voiced: flags,
+            vad_frame_size: self.frame_size,
         })
     }
 }
 
 impl State {
     fn idle() -> Self {
-        State::Idle { pre_roll: VecDeque::new(), consecutive_voiced: 0 }
+        State::Idle {
+            pre_roll: VecDeque::new(),
+            pre_roll_flags: VecDeque::new(),
+            consecutive_voiced: 0,
+        }
     }
 }
 

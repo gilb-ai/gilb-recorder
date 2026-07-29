@@ -38,8 +38,10 @@ pub struct RecognizedUtterance {
 /// whatever is expensive to keep warm (reloading lazily is the impl's job).
 #[async_trait]
 pub trait SegmentTranscriber: Send + 'static {
-    /// Recognize a 16 kHz mono segment. Empty string = nothing was said.
-    async fn transcribe(&mut self, samples: Vec<f32>) -> Result<String>;
+    /// Recognize a pause-bounded 16 kHz segment. The segment carries its
+    /// detector's voiced mask so implementations filter with it instead of
+    /// running a second VAD. Empty string = nothing was said.
+    async fn transcribe(&mut self, segment: Segment) -> Result<String>;
     /// Called after [`SttWorkerConfig::idle_unload`] without work.
     fn unload(&mut self) {}
 }
@@ -108,7 +110,7 @@ async fn run<T: SegmentTranscriber>(
 
         if let Some((channel, segment)) = queue.pop_front() {
             let (start_secs, end_secs) = (segment.start_secs, segment.end_secs);
-            match transcriber.transcribe(segment.samples).await {
+            match transcriber.transcribe(segment).await {
                 Ok(text) if !text.trim().is_empty() => {
                     let _ = out.send(RecognizedUtterance {
                         channel,
@@ -149,11 +151,11 @@ mod tests {
 
     #[async_trait]
     impl SegmentTranscriber for GatedMock {
-        async fn transcribe(&mut self, samples: Vec<f32>) -> Result<String> {
+        async fn transcribe(&mut self, segment: Segment) -> Result<String> {
             self.gate.acquire().await.unwrap().forget();
             // Identify the segment by its first sample so tests can tell
             // which ones survived the queue.
-            Ok(format!("seg{}", samples[0] as i64))
+            Ok(format!("seg{}", segment.samples[0] as i64))
         }
 
         fn unload(&mut self) {
@@ -166,6 +168,8 @@ mod tests {
             samples: vec![id as f32; 16],
             start_secs: id as f64,
             end_secs: id as f64 + 1.0,
+            voiced: vec![true],
+            vad_frame_size: 16,
         }
     }
 

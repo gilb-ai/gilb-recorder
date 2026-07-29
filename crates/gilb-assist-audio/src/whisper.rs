@@ -11,10 +11,10 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use gilb_transcribe::LocalTranscriber;
+use gilb_transcribe::{LocalTranscriber, VoicedMask};
 use tracing::info;
 
-use crate::SegmentTranscriber;
+use crate::{Segment, SegmentTranscriber};
 
 pub struct WhisperTranscriber {
     model_path: PathBuf,
@@ -52,9 +52,15 @@ impl WhisperTranscriber {
 
 #[async_trait]
 impl SegmentTranscriber for WhisperTranscriber {
-    async fn transcribe(&mut self, samples: Vec<f32>) -> Result<String> {
+    async fn transcribe(&mut self, segment: Segment) -> Result<String> {
         let model = self.model().await?;
-        let utterances = model.transcribe_buffer(samples).await?;
+        // Single VAD pass: the segmenter's frame decisions drive the
+        // anti-hallucination filters — no re-detection here.
+        let mask = VoicedMask {
+            frame_size: segment.vad_frame_size,
+            frames: segment.voiced,
+        };
+        let utterances = model.transcribe_buffer_masked(segment.samples, mask).await?;
         Ok(utterances
             .into_iter()
             .map(|u| u.text)

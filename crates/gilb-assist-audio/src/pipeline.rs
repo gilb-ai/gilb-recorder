@@ -215,8 +215,8 @@ mod tests {
 
     #[async_trait]
     impl SegmentTranscriber for StubStt {
-        async fn transcribe(&mut self, samples: Vec<f32>) -> Result<String> {
-            Ok(format!("[{} ms]", samples.len() * 1000 / 16_000))
+        async fn transcribe(&mut self, segment: crate::Segment) -> Result<String> {
+            Ok(format!("[{} ms]", segment.samples.len() * 1000 / 16_000))
         }
     }
 
