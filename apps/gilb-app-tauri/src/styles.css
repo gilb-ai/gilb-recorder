@@ -778,22 +778,27 @@ body.assist-window {
   height: 100vh;
   box-sizing: border-box;
   border-radius: 12px;
-  background: rgba(10, 12, 18, 0.55);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
+  /* No backdrop-filter here: inside a transparent window the webview has
+     nothing of its own to blur and samples the window's backing store, which
+     the compositor updates out of step with the page — the panel visibly
+     pulses. The frosted look comes from the native window effect the host
+     installs (NSVisualEffectView), so this layer only tints it. */
+  background: rgba(10, 12, 18, 0.72);
   color: #f5f5f7;
   font-size: 13px;
 }
 body.ghost .assist { opacity: 0.75; }
+/* Dragging is the host's job (data-tauri-drag-region in assist.html);
+   -webkit-app-region is a Chromium feature WKWebView does not implement. */
 .assist-bar {
   display: flex;
   align-items: center;
   gap: 8px;
   padding: 8px 10px;
-  -webkit-app-region: drag;
+  cursor: default;
+  user-select: none;
 }
 .assist-bar button {
-  -webkit-app-region: no-drag;
   background: rgba(255, 255, 255, 0.08);
   color: #d1d5db;
   border: none;

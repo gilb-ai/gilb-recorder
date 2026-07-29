@@ -11,7 +11,9 @@
   </head>
   <body class="assist-window">
     <main class="assist" id="assist-panel">
-      <header class="assist-bar">
+      <!-- "deep": dragging works anywhere in the bar; the shim still lets
+           clicks through to buttons and inputs, which block dragging. -->
+      <header class="assist-bar" data-tauri-drag-region="deep">
         <span class="assist-dot" id="assist-dot" aria-hidden="true"></span>
         <span class="assist-title" data-i18n="assist.title">Assist</span>
         <span class="assist-nav">
