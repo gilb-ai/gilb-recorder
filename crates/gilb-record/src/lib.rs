@@ -28,6 +28,10 @@ use tracing::{info, warn};
 
 #[cfg(target_os = "macos")]
 mod macos;
+/// Public for `examples/tap_smoke.rs`; not part of the stable API.
+#[cfg(target_os = "macos")]
+#[doc(hidden)]
+pub mod macos_tap;
 
 #[cfg(target_os = "windows")]
 mod windows;

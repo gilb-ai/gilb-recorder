@@ -277,9 +277,17 @@ impl VideoWriter {
 /// A running capture: the two SCK streams, the mic thread's stop signal +
 /// handle, the shared audio buffers, and the output paths to finalize on stop.
 struct Session {
-    /// App-scoped, audio only. Deliberately not shared with the watcher: nothing
-    /// re-targets it, which is the whole point — window churn can't kill it.
-    audio_stream: Arc<Mutex<SCStream>>,
+    /// Primary system-audio source: a Core Audio process tap (macOS 14.2+).
+    /// `replayd` is not in its path, which is the point — the failures that
+    /// cost recordings all lived there. Dropped on stop.
+    system_tap: Option<crate::macos_tap::SystemAudioTap>,
+    /// Fallback system-audio source when the tap is unavailable (old macOS, or
+    /// the Audio Recording permission was denied): the SCK app-scoped stream.
+    /// `None` when the tap is active.
+    audio_stream: Option<Arc<Mutex<SCStream>>>,
+    /// Rate the system channel was captured at — the tap's device rate, or
+    /// [`CAPTURE_SAMPLE_RATE`] on the SCK path.
+    system_rate: u32,
     /// Window-scoped, screen only. Shared so the window watcher can swap in a
     /// fresh stream when the call app changes its window. `stop()` stops
     /// whatever stream is current.
@@ -841,31 +849,56 @@ impl ScreenAudioCapturer for MacosCapturer {
         let health = Arc::new(VideoHealth::new());
         let display = &displays[0];
 
-        // --- Audio first: it carries the far end's voice, so it gets the scope
-        // that cannot be invalidated by anything the app does to its windows.
-        // The filter names the *application*, not a window, so join/share/panel
-        // transitions leave it alone — and because it is never re-targeted, the
-        // audio tap is negotiated exactly once per recording instead of on every
-        // window swap (that renegotiation is what fails with `-3818`).
-        let audio_filter = match &app {
-            Some(app) => SCContentFilter::new()
-                .with_display_including_application_excepting_windows(display, &[app], &[]),
-            None => {
-                if let Some(bid) = app_bundle_id {
-                    warn!(
-                        bundle = bid,
-                        "call app not in shareable content; capturing system-wide audio"
-                    );
+        // --- Audio first: it carries the far end's voice. Primary source is a
+        // Core Audio process tap — `replayd` (where the `-3818` race and the
+        // mid-call stream deaths lived) is not in its path, and nothing the
+        // call app does to its windows or process set can invalidate it. If
+        // the tap is unavailable (macOS < 14.2, or the Audio Recording
+        // permission is denied) fall back to the SCK app-scoped stream.
+        let system_tap = {
+            let audio = audio.clone();
+            match crate::macos_tap::SystemAudioTap::start(move |chunk| {
+                if let Ok(mut buffers) = audio.lock() {
+                    buffers.system.extend_from_slice(chunk);
                 }
-                SCContentFilter::new().with_display_excluding_windows(display, &[])
+            }) {
+                Ok(tap) => Some(tap),
+                Err(err) => {
+                    warn!(error = %err, "process tap unavailable; system audio falls back to ScreenCaptureKit");
+                    None
+                }
             }
         };
-        let audio_stream = Arc::new(Mutex::new(build_audio_stream(
-            &audio_filter,
-            &make_audio_config()?,
-            &audio,
-        )?));
-        let mut audio_guard = StreamGuard::new(&audio_stream);
+        let system_rate = system_tap
+            .as_ref()
+            .map_or(CAPTURE_SAMPLE_RATE, |t| t.sample_rate());
+
+        // SCK fallback: the filter names the *application*, not a window, so
+        // join/share/panel transitions leave it alone, and it is never
+        // re-targeted — the audio tap inside SCK is negotiated exactly once.
+        let audio_stream = if system_tap.is_some() {
+            None
+        } else {
+            let audio_filter = match &app {
+                Some(app) => SCContentFilter::new()
+                    .with_display_including_application_excepting_windows(display, &[app], &[]),
+                None => {
+                    if let Some(bid) = app_bundle_id {
+                        warn!(
+                            bundle = bid,
+                            "call app not in shareable content; capturing system-wide audio"
+                        );
+                    }
+                    SCContentFilter::new().with_display_excluding_windows(display, &[])
+                }
+            };
+            Some(Arc::new(Mutex::new(build_audio_stream(
+                &audio_filter,
+                &make_audio_config()?,
+                &audio,
+            )?)))
+        };
+        let mut audio_guard = audio_stream.as_ref().map(StreamGuard::new);
 
         // --- Video second: the call app's **window** when we have one. A
         // desktop-independent window filter follows the window across monitors
@@ -924,12 +957,17 @@ impl ScreenAudioCapturer for MacosCapturer {
             )
         });
 
-        // Both streams reached the session; it owns stopping them from here.
-        audio_guard.disarm();
+        // Both sources reached the session; it owns stopping them from here.
+        // (The tap needs no guard: it is RAII — dropped on any error path.)
+        if let Some(g) = audio_guard.as_mut() {
+            g.disarm();
+        }
         video_guard.disarm();
 
         *guard = Some(Session {
+            system_tap,
             audio_stream,
+            system_rate,
             video_stream,
             watcher_stop,
             watcher_thread,
@@ -963,9 +1001,14 @@ impl ScreenAudioCapturer for MacosCapturer {
                 warn!(error = ?e, "stopping the video capture stream");
             }
         }
-        if let Ok(stream) = session.audio_stream.lock() {
-            if let Err(e) = stream.stop_capture() {
-                warn!(error = ?e, "stopping the audio capture stream");
+        // Stop the system-audio source before the buffers are read: the tap's
+        // IO block appends from its own queue until destroyed.
+        drop(session.system_tap.take());
+        if let Some(stream) = &session.audio_stream {
+            if let Ok(stream) = stream.lock() {
+                if let Err(e) = stream.stop_capture() {
+                    warn!(error = ?e, "stopping the audio capture stream");
+                }
             }
         }
         if let Some(stop) = session.mic_stop.take() {
@@ -997,12 +1040,12 @@ impl ScreenAudioCapturer for MacosCapturer {
             &buffers.mic,
             session.sample_rate,
             &buffers.system,
-            CAPTURE_SAMPLE_RATE,
+            session.system_rate,
         );
         // Single channel each: `mix_*_dual` with an empty second source just
         // resamples the first to 16 kHz.
         let mic_only = mix_to_mono_16k_dual(&buffers.mic, session.sample_rate, &[], 1);
-        let sys_only = mix_to_mono_16k_dual(&buffers.system, CAPTURE_SAMPLE_RATE, &[], 1);
+        let sys_only = mix_to_mono_16k_dual(&buffers.system, session.system_rate, &[], 1);
 
         let dir = session
             .audio_path
