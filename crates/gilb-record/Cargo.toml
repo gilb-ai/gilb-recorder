@@ -59,6 +59,13 @@ objc2-core-media = { version = "0.3", features = [
 ] }
 block2 = "0.6"
 core-foundation = "0.10"
+# System-audio capture via Core Audio process taps (macos_tap.rs): the tap /
+# aggregate-device / IOProc C API plus the CATapDescription class.
+objc2-core-audio = "0.3"
+objc2-core-audio-types = "0.3"
+dispatch2 = "0.3"
+objc2-core-foundation = "0.3"
+libc = "0.2"
 
 # Windows capture stack: Windows.Graphics.Capture screen -> Media Foundation
 # SinkWriter H.264 .mp4, WASAPI loopback (system) + WASAPI mic -> mixed WAV.
@@ -94,3 +101,6 @@ windows = { version = "0.58", features = [
 [dev-dependencies]
 uuid = { workspace = true }
 tokio = { workspace = true }
+# Lets `examples/capture_smoke.rs` surface the backend's own tracing output —
+# the capture path is macOS/Windows-only, so those logs are the only view into it.
+tracing-subscriber = { workspace = true }

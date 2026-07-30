@@ -50,6 +50,11 @@ async fn main() {
     let lang = args.next().unwrap_or_else(|| "auto".to_string());
     let dir = Path::new(&dir);
 
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .init();
+
     let load = Instant::now();
     let t = LocalTranscriber::new(Path::new(&model), lang).expect("load model");
     eprintln!("model loaded in {:.1}s", load.elapsed().as_secs_f32());
@@ -66,17 +71,27 @@ async fn main() {
             utts.len(),
             run.elapsed().as_secs_f32()
         );
-        segs.extend(utts.into_iter().map(|u| (u.t0, u.t1, channel, u.text)));
+        segs.extend(utts.into_iter().map(|u| gilb_transcribe::Segment {
+            t0: u.t0,
+            t1: u.t1,
+            channel,
+            text: u.text,
+        }));
     }
-    segs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    segs.sort_by(|a, b| a.t0.partial_cmp(&b.t0).unwrap());
+    // Same echo suppression the shipping merge applies.
+    let (segs, dropped) = gilb_transcribe::suppress_mic_echoes(segs);
+    if dropped > 0 {
+        eprintln!("suppressed {dropped} mic echoes");
+    }
 
     eprintln!("\nmerged transcript:");
-    for (t0, t1, channel, text) in &segs {
-        let speaker = if *channel == Channel::Mic {
+    for s in &segs {
+        let speaker = if s.channel == Channel::Mic {
             "Me"
         } else {
             "Others"
         };
-        println!("[{t0:6.2}-{t1:6.2}] ({speaker:<6}) {text}");
+        println!("[{:6.2}-{:6.2}] ({speaker:<6}) {}", s.t0, s.t1, s.text);
     }
 }

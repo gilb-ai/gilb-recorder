@@ -40,4 +40,7 @@ name = "local_poc"
 required-features = ["local-whisper"]
 
 [dev-dependencies]
+# Lets `examples/local_poc.rs` show the transcriber's own decisions (the pinned
+# language above all) instead of swallowing them.
+tracing-subscriber = { workspace = true }
 uuid = { workspace = true }

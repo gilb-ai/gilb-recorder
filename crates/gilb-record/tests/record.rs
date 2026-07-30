@@ -221,6 +221,43 @@ async fn double_arm_is_ignored_until_stop() {
 }
 
 #[tokio::test]
+async fn a_second_meeting_arriving_mid_capture_is_retired_not_left_recording() {
+    let dir = temp_dir();
+    let db = temp_db(&dir).await;
+    let first = meetings::insert_meeting(&db, 0, "manual")
+        .await
+        .expect("insert");
+    let second = meetings::insert_meeting(&db, 1, "us.zoom.xos")
+        .await
+        .expect("insert");
+
+    let recorder = Recorder::new(db.clone(), dir.clone(), CountingCapturer::default());
+    recorder.arm(first).await.expect("arm the first");
+    // A different meeting detected while the first is capturing: its capture is
+    // correctly skipped, but the row must not be left claiming to record — that
+    // is how rows used to sit in `recording` indefinitely.
+    recorder.arm(second).await.expect("second arm is a no-op");
+
+    let m = meetings::get_meeting(&db, second)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "cancelled");
+    assert!(m.ended_at.is_some());
+    assert!(m.video_path.is_none(), "it never captured anything");
+
+    // The active recording is untouched.
+    let m = meetings::get_meeting(&db, first)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "recording");
+
+    db.close().await;
+    cleanup(&dir);
+}
+
+#[tokio::test]
 async fn stop_without_arm_is_noop() {
     let dir = temp_dir();
     let db = temp_db(&dir).await;
@@ -275,6 +312,196 @@ async fn bus_armed_then_cancelled_drives_state_machine() {
 
     db.close().await;
     cleanup(&dir);
+}
+
+/// Capturer that models the real backends' failure shape: it *claims* its output
+/// file up front (as AVAssetWriter does on `startWriting`) and refuses outright if
+/// that file already exists (`AVErrorFileAlreadyExists`). The first `fail_first`
+/// attempts then fail after claiming.
+///
+/// This is what makes the retry test meaningful: unless `arm` clears the partial
+/// output between tries, every attempt past the first dies on the leftover rather
+/// than on the original, transient problem.
+#[derive(Default)]
+struct FileClaimingCapturer {
+    starts: AtomicUsize,
+    stops: AtomicUsize,
+    fail_first: usize,
+}
+
+impl ScreenAudioCapturer for FileClaimingCapturer {
+    fn start(&self, video: &Path, _audio: &Path, _app_bundle_id: Option<&str>) -> Result<()> {
+        if video.exists() {
+            anyhow::bail!("output already exists (AVErrorFileAlreadyExists)");
+        }
+        std::fs::write(video, b"")?;
+        let n = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
+        if n <= self.fail_first {
+            anyhow::bail!("transient start failure #{n}");
+        }
+        Ok(())
+    }
+    fn stop(&self) -> Result<()> {
+        self.stops.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+}
+
+/// Millisecond retry waits for tests. Real waits, deliberately: pausing
+/// tokio's clock races sqlx (see `Recorder::with_start_backoff`).
+fn fast_backoff() -> Vec<std::time::Duration> {
+    vec![std::time::Duration::from_millis(10); gilb_record::START_ATTEMPTS - 1]
+}
+
+#[tokio::test]
+async fn arm_retries_a_transient_start_failure() {
+    let dir = temp_dir();
+    let db = temp_db(&dir).await;
+    let id = meetings::insert_meeting(&db, 0, "us.zoom.xos")
+        .await
+        .expect("insert");
+
+    let recorder = Recorder::new(
+        db.clone(),
+        dir.clone(),
+        FileClaimingCapturer {
+            fail_first: 2,
+            ..Default::default()
+        },
+    )
+    .with_start_backoff(fast_backoff());
+    recorder
+        .arm(id)
+        .await
+        .expect("arm should survive two refusals");
+
+    assert_eq!(recorder_starts(&recorder), 3, "two failures then a success");
+    let m = meetings::get_meeting(&db, id)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "recording");
+    assert!(m.video_path.is_some(), "paths are set once capture is up");
+
+    db.close().await;
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn arm_gives_up_after_exhausting_attempts() {
+    let dir = temp_dir();
+    let db = temp_db(&dir).await;
+    let id = meetings::insert_meeting(&db, 0, "us.zoom.xos")
+        .await
+        .expect("insert");
+
+    let recorder = Recorder::new(
+        db.clone(),
+        dir.clone(),
+        FileClaimingCapturer {
+            fail_first: usize::MAX,
+            ..Default::default()
+        },
+    )
+    .with_start_backoff(fast_backoff());
+    let err = recorder.arm(id).await.expect_err("every attempt fails");
+    assert!(
+        err.to_string().contains("start screen/audio capture"),
+        "unexpected error: {err:#}"
+    );
+    assert_eq!(
+        recorder_starts(&recorder),
+        gilb_record::START_ATTEMPTS,
+        "the whole retry budget is spent before giving up"
+    );
+
+    let m = meetings::get_meeting(&db, id)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "failed");
+    assert!(m.ended_at.is_some());
+    assert!(
+        m.video_path.is_none(),
+        "a meeting that never captured keeps no paths"
+    );
+    // The last attempt's claimed file is cleaned up rather than orphaned on disk.
+    let stamp_dirs: Vec<_> = std::fs::read_dir(dir.join("meetings"))
+        .expect("meetings dir")
+        .filter_map(|e| e.ok())
+        .collect();
+    for entry in stamp_dirs {
+        let leftover = entry.path().join("video.mp4");
+        assert!(
+            !leftover.exists(),
+            "partial output left behind: {}",
+            leftover.display()
+        );
+    }
+
+    db.close().await;
+    cleanup(&dir);
+}
+
+#[tokio::test]
+async fn arm_abandons_its_retry_when_stop_arrives() {
+    let dir = temp_dir();
+    let db = temp_db(&dir).await;
+    let id = meetings::insert_meeting(&db, 0, "us.zoom.xos")
+        .await
+        .expect("insert");
+
+    let recorder = Arc::new(Recorder::new(
+        db.clone(),
+        dir.clone(),
+        FileClaimingCapturer {
+            fail_first: usize::MAX,
+            ..Default::default()
+        },
+    ));
+
+    // Real time here on purpose: the point is that a `stop` landing *during* a
+    // backoff cuts the retry loop short instead of bringing a stream up minutes
+    // after everyone hung up.
+    let armed = tokio::spawn({
+        let recorder = recorder.clone();
+        async move { recorder.arm(id).await }
+    });
+
+    // Wait for the first attempt to have failed, i.e. the loop is now backing off.
+    for _ in 0..200 {
+        if recorder_starts(&recorder) >= 1 {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(recorder_starts(&recorder), 1, "first attempt has run");
+
+    recorder
+        .stop(RecordingOutcome::Completed)
+        .await
+        .expect("stop while arming is a no-op for capture");
+
+    let result = armed.await.expect("join");
+    assert!(result.is_err(), "arm gives up instead of arming late");
+    assert_eq!(
+        recorder_starts(&recorder),
+        1,
+        "no further attempts after being abandoned"
+    );
+
+    let m = meetings::get_meeting(&db, id)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "failed");
+
+    db.close().await;
+    cleanup(&dir);
+}
+
+fn recorder_starts(recorder: &Recorder<FileClaimingCapturer>) -> usize {
+    recorder.capturer().starts.load(Ordering::SeqCst)
 }
 
 /// Publish `event` once per poll until `cond` holds (or ~2s elapses), so the

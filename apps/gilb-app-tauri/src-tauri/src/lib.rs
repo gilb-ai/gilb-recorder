@@ -48,7 +48,10 @@ pub fn run() {
     let result = builder
         .setup(|app| {
             match state::build_app_state() {
-                Ok(s) => {
+                Ok((s, db_rescue)) => {
+                    if let Some(rescue) = &db_rescue {
+                        state::show_db_rescue_notice(app.handle(), rescue);
+                    }
                     events::spawn_proxies(app.handle().clone(), s.engine.clone());
 
                     // Start the meeting flow: detector + recorder + countdown
