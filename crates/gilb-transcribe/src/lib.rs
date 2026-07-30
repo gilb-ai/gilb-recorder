@@ -9,9 +9,12 @@
 //!
 //! An energy [`voiced_mask`] gates Whisper's silence hallucinations: a silent
 //! channel is skipped entirely and segments landing in unvoiced spans are
-//! dropped. The whisper.cpp call lives behind the [`Transcriber`] trait (and the
-//! `local-whisper` feature) so the orchestration is unit-testable with a mock —
-//! no model, no GPU. Only [`LocalTranscriber`] loads a real model.
+//! dropped. After the merge, [`suppress_mic_echoes`] removes mic utterances that
+//! are just the speakers bleeding into the microphone (the same line would
+//! otherwise appear as both "Me" and "Others"). The whisper.cpp call lives
+//! behind the [`Transcriber`] trait (and the `local-whisper` feature) so the
+//! orchestration is unit-testable with a mock — no model, no GPU. Only
+//! [`LocalTranscriber`] loads a real model.
 
 use std::path::Path;
 
@@ -206,6 +209,109 @@ fn write_transcript_files(dir: &Path, segs: &[Segment]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Acoustic-echo suppression at the transcript level.
+//
+// The two channels are not acoustically isolated: without headphones the mic
+// also hears the speakers, so a remote participant's sentence is transcribed on
+// *both* channels and shows up twice — once as "Me", once as "Others". Observed
+// on a real recording (single remote line duplicated across channels within a
+// second). The suppression below mirrors the approach OpenOats ships in its
+// `AcousticEchoFilter` (MIT): treat a mic utterance as an echo when it starts
+// shortly *after* a system utterance that says (almost) the same thing, and
+// drop the mic copy. Always the mic copy: the system tap physically cannot
+// contain the local voice, so a cross-channel text match identifies the mic
+// side as the bleed. Matching on text (not energy — measured unreliable here:
+// the near-field mic wins every loudness comparison) means genuinely
+// simultaneous speech in different words is never dropped.
+// ---------------------------------------------------------------------------
+
+/// A mic utterance counts as an echo when it starts within this window of the
+/// matching system utterance, in either direction. Physically the echo always
+/// trails the tap, but whisper segments each channel independently (boundary
+/// jitter well over the acoustic delay) and the channels' clocks drift
+/// (~2s/hour measured), so strict "mic after system" ordering misses real
+/// echoes — OpenOats ships this same both-directions mode for its filter.
+const ECHO_WINDOW_SECS: f32 = 1.75;
+/// Word-set Jaccard similarity at or above which two texts are "the same".
+const ECHO_SIMILARITY_MIN: f64 = 0.78;
+/// Texts shorter than this many words *and* this many characters are too short
+/// to match reliably ("да", "угу" recur constantly on both channels).
+const ECHO_MIN_WORDS: usize = 4;
+const ECHO_MIN_CHARS: usize = 20;
+
+/// Lowercased alphanumeric words of `text`; everything else is a separator.
+fn normalized_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether `mic_text` reads as an echo of `sys_text`: both long enough to be
+/// distinctive, and either near-identical word sets or one normalized text
+/// containing the other (whisper often segments the echo differently, so one
+/// side may carry a strict subset of the other's words).
+fn is_echo_text(mic_text: &str, sys_text: &str) -> bool {
+    let (mic_words, sys_words) = (normalized_words(mic_text), normalized_words(sys_text));
+    let eligible = |words: &[String]| {
+        words.len() >= ECHO_MIN_WORDS
+            || words.iter().map(|w| w.len()).sum::<usize>() + words.len().saturating_sub(1)
+                >= ECHO_MIN_CHARS
+    };
+    if !eligible(&mic_words) || !eligible(&sys_words) {
+        return false;
+    }
+
+    let mic_set: std::collections::HashSet<&str> = mic_words.iter().map(String::as_str).collect();
+    let sys_set: std::collections::HashSet<&str> = sys_words.iter().map(String::as_str).collect();
+    let intersection = mic_set.intersection(&sys_set).count();
+    let union = mic_set.union(&sys_set).count();
+    let jaccard = if union == 0 {
+        1.0
+    } else {
+        intersection as f64 / union as f64
+    };
+
+    let (mic_norm, sys_norm) = (mic_words.join(" "), sys_words.join(" "));
+    jaccard >= ECHO_SIMILARITY_MIN || mic_norm.contains(&sys_norm) || sys_norm.contains(&mic_norm)
+}
+
+/// Remove mic segments that are acoustic echoes of system segments. Segments
+/// must be time-sorted. Returns the surviving segments plus how many were
+/// dropped (for logging). Only mic segments are ever removed, so no content can
+/// vanish — the system copy of every dropped line remains.
+pub fn suppress_mic_echoes(segs: Vec<Segment>) -> (Vec<Segment>, usize) {
+    let system: Vec<(f32, String)> = segs
+        .iter()
+        .filter(|s| s.channel == Channel::System)
+        .map(|s| (s.t0, s.text.clone()))
+        .collect();
+
+    let mut dropped = 0usize;
+    let kept = segs
+        .into_iter()
+        .filter(|seg| {
+            if seg.channel != Channel::Mic {
+                return true;
+            }
+            // Newest candidate first: the echo's source is the closest
+            // system line, so search backwards from the segment.
+            let is_echo = system
+                .iter()
+                .rev()
+                .filter(|(sys_t0, _)| (seg.t0 - sys_t0).abs() <= ECHO_WINDOW_SECS)
+                .any(|(_, sys_text)| is_echo_text(&seg.text, sys_text));
+            if is_echo {
+                dropped += 1;
+            }
+            !is_echo
+        })
+        .collect();
+    (kept, dropped)
+}
+
 /// Transcribe both channels next to `audio_path` and return their merged,
 /// time-sorted segments. A channel file that doesn't exist is skipped.
 async fn transcribe_channels(audio_path: &Path, t: &dyn Transcriber) -> Result<Vec<Segment>> {
@@ -229,6 +335,10 @@ async fn transcribe_channels(audio_path: &Path, t: &dyn Transcriber) -> Result<V
         }));
     }
     segs.sort_by(|a, b| a.t0.partial_cmp(&b.t0).unwrap_or(std::cmp::Ordering::Equal));
+    let (segs, dropped) = suppress_mic_echoes(segs);
+    if dropped > 0 {
+        info!(dropped, "suppressed mic echoes of system audio");
+    }
     Ok(segs)
 }
 
