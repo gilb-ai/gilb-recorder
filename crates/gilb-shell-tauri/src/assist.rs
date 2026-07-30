@@ -45,10 +45,10 @@ pub const ASSIST_WINDOW: &str = "assist";
 /// macOS `Cmd+M` is already manual recording in Rodnik's shell.
 const ASSIST_SHORTCUT: &str = "CmdOrCtrl+Backslash";
 
-/// The whisper build both products ship. Gating the feature on a ~570 MB
-/// download rather than bundling it keeps the installer light (D9).
-pub const DEFAULT_MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
+/// The whisper build both products ship, from gilb-config so transcription and
+/// suggestions cannot drift apart. Gating the feature on a ~570 MB download
+/// rather than bundling it keeps the installer light (D9).
+pub const DEFAULT_MODEL_URL: &str = gilb_config::TRANSCRIBE_MODEL_URL;
 
 /// What the product brings to the shared machinery.
 pub trait AssistHost: Send + Sync + 'static {
@@ -172,7 +172,11 @@ pub fn status(app: &AppHandle) -> AssistStatus {
         available,
         model_ready: model_ready(),
         downloading,
-        percent: if downloading { state.download.percent.load(Ordering::SeqCst) } else { 0 },
+        percent: if downloading {
+            state.download.percent.load(Ordering::SeqCst)
+        } else {
+            0
+        },
         enabled: available && model_ready() && is_enabled(),
     }
 }
@@ -313,7 +317,10 @@ fn wire(app: &AppHandle) {
         AssistPipelineConfig::default(),
         Some(bus),
     );
-    *wired = Some(Wired { handle: assist, _pipeline: pipeline });
+    *wired = Some(Wired {
+        handle: assist,
+        _pipeline: pipeline,
+    });
     drop(wired);
 
     ensure_window(app);
@@ -395,12 +402,14 @@ fn start_model_download(app: &AppHandle) {
             let path = gilb_config::transcribe_model_path()?;
             let progress_app = app.clone();
             let state = app.state::<AssistState>();
-            download_model(&url, &path, &state.download.cancel, move |done, total| {
+            crate::model::download(&url, &path, &state.download.cancel, move |done, total| {
                 if total == 0 {
                     return;
                 }
                 let pct = (done * 100 / total).min(100) as u8;
-                let Some(state) = progress_app.try_state::<AssistState>() else { return };
+                let Some(state) = progress_app.try_state::<AssistState>() else {
+                    return;
+                };
                 if state.download.percent.swap(pct, Ordering::SeqCst) != pct {
                     emit_status(&progress_app);
                 }
@@ -413,8 +422,8 @@ fn start_model_download(app: &AppHandle) {
             state.download.active.store(false, Ordering::SeqCst);
         }
         match result {
-            Ok(Downloaded::Cancelled) => info!("assist model download cancelled"),
-            Ok(Downloaded::Completed) => {
+            Ok(crate::model::Downloaded::Cancelled) => info!("assist model download cancelled"),
+            Ok(crate::model::Downloaded::Completed(_)) => {
                 info!("assist model downloaded");
                 let _ = app
                     .notification()
@@ -440,65 +449,6 @@ fn start_model_download(app: &AppHandle) {
     });
 }
 
-pub enum Downloaded {
-    Completed,
-    /// `cancel` was raised; the partial file is gone.
-    Cancelled,
-}
-
-/// Stream `url` into `final_path` via a `.part` sibling, renamed only on
-/// success — a partial or abandoned download must never be mistaken for a
-/// usable model. `cancel` is checked between chunks, so turning the feature off
-/// stops paying for ~570 MB immediately.
-async fn download_model(
-    url: &str,
-    final_path: &std::path::Path,
-    cancel: &AtomicBool,
-    on_progress: impl Fn(u64, u64) + Send,
-) -> Result<Downloaded> {
-    use anyhow::{bail, Context};
-    use tokio::io::AsyncWriteExt;
-
-    const REPORT_EVERY_BYTES: u64 = 4_000_000;
-
-    let part_path = final_path.with_extension("part");
-    let result: Result<Downloaded> = async {
-        let mut resp = reqwest::get(url).await.context("start model download")?;
-        if !resp.status().is_success() {
-            bail!("model download failed: HTTP {}", resp.status());
-        }
-        let total = resp.content_length().unwrap_or(0);
-        let mut file = tokio::fs::File::create(&part_path)
-            .await
-            .with_context(|| format!("create {}", part_path.display()))?;
-        let mut downloaded = 0u64;
-        let mut last_report = 0u64;
-        while let Some(chunk) = resp.chunk().await.context("read download chunk")? {
-            if cancel.load(Ordering::SeqCst) {
-                return Ok(Downloaded::Cancelled);
-            }
-            file.write_all(&chunk).await.context("write download chunk")?;
-            downloaded += chunk.len() as u64;
-            if downloaded - last_report >= REPORT_EVERY_BYTES {
-                last_report = downloaded;
-                on_progress(downloaded, total);
-            }
-        }
-        file.flush().await.context("flush download")?;
-        drop(file);
-        tokio::fs::rename(&part_path, final_path)
-            .await
-            .context("move downloaded model into place")?;
-        Ok(Downloaded::Completed)
-    }
-    .await;
-
-    if !matches!(result, Ok(Downloaded::Completed)) {
-        let _ = tokio::fs::remove_file(&part_path).await;
-    }
-    result
-}
-
 /// Create the overlay if it doesn't exist yet — hidden, transparent,
 /// always-on-top, excluded from our own screen capture, and never focused
 /// (stealing focus from the meeting app mid-call is worse than a second click).
@@ -506,19 +456,22 @@ fn ensure_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
     if let Some(window) = app.get_webview_window(ASSIST_WINDOW) {
         return Some(window);
     }
-    let title = state(app).map(|s| s.host.strings().window_title).unwrap_or_default();
-    let builder = WebviewWindowBuilder::new(app, ASSIST_WINDOW, WebviewUrl::App("assist.html".into()))
-        .title(title)
-        .inner_size(380.0, 520.0)
-        .resizable(true)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible_on_all_workspaces(true)
-        .content_protected(true)
-        .focused(false)
-        .visible(false);
+    let title = state(app)
+        .map(|s| s.host.strings().window_title)
+        .unwrap_or_default();
+    let builder =
+        WebviewWindowBuilder::new(app, ASSIST_WINDOW, WebviewUrl::App("assist.html".into()))
+            .title(title)
+            .inner_size(380.0, 520.0)
+            .resizable(true)
+            .decorations(false)
+            .transparent(true)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible_on_all_workspaces(true)
+            .content_protected(true)
+            .focused(false)
+            .visible(false);
 
     // No NSVisualEffectView here: the vibrancy material paints the window
     // opaque, which defeats transparent(true) — tried, and the panel came out
@@ -546,7 +499,9 @@ fn auto_show_suppressed(app: &AppHandle) -> bool {
 /// Remember (or forget) that the panel was closed on purpose.
 fn set_auto_show_suppressed(app: &AppHandle, suppressed: bool) {
     if let Some(state) = state(app) {
-        state.auto_show_suppressed.store(suppressed, Ordering::SeqCst);
+        state
+            .auto_show_suppressed
+            .store(suppressed, Ordering::SeqCst);
     }
 }
 
@@ -576,7 +531,11 @@ fn register_shortcut(app: &AppHandle) {
                 }
             });
         if let Err(err) = result {
-            warn!(?err, shortcut = ASSIST_SHORTCUT, "failed to register assist hotkey");
+            warn!(
+                ?err,
+                shortcut = ASSIST_SHORTCUT,
+                "failed to register assist hotkey"
+            );
         }
     }
 }

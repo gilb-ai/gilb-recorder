@@ -88,10 +88,6 @@ gilb-engine ─► all crates above
               (Engine — long-lived process-wide object; owns the DB pool,
                EventBus, current CaptureSession; spawns the writer task)
 
-gilb-helper ─► gilb-config
-              (privileged daemon over unix-socket IPC;
-               currently a skeleton — Ping/Pong handshake, rmp-serde frames)
-
 gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum
                + in-memory MockDetector; native detectors land later)
 

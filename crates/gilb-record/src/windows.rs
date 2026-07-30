@@ -90,7 +90,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsWindowVisible,
 };
 
-use crate::{cancel_echo, finalize_meeting_audio, write_meeting_audio, AudioTap, ScreenAudioCapturer};
+use crate::{
+    cancel_echo, finalize_meeting_audio, write_meeting_audio, AudioTap, ScreenAudioCapturer,
+};
 
 /// Sample rate both WASAPI clients are forced to (via `AUTOCONVERTPCM`) so the
 /// two mono streams line up for [`mix_to_mono_16k`], which resamples 48 kHz

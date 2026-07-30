@@ -13,7 +13,6 @@ members = [
     "crates/gilb-assist-audio",
     "crates/gilb-db",
     "crates/gilb-engine",
-    "crates/gilb-helper",
     "crates/gilb-meeting",
     "crates/gilb-pipeline",
     "crates/gilb-record",
@@ -105,7 +104,6 @@ gilb-assist-acp = { path = "crates/gilb-assist-acp" }
 gilb-assist-audio = { path = "crates/gilb-assist-audio" }
 gilb-db = { path = "crates/gilb-db" }
 gilb-engine = { path = "crates/gilb-engine" }
-gilb-helper = { path = "crates/gilb-helper" }
 gilb-meeting = { path = "crates/gilb-meeting" }
 gilb-pipeline = { path = "crates/gilb-pipeline" }
 gilb-record = { path = "crates/gilb-record" }

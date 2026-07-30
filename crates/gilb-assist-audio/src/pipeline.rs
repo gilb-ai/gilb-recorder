@@ -156,7 +156,11 @@ struct ChannelResampler {
 impl ChannelResampler {
     fn push(&mut self, chunk: &AudioChunk) -> Vec<f32> {
         if chunk.sample_rate != self.rate {
-            info!(from = self.rate, to = chunk.sample_rate, "audio device rate changed");
+            info!(
+                from = self.rate,
+                to = chunk.sample_rate,
+                "audio device rate changed"
+            );
             match crate::StreamResampler::new(chunk.sample_rate, PIPELINE_RATE) {
                 Ok(fresh) => {
                     self.inner = fresh;
@@ -180,7 +184,10 @@ impl ChannelResampler {
 
 fn channel_resampler(initial_rate: u32) -> Option<ChannelResampler> {
     match crate::StreamResampler::new(initial_rate, PIPELINE_RATE) {
-        Ok(inner) => Some(ChannelResampler { rate: initial_rate, inner }),
+        Ok(inner) => Some(ChannelResampler {
+            rate: initial_rate,
+            inner,
+        }),
         Err(e) => {
             warn!(error = %e, "failed to build resampler");
             None
@@ -277,7 +284,9 @@ mod tests {
     fn noise(len: usize, amp: f32, mut seed: u64) -> Vec<f32> {
         (0..len)
             .map(|_| {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5) * 2.0 * amp
             })
             .collect()
@@ -286,8 +295,10 @@ mod tests {
     /// Real conversational speech (16 kHz, from the silero-vad test corpus) —
     /// works under both the energy and the Silero detector; white noise would
     /// not survive Silero, correctly.
-    const SPEECH: &[u8] =
-        include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/speech_16k.wav"));
+    const SPEECH: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/speech_16k.wav"
+    ));
 
     fn speech_samples() -> Vec<f32> {
         let mut reader = hound::WavReader::new(std::io::Cursor::new(SPEECH)).unwrap();
@@ -307,15 +318,12 @@ mod tests {
         let (assist, mut events) = gilb_assist::spawn(
             StaticConfig::default(),
             EchoBackend,
-            EngineParams { min_analysis_interval: Duration::from_millis(1) },
+            EngineParams {
+                min_analysis_interval: Duration::from_millis(1),
+            },
         );
-        let _pipeline = spawn_assist_pipeline(
-            &tap,
-            StubStt,
-            assist,
-            AssistPipelineConfig::default(),
-            None,
-        );
+        let _pipeline =
+            spawn_assist_pipeline(&tap, StubStt, assist, AssistPipelineConfig::default(), None);
         tokio::task::yield_now().await; // let the tasks subscribe
 
         // Real speech, then silence long enough to close the last segment.
@@ -337,6 +345,9 @@ mod tests {
         .await
         .expect("no suggestion within 5 s");
 
-        assert!(event.contains("them: ["), "expected a them-turn, got: {event}");
+        assert!(
+            event.contains("them: ["),
+            "expected a them-turn, got: {event}"
+        );
     }
 }

@@ -36,7 +36,11 @@ tauri-plugin-global-shortcut = { version = "2", optional = true }
 [features]
 # The overlay, its commands and the whisper-model gate. Pulls in whisper.cpp
 # through gilb-assist-audio, so it is off unless a shell asks for it.
+# The whisper model downloader on its own: transcription needs it without the
+# overlay and without whisper.cpp.
+model-download = ["dep:reqwest"]
 assist = [
+    "model-download",
     "dep:gilb-assist",
     "dep:gilb-assist-audio",
     "gilb-assist-audio/whisper",

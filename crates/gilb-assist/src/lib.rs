@@ -159,7 +159,9 @@ pub struct EngineParams {
 
 impl Default for EngineParams {
     fn default() -> Self {
-        Self { min_analysis_interval: Duration::from_secs(5) }
+        Self {
+            min_analysis_interval: Duration::from_secs(5),
+        }
     }
 }
 
@@ -225,7 +227,15 @@ pub fn spawn(
 ) -> (AssistHandle, mpsc::UnboundedReceiver<AssistEvent>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (ev_tx, ev_rx) = mpsc::unbounded_channel();
-    tokio::spawn(Engine { config, backend, params, events: ev_tx }.run(rx));
+    tokio::spawn(
+        Engine {
+            config,
+            backend,
+            params,
+            events: ev_tx,
+        }
+        .run(rx),
+    );
     (AssistHandle { tx }, ev_rx)
 }
 
@@ -292,7 +302,8 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
                 None => {}
             }
 
-            self.maybe_analyze(&mut session, &mut pending, &mut last_analysis).await;
+            self.maybe_analyze(&mut session, &mut pending, &mut last_analysis)
+                .await;
         }
     }
 
@@ -341,15 +352,32 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             ));
             return;
         }
-        let turns = if pending.is_empty() { String::new() } else { format_turns(pending) };
-        if self.converse(session, Input::Ask { turns: &turns, question }).await {
+        let turns = if pending.is_empty() {
+            String::new()
+        } else {
+            format_turns(pending)
+        };
+        if self
+            .converse(
+                session,
+                Input::Ask {
+                    turns: &turns,
+                    question,
+                },
+            )
+            .await
+        {
             pending.clear();
         }
     }
 
     /// One round-trip to the model: open the session if needed, send, apply
     /// the [`NO_RESP`] discipline. Returns whether the input was delivered.
-    async fn converse(&self, session: &mut Option<Box<dyn AssistSession>>, input: Input<'_>) -> bool {
+    async fn converse(
+        &self,
+        session: &mut Option<Box<dyn AssistSession>>,
+        input: Input<'_>,
+    ) -> bool {
         let _ = self.events.send(AssistEvent::Loading(true));
         let ok = self.converse_inner(session, input).await;
         let _ = self.events.send(AssistEvent::Loading(false));

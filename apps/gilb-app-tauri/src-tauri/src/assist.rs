@@ -86,13 +86,11 @@ impl AssistHost for GilbAssistHost {
     }
 }
 
+/// Same resolution the analyzer uses for `claude -p`: the override wins, then
+/// the known install dirs, then PATH. A bundled `.app` starts with a minimal
+/// PATH, so probing is not optional.
 fn agent_bin() -> PathBuf {
-    match std::env::var(AGENT_BIN_ENV) {
-        Ok(path) if !path.trim().is_empty() => PathBuf::from(path),
-        // Reuse the analyzer's resolution once it moves out of the binary
-        // crate; until then, PATH is enough for the ACP experiment.
-        _ => PathBuf::from("claude"),
-    }
+    PathBuf::from(gilb_config::resolve_agent_bin("claude", AGENT_BIN_ENV))
 }
 
 fn agent_args() -> Vec<String> {

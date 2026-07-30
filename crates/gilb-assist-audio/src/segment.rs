@@ -139,7 +139,9 @@ pub struct EnergyVad {
 
 impl Default for EnergyVad {
     fn default() -> Self {
-        Self { noise_floor: ABS_FLOOR }
+        Self {
+            noise_floor: ABS_FLOOR,
+        }
     }
 }
 
@@ -174,8 +176,7 @@ impl Segmenter {
         let min_voiced_frames = (cfg.min_voiced_secs * 1000.0 / frame_ms).ceil() as usize;
         let open_frames = ((cfg.open_ms as f32 / frame_ms).ceil() as usize).max(1);
         let pre_roll_samples =
-            (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / frame_size
-                * frame_size;
+            (cfg.pre_roll_ms as usize * cfg.sample_rate as usize / 1000) / frame_size * frame_size;
         // Rounded to whole frames: the carried tail must keep its per-frame
         // flags aligned with its samples.
         let overlap_samples =
@@ -217,10 +218,7 @@ impl Segmenter {
             self.fifo.extend_from_slice(&rest[..take]);
             rest = &rest[take..];
             if self.fifo.len() == self.frame_size {
-                let frame = std::mem::replace(
-                    &mut self.fifo,
-                    Vec::with_capacity(self.frame_size),
-                );
+                let frame = std::mem::replace(&mut self.fifo, Vec::with_capacity(self.frame_size));
                 self.consume_frame(frame, &mut closed);
             }
         }
@@ -232,9 +230,13 @@ impl Segmenter {
         let state = std::mem::replace(&mut self.state, State::idle());
         match state {
             State::Idle { .. } => None,
-            State::Active { buf, flags, start_sample, voiced_frames, .. } => {
-                self.finish(buf, flags, start_sample, voiced_frames)
-            }
+            State::Active {
+                buf,
+                flags,
+                start_sample,
+                voiced_frames,
+                ..
+            } => self.finish(buf, flags, start_sample, voiced_frames),
         }
     }
 
@@ -243,7 +245,11 @@ impl Segmenter {
         self.consumed += frame.len() as u64;
 
         match &mut self.state {
-            State::Idle { pre_roll, pre_roll_flags, consecutive_voiced } => {
+            State::Idle {
+                pre_roll,
+                pre_roll_flags,
+                consecutive_voiced,
+            } => {
                 pre_roll.extend(frame.iter());
                 pre_roll_flags.push_back(voiced);
                 while pre_roll.len() > self.pre_roll_samples + self.frame_size {
@@ -267,7 +273,13 @@ impl Segmenter {
                     };
                 }
             }
-            State::Active { buf, flags, start_sample, voiced_frames, silence_frames } => {
+            State::Active {
+                buf,
+                flags,
+                start_sample,
+                voiced_frames,
+                silence_frames,
+            } => {
                 buf.extend_from_slice(&frame);
                 flags.push(voiced);
                 if voiced {
@@ -356,7 +368,9 @@ mod tests {
     fn noise(len: usize, amp: f32, mut seed: u64) -> Vec<f32> {
         (0..len)
             .map(|_| {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5) * 2.0 * amp
             })
             .collect()
@@ -388,9 +402,21 @@ mod tests {
         let got = feed(&mut seg, &stream);
 
         assert_eq!(got.len(), 2, "expected 2 segments, got {}", got.len());
-        assert!((got[0].start_secs - 1.0).abs() < 0.3, "start {}", got[0].start_secs);
-        assert!((got[0].end_secs - 3.0).abs() < 1.0, "end {}", got[0].end_secs);
-        assert!((got[1].start_secs - 4.0).abs() < 0.3, "start {}", got[1].start_secs);
+        assert!(
+            (got[0].start_secs - 1.0).abs() < 0.3,
+            "start {}",
+            got[0].start_secs
+        );
+        assert!(
+            (got[0].end_secs - 3.0).abs() < 1.0,
+            "end {}",
+            got[0].end_secs
+        );
+        assert!(
+            (got[1].start_secs - 4.0).abs() < 0.3,
+            "start {}",
+            got[1].start_secs
+        );
     }
 
     /// Pauseless speech is force-split with overlapping boundaries.
@@ -454,8 +480,7 @@ mod tests {
         // The forced cut lands ~15 s in; what follows is the ~1 s tail of real
         // speech, and after it only silence. No segment may be mostly silence.
         for s in &got {
-            let voiced = s.voiced.iter().filter(|v| **v).count() as f32
-                * s.vad_frame_size as f32
+            let voiced = s.voiced.iter().filter(|v| **v).count() as f32 * s.vad_frame_size as f32
                 / SR as f32;
             assert!(
                 voiced >= SegmenterConfig::default().min_voiced_secs,

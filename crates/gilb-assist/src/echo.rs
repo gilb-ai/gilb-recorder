@@ -12,7 +12,10 @@ pub struct EchoBackend;
 #[async_trait]
 impl AssistBackend for EchoBackend {
     async fn begin(&self, system_prompt: &str) -> Result<Box<dyn AssistSession>> {
-        Ok(Box::new(EchoSession { turns_seen: 0, prompt_len: system_prompt.len() }))
+        Ok(Box::new(EchoSession {
+            turns_seen: 0,
+            prompt_len: system_prompt.len(),
+        }))
     }
 }
 

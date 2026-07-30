@@ -362,11 +362,13 @@ pub fn finalize_meeting_audio(
 /// `mic.wav` (echo-cancelled), `mic-raw.wav` (uncancelled safety net) and
 /// `system.wav`.
 pub fn write_meeting_audio(audio_path: &Path, tracks: &MeetingAudioTracks) -> Result<()> {
-    let dir = audio_path.parent().map(Path::to_path_buf).unwrap_or_default();
+    let dir = audio_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     write_wav_16k_mono(audio_path, &tracks.mixed).context("write mixed meeting audio")?;
     write_wav_16k_mono(&dir.join("mic.wav"), &tracks.mic).context("write mic track")?;
-    write_wav_16k_mono(&dir.join("mic-raw.wav"), &tracks.mic_raw)
-        .context("write raw mic track")?;
+    write_wav_16k_mono(&dir.join("mic-raw.wav"), &tracks.mic_raw).context("write raw mic track")?;
     write_wav_16k_mono(&dir.join("system.wav"), &tracks.system).context("write system track")?;
     Ok(())
 }
@@ -709,7 +711,9 @@ mod finalize_tests {
     fn noise(len: usize, mut seed: u64) -> Vec<f32> {
         (0..len)
             .map(|_| {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 (((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5) * 0.8
             })
             .collect()
@@ -728,20 +732,32 @@ mod finalize_tests {
         let delay = 48_000 * 40 / 1000;
         // Mic hears only the speakers: delayed, attenuated system audio.
         let mic: Vec<f32> = (0..system.len())
-            .map(|n| if n >= delay { system[n - delay] * 0.5 } else { 0.0 })
+            .map(|n| {
+                if n >= delay {
+                    system[n - delay] * 0.5
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         let tracks = finalize_meeting_audio(&mic, 48_000, &system, 48_000);
 
         assert_eq!(tracks.mic.len(), tracks.mic_raw.len());
-        assert_eq!(tracks.mixed.len(), tracks.system.len().max(tracks.mic.len()));
+        assert_eq!(
+            tracks.mixed.len(),
+            tracks.system.len().max(tracks.mic.len())
+        );
 
         // Judge the last second, after the adaptive filter has converged.
         let tail = TARGET_SAMPLE_RATE as usize;
         let raw = energy(&tracks.mic_raw[tracks.mic_raw.len() - tail..]);
         let clean = energy(&tracks.mic[tracks.mic.len() - tail..]);
         let erle = 10.0 * (raw / clean.max(1.0)).log10();
-        assert!(erle > 10.0, "expected > 10 dB echo attenuation, got {erle:.1} dB");
+        assert!(
+            erle > 10.0,
+            "expected > 10 dB echo attenuation, got {erle:.1} dB"
+        );
     }
 
     /// Without system audio the mic passes through the finalizer unchanged.

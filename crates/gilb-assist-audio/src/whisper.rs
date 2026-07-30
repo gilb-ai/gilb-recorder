@@ -1,17 +1,17 @@
 //! `SegmentTranscriber` over whisper.cpp (gilb-transcribe's `LocalTranscriber`).
 //!
-//! The model (~570 MB) is loaded lazily on the first segment — loading happens
-//! on the blocking pool, since it's a large synchronous read — kept warm while
-//! segments flow, and dropped again when the worker reports idle (the
-//! [`crate::SttWorkerConfig::idle_unload`] timer). Between meetings the memory
-//! is free.
+//! The model (~570 MB) is loaded lazily on the first segment and shared with
+//! whoever else in this process wants it — post-meeting transcription, above
+//! all. Two private copies is what a machine gets otherwise, guaranteed, on
+//! every meeting that ends while suggestions are still warm
+//! (`gilb_transcribe::SharedModel`).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use gilb_transcribe::{LocalTranscriber, VoicedMask};
+use gilb_transcribe::{LocalTranscriber, SharedModel, VoicedMask, DEFAULT_IDLE_UNLOAD};
 use tracing::info;
 
 use crate::{Segment, SegmentTranscriber};
@@ -20,33 +20,39 @@ pub struct WhisperTranscriber {
     model_path: PathBuf,
     /// "auto" | "ru" | "en" — passed through to whisper.
     language: String,
-    model: Option<Arc<LocalTranscriber>>,
+    shared: Arc<SharedModel<LocalTranscriber>>,
 }
 
 impl WhisperTranscriber {
     /// `model_path` must point at a downloaded ggml model (its presence gates
     /// the feature, mirroring gilb's transcription).
     pub fn new(model_path: PathBuf, language: impl Into<String>) -> Self {
+        Self::with_shared(model_path, language, SharedModel::new(DEFAULT_IDLE_UNLOAD))
+    }
+
+    /// Share one loaded model with another worker (post-meeting transcription).
+    /// The app owns the [`SharedModel`] and hands the same handle to both.
+    pub fn with_shared(
+        model_path: PathBuf,
+        language: impl Into<String>,
+        shared: Arc<SharedModel<LocalTranscriber>>,
+    ) -> Self {
         Self {
             model_path,
             language: language.into(),
-            model: None,
+            shared,
         }
     }
 
     async fn model(&mut self) -> Result<Arc<LocalTranscriber>> {
-        if let Some(model) = &self.model {
-            return Ok(model.clone());
-        }
         let path = self.model_path.clone();
         let language = self.language.clone();
-        info!(model = %path.display(), "loading whisper model for realtime STT");
-        let loaded = tokio::task::spawn_blocking(move || LocalTranscriber::new(&path, language))
+        self.shared
+            .get(move || {
+                info!(model = %path.display(), "loading whisper model");
+                LocalTranscriber::new(&path, language).context("load whisper model")
+            })
             .await
-            .context("whisper load join")??;
-        let model = Arc::new(loaded);
-        self.model = Some(model.clone());
-        Ok(model)
     }
 }
 
@@ -60,7 +66,9 @@ impl SegmentTranscriber for WhisperTranscriber {
             frame_size: segment.vad_frame_size,
             frames: segment.voiced,
         };
-        let utterances = model.transcribe_buffer_masked(segment.samples, mask).await?;
+        let utterances = model
+            .transcribe_buffer_masked(segment.samples, mask)
+            .await?;
         Ok(utterances
             .into_iter()
             .map(|u| u.text)
@@ -68,9 +76,12 @@ impl SegmentTranscriber for WhisperTranscriber {
             .join(" "))
     }
 
+    /// Idle here means "the suggestion worker has nothing to do", which is not
+    /// the same as "nobody needs the model": post-meeting transcription may be
+    /// running right now. So this asks the shared owner, which drops its
+    /// reference only if its own idle window has passed — and the memory
+    /// returns when the last holder lets go.
     fn unload(&mut self) {
-        if self.model.take().is_some() {
-            info!("unloading idle whisper model");
-        }
+        self.shared.unload_if_idle();
     }
 }

@@ -5,21 +5,16 @@
 //! `meeting::maybe_spawn_transcription`). These commands let the user download
 //! it (with progress), delete it, and pick the transcription language.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager, State};
-use tokio::io::AsyncWriteExt;
 
 use crate::transcribe_worker::{TranscribeTx, TranscriptionJob};
 
 /// HuggingFace URL for the ggml large-v3-turbo (q5_0) model we ship.
-const MODEL_URL: &str =
-    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 
 /// Emit a progress update at most every ~4 MB to avoid flooding the webview.
-const EMIT_EVERY_BYTES: u64 = 4_000_000;
 
 /// Shared cancel flag for an in-flight download, managed by Tauri so
 /// [`cancel_model_download`] can signal [`download_model`].
@@ -112,15 +107,28 @@ pub async fn download_model(
     cancel.0.store(false, Ordering::SeqCst);
     let dir = gilb_config::ensure_models_dir().map_err(|e| e.to_string())?;
     let final_path = dir.join(gilb_config::TRANSCRIBE_MODEL_FILE);
-    let part_path = final_path.with_extension("part");
 
-    match stream_to_file(MODEL_URL, &part_path, &cancel.0, &app).await {
-        Ok(Some(downloaded)) => {
-            if let Err(e) = tokio::fs::rename(&part_path, &final_path).await {
-                let _ = tokio::fs::remove_file(&part_path).await;
-                let _ = app.emit("model-download", err_event(e.to_string()));
-                return Err(e.to_string());
-            }
+    let progress_app = app.clone();
+    let outcome = gilb_shell_tauri::model::download(
+        gilb_config::TRANSCRIBE_MODEL_URL,
+        &final_path,
+        &cancel.0,
+        move |downloaded, total| {
+            let _ = progress_app.emit(
+                "model-download",
+                Progress {
+                    status: "progress",
+                    downloaded,
+                    total,
+                    error: None,
+                },
+            );
+        },
+    )
+    .await;
+
+    match outcome {
+        Ok(gilb_shell_tauri::model::Downloaded::Completed(downloaded)) => {
             let _ = app.emit(
                 "model-download",
                 Progress {
@@ -136,8 +144,7 @@ pub async fn download_model(
             }
             Ok(())
         }
-        Ok(None) => {
-            let _ = tokio::fs::remove_file(&part_path).await;
+        Ok(gilb_shell_tauri::model::Downloaded::Cancelled) => {
             let _ = app.emit(
                 "model-download",
                 Progress {
@@ -150,9 +157,8 @@ pub async fn download_model(
             Ok(())
         }
         Err(e) => {
-            let _ = tokio::fs::remove_file(&part_path).await;
-            let _ = app.emit("model-download", err_event(e.clone()));
-            Err(e)
+            let _ = app.emit("model-download", err_event(e.to_string()));
+            Err(e.to_string())
         }
     }
 }
@@ -164,46 +170,4 @@ fn err_event(error: String) -> Progress {
         total: 0,
         error: Some(error),
     }
-}
-
-/// Stream `url` into `part_path`, emitting throttled progress. Returns
-/// `Ok(Some(bytes))` on completion, `Ok(None)` if cancelled, `Err` on failure.
-async fn stream_to_file(
-    url: &str,
-    part_path: &Path,
-    cancel: &AtomicBool,
-    app: &AppHandle,
-) -> Result<Option<u64>, String> {
-    let mut resp = reqwest::get(url).await.map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("download failed: HTTP {}", resp.status()));
-    }
-    let total = resp.content_length().unwrap_or(0);
-    let mut file = tokio::fs::File::create(part_path)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut downloaded = 0u64;
-    let mut last_emit = 0u64;
-    while let Some(chunk) = resp.chunk().await.map_err(|e| e.to_string())? {
-        if cancel.load(Ordering::SeqCst) {
-            return Ok(None);
-        }
-        file.write_all(&chunk).await.map_err(|e| e.to_string())?;
-        downloaded += chunk.len() as u64;
-        if downloaded - last_emit >= EMIT_EVERY_BYTES {
-            last_emit = downloaded;
-            let _ = app.emit(
-                "model-download",
-                Progress {
-                    status: "progress",
-                    downloaded,
-                    total,
-                    error: None,
-                },
-            );
-        }
-    }
-    file.flush().await.map_err(|e| e.to_string())?;
-    Ok(Some(downloaded))
 }

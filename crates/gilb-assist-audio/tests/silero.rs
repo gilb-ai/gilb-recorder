@@ -21,7 +21,9 @@ fn fixture_samples() -> Vec<f32> {
 fn noise(len: usize, amp: f32, mut seed: u64) -> Vec<f32> {
     (0..len)
         .map(|_| {
-            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
             (((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5) * 2.0 * amp
         })
         .collect()
@@ -52,7 +54,10 @@ fn detects_real_speech() {
 
     assert!(!got.is_empty(), "real speech must produce segments");
     let voiced: f64 = got.iter().map(|s| s.end_secs - s.start_secs).sum();
-    assert!(voiced >= 2.0, "expected >= 2 s of speech segments, got {voiced:.2} s");
+    assert!(
+        voiced >= 2.0,
+        "expected >= 2 s of speech segments, got {voiced:.2} s"
+    );
 }
 
 /// Loud white noise reads as "voiced" to any energy detector — this is
@@ -69,7 +74,10 @@ fn ignores_loud_non_speech() {
     );
 
     let silero = run(&mut silero_segmenter(), &stream);
-    assert!(silero.is_empty(), "silero must not segment non-speech noise");
+    assert!(
+        silero.is_empty(),
+        "silero must not segment non-speech noise"
+    );
 }
 
 #[test]

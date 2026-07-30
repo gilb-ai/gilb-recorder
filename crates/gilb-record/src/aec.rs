@@ -134,7 +134,8 @@ impl EchoCanceller {
             for slot in self.far_frame.iter_mut() {
                 *slot = self.far.pop_front().unwrap_or(0);
             }
-            self.aec.cancel_echo(&self.near_frame, &self.far_frame, &mut self.out_frame);
+            self.aec
+                .cancel_echo(&self.near_frame, &self.far_frame, &mut self.out_frame);
             out.extend(self.out_frame.iter().map(|&s| from_i16(s)));
         }
         out
@@ -160,7 +161,9 @@ mod tests {
     fn noise(len: usize, mut seed: u64) -> Vec<f32> {
         (0..len)
             .map(|_| {
-                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
                 ((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5
             })
             .collect()
@@ -187,7 +190,13 @@ mod tests {
         let delay = SR * 40 / 1000; // 40 ms speaker-to-mic path
         let far = noise(SR * secs, 7);
         let near: Vec<f32> = (0..far.len())
-            .map(|n| if n >= delay { far[n - delay] * 0.6 } else { 0.0 })
+            .map(|n| {
+                if n >= delay {
+                    far[n - delay] * 0.6
+                } else {
+                    0.0
+                }
+            })
             .collect();
 
         let mut aec = EchoCanceller::new(&config(false));
@@ -199,9 +208,12 @@ mod tests {
 
         // Judge only the last second, after the filter has adapted.
         let tail = SR;
-        let erle = 10.0
-            * (energy(&near[near.len() - tail..]) / energy(&out[out.len() - tail..])).log10();
-        assert!(erle > 10.0, "expected > 10 dB echo attenuation, got {erle:.1} dB");
+        let erle =
+            10.0 * (energy(&near[near.len() - tail..]) / energy(&out[out.len() - tail..])).log10();
+        assert!(
+            erle > 10.0,
+            "expected > 10 dB echo attenuation, got {erle:.1} dB"
+        );
     }
 
     /// With a silent far end the canceller must pass the mic through intact.

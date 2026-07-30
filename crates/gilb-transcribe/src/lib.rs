@@ -25,6 +25,9 @@ use gilb_db::Db;
 use tracing::{info, warn};
 
 /// Model label stored in `meeting_transcripts.model`.
+pub mod shared_model;
+pub use shared_model::{SharedModel, DEFAULT_IDLE_UNLOAD};
+
 pub const MODEL: &str = "whisper-large-v3-turbo";
 
 // ---------------------------------------------------------------------------
@@ -83,7 +86,10 @@ pub struct VoicedMask {
 impl VoicedMask {
     /// Compute with the batch energy detector ([`voiced_mask`]).
     pub fn energy(samples: &[f32]) -> Self {
-        Self { frame_size: VAD_FRAME, frames: voiced_mask(samples) }
+        Self {
+            frame_size: VAD_FRAME,
+            frames: voiced_mask(samples),
+        }
     }
 
     /// Total voiced seconds.

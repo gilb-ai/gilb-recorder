@@ -7,9 +7,7 @@ use async_trait::async_trait;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::echo::StaticConfig;
-use crate::{
-    AssistBackend, AssistEvent, AssistSession, EngineParams, Speaker, Turn, NO_RESP,
-};
+use crate::{AssistBackend, AssistEvent, AssistSession, EngineParams, Speaker, Turn, NO_RESP};
 
 /// Backend that records every input and replies from a scripted queue.
 /// `None` in the script = reply with `[NO_RESP]`; an exhausted script echoes.
@@ -67,7 +65,11 @@ impl AssistSession for ScriptedSession {
 }
 
 fn turn(speaker: Speaker, text: &str) -> Turn {
-    Turn { speaker, text: text.into(), at_secs: 0.0 }
+    Turn {
+        speaker,
+        text: text.into(),
+        at_secs: 0.0,
+    }
 }
 
 /// Drain everything currently queued, giving the engine task time to run.
@@ -81,18 +83,26 @@ async fn drain(rx: &mut UnboundedReceiver<AssistEvent>) -> Vec<AssistEvent> {
 }
 
 fn params() -> EngineParams {
-    EngineParams { min_analysis_interval: Duration::from_secs(30) }
+    EngineParams {
+        min_analysis_interval: Duration::from_secs(30),
+    }
 }
 
 #[tokio::test(start_paused = true)]
 async fn analysis_waits_for_threshold_and_formats_turns() {
     let backend = ScriptedBackend::new();
     let inputs = backend.inputs.clone();
-    let config = StaticConfig { turns_before_analysis: 2, ..Default::default() };
+    let config = StaticConfig {
+        turns_before_analysis: 2,
+        ..Default::default()
+    };
     let (handle, mut rx) = crate::spawn(config, backend, params());
 
     handle.push_turn(turn(Speaker::Me, "привет"));
-    assert!(drain(&mut rx).await.is_empty(), "one turn is below the threshold");
+    assert!(
+        drain(&mut rx).await.is_empty(),
+        "one turn is below the threshold"
+    );
 
     handle.push_turn(turn(Speaker::Them, "добрый день"));
     let events = drain(&mut rx).await;
@@ -104,7 +114,10 @@ async fn analysis_waits_for_threshold_and_formats_turns() {
             AssistEvent::Loading(false),
         ]
     );
-    assert_eq!(inputs.lock().unwrap().as_slice(), ["me: привет\nthem: добрый день"]);
+    assert_eq!(
+        inputs.lock().unwrap().as_slice(),
+        ["me: привет\nthem: добрый день"]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -115,7 +128,10 @@ async fn no_resp_never_touches_the_ui() {
 
     handle.push_turn(turn(Speaker::Them, "ну, посмотрим"));
     let events = drain(&mut rx).await;
-    assert_eq!(events, vec![AssistEvent::Loading(true), AssistEvent::Loading(false)]);
+    assert_eq!(
+        events,
+        vec![AssistEvent::Loading(true), AssistEvent::Loading(false)]
+    );
 }
 
 #[tokio::test(start_paused = true)]
@@ -130,7 +146,11 @@ async fn ask_shares_the_session_with_analysis() {
     handle.ask("что ответить про цену?".into());
     let events = drain(&mut rx).await;
 
-    assert_eq!(begins.load(Ordering::SeqCst), 1, "ask must reuse the meeting session");
+    assert_eq!(
+        begins.load(Ordering::SeqCst),
+        1,
+        "ask must reuse the meeting session"
+    );
     assert_eq!(
         inputs.lock().unwrap().as_slice(),
         ["them: цена вопроса — миллион", "что ответить про цену?"]
@@ -149,7 +169,10 @@ async fn throttle_batches_turns_until_the_interval_elapses() {
 
     handle.push_turn(turn(Speaker::Them, "два"));
     handle.push_turn(turn(Speaker::Them, "три"));
-    assert!(drain(&mut rx).await.is_empty(), "throttle must hold the second analysis");
+    assert!(
+        drain(&mut rx).await.is_empty(),
+        "throttle must hold the second analysis"
+    );
 
     tokio::time::advance(Duration::from_secs(31)).await;
     let events = drain(&mut rx).await;
@@ -164,7 +187,10 @@ async fn throttle_batches_turns_until_the_interval_elapses() {
 async fn disabled_flag_suppresses_analysis() {
     let backend = ScriptedBackend::new();
     let inputs = backend.inputs.clone();
-    let config = StaticConfig { enabled: false, ..Default::default() };
+    let config = StaticConfig {
+        enabled: false,
+        ..Default::default()
+    };
     let (handle, mut rx) = crate::spawn(config, backend, params());
 
     for _ in 0..5 {
@@ -181,7 +207,10 @@ async fn reset_starts_a_fresh_conversation() {
     let backend = ScriptedBackend::new();
     let begins = backend.begins.clone();
     let inputs = backend.inputs.clone();
-    let config = StaticConfig { turns_before_analysis: 2, ..Default::default() };
+    let config = StaticConfig {
+        turns_before_analysis: 2,
+        ..Default::default()
+    };
     let (handle, mut rx) = crate::spawn(config, backend, params());
 
     handle.push_turn(turn(Speaker::Me, "первая встреча"));
@@ -195,7 +224,11 @@ async fn reset_starts_a_fresh_conversation() {
     handle.push_turn(turn(Speaker::Them, "другой клиент"));
     drain(&mut rx).await;
 
-    assert_eq!(begins.load(Ordering::SeqCst), 2, "reset must open a new session");
+    assert_eq!(
+        begins.load(Ordering::SeqCst),
+        2,
+        "reset must open a new session"
+    );
     assert_eq!(
         inputs.lock().unwrap().as_slice(),
         [
@@ -211,11 +244,17 @@ async fn reset_starts_a_fresh_conversation() {
 async fn ask_carries_the_pending_turns() {
     let backend = ScriptedBackend::new();
     let inputs = backend.inputs.clone();
-    let config = StaticConfig { turns_before_analysis: 5, ..Default::default() };
+    let config = StaticConfig {
+        turns_before_analysis: 5,
+        ..Default::default()
+    };
     let (handle, mut rx) = crate::spawn(config, backend, params());
 
     handle.push_turn(turn(Speaker::Them, "это дорого"));
-    assert!(drain(&mut rx).await.is_empty(), "below the threshold, nothing sent");
+    assert!(
+        drain(&mut rx).await.is_empty(),
+        "below the threshold, nothing sent"
+    );
 
     handle.ask("что ответить?".into());
     drain(&mut rx).await;
@@ -232,7 +271,11 @@ async fn ask_carries_the_pending_turns() {
     drain(&mut rx).await;
     let sent = inputs.lock().unwrap().clone();
     assert_eq!(sent.len(), 2);
-    assert!(!sent[1].contains("это дорого"), "pending must be cleared: {:?}", sent[1]);
+    assert!(
+        !sent[1].contains("это дорого"),
+        "pending must be cleared: {:?}",
+        sent[1]
+    );
 }
 
 /// With the feature flag off a question is refused visibly, not swallowed and
@@ -241,13 +284,19 @@ async fn ask_carries_the_pending_turns() {
 async fn ask_is_refused_when_disabled() {
     let backend = ScriptedBackend::new();
     let inputs = backend.inputs.clone();
-    let config = StaticConfig { enabled: false, ..Default::default() };
+    let config = StaticConfig {
+        enabled: false,
+        ..Default::default()
+    };
     let (handle, mut rx) = crate::spawn(config, backend, params());
 
     handle.ask("вопрос".into());
     let events = drain(&mut rx).await;
 
-    assert!(inputs.lock().unwrap().is_empty(), "nothing may reach the model");
+    assert!(
+        inputs.lock().unwrap().is_empty(),
+        "nothing may reach the model"
+    );
     assert!(
         events.iter().any(|e| matches!(e, AssistEvent::Error(_))),
         "the user must see the refusal: {events:?}"

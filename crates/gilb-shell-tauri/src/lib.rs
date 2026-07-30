@@ -27,6 +27,10 @@ pub mod tray;
 #[cfg(feature = "assist")]
 pub mod assist;
 
+/// Downloading the local whisper model — shared by transcription and assist.
+#[cfg(feature = "model-download")]
+pub mod model;
+
 use std::path::PathBuf;
 
 use gilb_db::Db;

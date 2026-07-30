@@ -180,7 +180,11 @@ impl AcpSession {
         let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel();
         self.conn.set_chunk_sink(Some(chunks_tx)).await;
 
-        let outcome = tokio::time::timeout(self.turn_timeout, self.conn.request("session/prompt", params)).await;
+        let outcome = tokio::time::timeout(
+            self.turn_timeout,
+            self.conn.request("session/prompt", params),
+        )
+        .await;
         self.conn.set_chunk_sink(None).await;
 
         let mut text = String::new();
@@ -287,7 +291,10 @@ impl Connection {
             // A request FROM the agent. The only one that matters here is a
             // permission prompt: nobody is watching the overlay to grant it, so
             // refuse and let the agent finish the turn with what it has.
-            let method = msg.get("method").and_then(Value::as_str).unwrap_or_default();
+            let method = msg
+                .get("method")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             let outcome = if method == "session/request_permission" {
                 json!({ "outcome": { "outcome": "cancelled" } })
             } else {
@@ -366,9 +373,7 @@ pub fn agent_available(bin: &std::path::Path) -> bool {
         return bin.is_file();
     }
     std::env::var("PATH")
-        .map(|path| {
-            std::env::split_paths(&path).any(|dir| dir.join(bin).is_file())
-        })
+        .map(|path| std::env::split_paths(&path).any(|dir| dir.join(bin).is_file()))
         .unwrap_or(false)
 }
 

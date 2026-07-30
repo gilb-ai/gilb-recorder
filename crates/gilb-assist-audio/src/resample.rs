@@ -101,7 +101,11 @@ impl StreamResampler {
                 .process_partial(Some(&[&rest]), None)?;
             out.extend(self.emit(produced.into_iter().next().unwrap()));
         }
-        let tail = self.inner.as_mut().unwrap().process_partial::<&[f32]>(None, None)?;
+        let tail = self
+            .inner
+            .as_mut()
+            .unwrap()
+            .process_partial::<&[f32]>(None, None)?;
         out.extend(self.emit(tail.into_iter().next().unwrap()));
 
         let expected = (self.consumed_in as f64 * self.ratio).round() as u64;
@@ -123,7 +127,10 @@ mod tests {
     }
 
     fn positive_zero_crossings(samples: &[f32]) -> usize {
-        samples.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+        samples
+            .windows(2)
+            .filter(|w| w[0] <= 0.0 && w[1] > 0.0)
+            .count()
     }
 
     /// 48 kHz → 16 kHz across uneven chunk sizes: total length matches the

@@ -21,6 +21,13 @@ const MODELS_DIR_NAME: &str = "models";
 /// enables on-device meeting transcription.
 pub const TRANSCRIBE_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
 
+/// Where [`TRANSCRIBE_MODEL_FILE`] is fetched from. Next to the file name on
+/// purpose: post-meeting transcription and realtime suggestions download the
+/// same ~570 MB build, and two copies of this string drift the moment one of
+/// them is bumped.
+pub const TRANSCRIBE_MODEL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
+
 /// Default cadence for the analyzer's incremental upload when the server
 /// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
 pub const DEFAULT_ANALYZE_INTERVAL_SECS: u64 = 3600;
@@ -437,6 +444,58 @@ pub fn update_preferences(update: impl FnOnce(&mut Preferences)) -> Result<Prefe
     update(&mut prefs);
     save_preferences(&prefs)?;
     Ok(prefs)
+}
+
+// ---------------------------------------------------------------------------
+// Locating an external agent CLI
+// ---------------------------------------------------------------------------
+
+/// Bin dirs a coding agent (and the `node` it needs) commonly installs into, in
+/// probe order.
+///
+/// A bundled `.app` starts with a minimal PATH — no shell profile has run — so
+/// a bare `claude` is not findable there. Both the analyzer (`claude -p`) and
+/// the assist backend (ACP) hit this, which is why the probe lives here rather
+/// than in whichever crate needed it first.
+pub fn agent_bin_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    vec![
+        format!("{home}/.local/bin"),
+        format!("{home}/.claude/local"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+        format!("{home}/.npm-global/bin"),
+    ]
+}
+
+/// Locate an agent CLI by name. `env_override` (when set and non-empty) wins
+/// over everything; otherwise the known install dirs are probed. Falls back to
+/// the bare name so PATH still gets its chance.
+pub fn resolve_agent_bin(name: &str, env_override: &str) -> String {
+    if let Ok(path) = std::env::var(env_override) {
+        if !path.trim().is_empty() {
+            return path;
+        }
+    }
+    for dir in agent_bin_dirs() {
+        let candidate = format!("{dir}/{name}");
+        if std::path::Path::new(&candidate).is_file() {
+            return candidate;
+        }
+    }
+    name.to_string()
+}
+
+/// PATH for a spawned agent: the known bin dirs prepended to the inherited
+/// PATH, so an npm-installed CLI can find its `node` even from a bundle.
+pub fn agent_path_env() -> String {
+    let mut parts = agent_bin_dirs();
+    if let Ok(current) = std::env::var("PATH") {
+        if !current.is_empty() {
+            parts.push(current);
+        }
+    }
+    parts.join(":")
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@
   "version": "1.0.4",
   "identifier": "app.farol.gilb",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "bash scripts/build-sidecars.sh && npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "bash scripts/build-sidecars.sh && npm run build",
     "frontendDist": "../dist"

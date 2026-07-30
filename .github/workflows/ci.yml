@@ -4,7 +4,10 @@ name: CI
 # is the required status check for branch protection — main stays green and
 # shippable. The Tauri crates (gilb-app-tauri and gilb-shell-tauri) are
 # excluded: they need GTK/WebKit system libs to compile on Linux and only ship
-# on macOS/Windows, where windows-build.yml (smoke) and release.yml validate them.
+# on macOS/Windows. gilb-shell-tauri — which now carries the suggestions
+# overlay and its model gate, not just glue — is linted and tested by
+# shell.yml on macOS; the app crate by windows-build.yml (smoke) and
+# release.yml.
 
 on:
   pull_request:

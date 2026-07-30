@@ -287,6 +287,12 @@ pub fn meeting_pipeline(
 }
 
 /// The bridge loop body — see the crate docs for the event map.
+///
+/// Eight parameters, deliberately: they are the bridge's whole world (UI, bus,
+/// db, paths, two control channels, the tap) and each is used once, so a
+/// "params" struct would only move the list one line up and add a type nobody
+/// else names. The eighth arrived with the live audio tap.
+#[allow(clippy::too_many_arguments)]
 async fn run_bridge(
     ui: impl MeetingUi,
     bus: EventBus,

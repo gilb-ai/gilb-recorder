@@ -79,7 +79,10 @@ sleep 5
     let backend = AcpBackend::new(config(bin));
     let mut session = backend.begin("").await.unwrap();
 
-    assert_eq!(session.send("them: дорого").await.unwrap().as_deref(), Some("уточни сроки"));
+    assert_eq!(
+        session.send("them: дорого").await.unwrap().as_deref(),
+        Some("уточни сроки")
+    );
 }
 
 /// A permission prompt with nobody watching would hang the turn forever, so the
@@ -104,7 +107,10 @@ sleep 5
     let mut session = backend.begin("").await.unwrap();
 
     let reply = session.send("them: дорого").await.unwrap();
-    assert_eq!(reply.as_deref(), Some("без инструментов: спроси про бюджет"));
+    assert_eq!(
+        reply.as_deref(),
+        Some("без инструментов: спроси про бюджет")
+    );
 }
 
 /// A late suggestion is worse than none: past the deadline the turn yields

@@ -92,7 +92,10 @@ impl SttWorkerHandle {
 pub fn spawn_stt_worker<T: SegmentTranscriber>(
     transcriber: T,
     config: SttWorkerConfig,
-) -> (SttWorkerHandle, mpsc::UnboundedReceiver<RecognizedUtterance>) {
+) -> (
+    SttWorkerHandle,
+    mpsc::UnboundedReceiver<RecognizedUtterance>,
+) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let keep_model = Arc::new(AtomicBool::new(false));
@@ -193,7 +196,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn transcribes_in_order_with_channels() {
         let gate = Arc::new(Semaphore::new(100));
-        let mock = GatedMock { gate, unloaded: Arc::new(AtomicBool::new(false)) };
+        let mock = GatedMock {
+            gate,
+            unloaded: Arc::new(AtomicBool::new(false)),
+        };
         let (handle, mut rx) = spawn_stt_worker(mock, SttWorkerConfig::default());
 
         handle.push(SttChannel::Mic, seg(1));
@@ -205,7 +211,10 @@ mod tests {
         assert_eq!((a.channel, a.text.as_str()), (SttChannel::Mic, "seg1"));
         assert_eq!((b.channel, b.text.as_str()), (SttChannel::System, "seg2"));
         assert_eq!(a.start_secs, 1.0);
-        assert!(rx.recv().await.is_none(), "worker must stop when handles drop");
+        assert!(
+            rx.recv().await.is_none(),
+            "worker must stop when handles drop"
+        );
     }
 
     /// While one segment is in flight and the queue overflows, the *oldest*
@@ -213,8 +222,14 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn backlog_drops_oldest() {
         let gate = Arc::new(Semaphore::new(1)); // only seg1 may proceed
-        let mock = GatedMock { gate: gate.clone(), unloaded: Arc::new(AtomicBool::new(false)) };
-        let config = SttWorkerConfig { max_queue: 2, ..Default::default() };
+        let mock = GatedMock {
+            gate: gate.clone(),
+            unloaded: Arc::new(AtomicBool::new(false)),
+        };
+        let config = SttWorkerConfig {
+            max_queue: 2,
+            ..Default::default()
+        };
         let (handle, mut rx) = spawn_stt_worker(mock, config);
 
         handle.push(SttChannel::Mic, seg(1));
@@ -229,14 +244,24 @@ mod tests {
         while let Some(u) = rx.recv().await {
             texts.push(u.text);
         }
-        assert_eq!(texts, ["seg1", "seg5", "seg6"], "middle of the backlog must be dropped");
+        assert_eq!(
+            texts,
+            ["seg1", "seg5", "seg6"],
+            "middle of the backlog must be dropped"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn unloads_after_idle() {
         let unloaded = Arc::new(AtomicBool::new(false));
-        let mock = GatedMock { gate: Arc::new(Semaphore::new(100)), unloaded: unloaded.clone() };
-        let config = SttWorkerConfig { idle_unload: Duration::from_secs(300), ..Default::default() };
+        let mock = GatedMock {
+            gate: Arc::new(Semaphore::new(100)),
+            unloaded: unloaded.clone(),
+        };
+        let config = SttWorkerConfig {
+            idle_unload: Duration::from_secs(300),
+            ..Default::default()
+        };
         let (handle, mut rx) = spawn_stt_worker(mock, config);
 
         handle.push(SttChannel::Mic, seg(1));
@@ -246,7 +271,10 @@ mod tests {
         tokio::task::yield_now().await; // let the worker reach its idle select
         tokio::time::advance(Duration::from_secs(301)).await;
         tokio::task::yield_now().await; // let the fired timer run unload()
-        assert!(unloaded.load(Ordering::SeqCst), "idle must unload the model");
+        assert!(
+            unloaded.load(Ordering::SeqCst),
+            "idle must unload the model"
+        );
         drop(handle);
     }
 
@@ -254,7 +282,10 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn hold_keeps_the_model_through_idle() {
         let unloaded = Arc::new(AtomicBool::new(false));
-        let mock = GatedMock { gate: Arc::new(Semaphore::new(100)), unloaded: unloaded.clone() };
+        let mock = GatedMock {
+            gate: Arc::new(Semaphore::new(100)),
+            unloaded: unloaded.clone(),
+        };
         let (handle, mut rx) = spawn_stt_worker(mock, SttWorkerConfig::default());
         handle.hold_model(true);
 
@@ -264,13 +295,19 @@ mod tests {
         tokio::task::yield_now().await;
         tokio::time::advance(Duration::from_secs(3_600)).await;
         tokio::task::yield_now().await;
-        assert!(!unloaded.load(Ordering::SeqCst), "a held model must stay loaded");
+        assert!(
+            !unloaded.load(Ordering::SeqCst),
+            "a held model must stay loaded"
+        );
 
         // Releasing the hold lets the next idle window unload it.
         handle.hold_model(false);
         tokio::time::advance(Duration::from_secs(301)).await;
         tokio::task::yield_now().await;
-        assert!(unloaded.load(Ordering::SeqCst), "released model must unload when idle");
+        assert!(
+            unloaded.load(Ordering::SeqCst),
+            "released model must unload when idle"
+        );
         drop(handle);
     }
 }
