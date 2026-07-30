@@ -226,19 +226,32 @@ impl VideoWriter {
         }
     }
 
-    /// Finalize the `.mp4`. The synchronous `finishWriting` is deprecated in
-    /// favour of the async completion-handler form, but synchronous is exactly
-    /// what the stop path needs — it blocks until the container is flushed and
-    /// closed before we mark the meeting completed.
+    /// Finalize the `.mp4`, returning whether a playable file was left on disk.
+    ///
+    /// The synchronous `finishWriting` is deprecated in favour of the async
+    /// completion-handler form, but synchronous is exactly what the stop path
+    /// needs — it blocks until the container is flushed and closed before we mark
+    /// the meeting completed.
+    ///
+    /// A writer that never received a frame is **cancelled**, not left alone.
+    /// `AVAssetWriter::new` creates the output during `startWriting`, so a capture
+    /// that produced nothing used to leave a zero-byte `.mp4` behind — no `moov`
+    /// atom, unopenable by anything, and indistinguishable from a real recording
+    /// to anyone browsing the folder. `cancelWriting` deletes that file.
     #[allow(deprecated)]
-    fn finish(&mut self) {
+    fn finish(&mut self) -> bool {
         unsafe {
-            if self.started {
-                self.input.markAsFinished();
-                if !self.writer.finishWriting() {
-                    warn!(error = ?self.writer.error(), "AVAssetWriter finishWriting failed");
-                }
+            if !self.started {
+                warn!("capture produced no frames; discarding the empty .mp4");
+                self.writer.cancelWriting();
+                return false;
             }
+            self.input.markAsFinished();
+            if !self.writer.finishWriting() {
+                warn!(error = ?self.writer.error(), "AVAssetWriter finishWriting failed");
+                return false;
+            }
+            true
         }
     }
 }
@@ -945,9 +958,15 @@ impl ScreenAudioCapturer for MacosCapturer {
         }
 
         // Finalize the `.mp4` (stops the stream first so no more frames arrive).
-        if let Ok(mut writer) = session.video.lock() {
-            writer.finish();
-        }
+        // `false` means no playable video was produced and the empty file has
+        // been discarded — the audio sidecars below are then the whole recording.
+        let have_video = match session.video.lock() {
+            Ok(mut writer) => writer.finish(),
+            Err(_) => {
+                warn!("video writer poisoned; cannot finalize the .mp4");
+                false
+            }
+        };
 
         let buffers = session
             .audio
@@ -987,9 +1006,18 @@ impl ScreenAudioCapturer for MacosCapturer {
         // blocking here only delays the upload enqueue — exactly what we want —
         // without hanging the UI. Best-effort: on failure the video stays silent
         // and the WAV sidecars remain.
-        match mux_audio_into_video(&session.video_path, &session.audio_path) {
-            Ok(()) => info!(video = %session.video_path.display(), "muxed audio into video"),
-            Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
+        if have_video {
+            match mux_audio_into_video(&session.video_path, &session.audio_path) {
+                Ok(()) => info!(video = %session.video_path.display(), "muxed audio into video"),
+                Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
+            }
+        } else {
+            // Nothing to mux into. Say so plainly rather than letting the mux
+            // fail on a file that was deliberately deleted.
+            warn!(
+                audio = %session.audio_path.display(),
+                "no video was captured; the recording is audio-only"
+            );
         }
 
         info!(video = %session.video_path.display(), "macOS capture stopped");
@@ -1162,4 +1190,34 @@ fn spawn_mic_capture(
     });
 
     Ok((tx, handle, sample_rate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A writer that never received a frame must leave nothing behind.
+    ///
+    /// `AVAssetWriter` creates its output during `startWriting`, i.e. before any
+    /// frame arrives, so a capture that produced nothing used to strand a
+    /// zero-byte `.mp4` with no `moov` atom — unopenable, yet indistinguishable
+    /// from a real recording when browsing the folder. Only runs on a macOS host;
+    /// CI builds this module but never executes it.
+    #[test]
+    fn finish_without_frames_discards_the_empty_file() {
+        let dir = std::env::temp_dir().join(format!("gilb-videowriter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("video.mp4");
+
+        let mut writer = VideoWriter::new(&path, 320, 240).expect("create writer");
+        assert!(path.exists(), "AVAssetWriter creates its output up front");
+
+        assert!(!writer.finish(), "no frames means no playable video");
+        assert!(
+            !path.exists(),
+            "the empty .mp4 must be discarded, not orphaned"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
