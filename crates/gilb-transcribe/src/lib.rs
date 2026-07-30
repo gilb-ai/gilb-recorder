@@ -326,6 +326,90 @@ mod local {
             .collect()
     }
 
+    /// Seconds per language-probe window. 30s is whisper's own detection window;
+    /// a longer probe wouldn't make the vote any better, only slower.
+    const LANG_PROBE_SECS: f32 = 30.0;
+
+    /// How many probe windows vote on the language. Three dense, well-separated
+    /// stretches outvote a single unlucky one — an opening line in the "wrong"
+    /// language, or thirty seconds of hold music.
+    const LANG_PROBE_WINDOWS: usize = 3;
+
+    /// The `LANG_PROBE_WINDOWS` most speech-dense, non-overlapping windows of
+    /// `win_secs`, in recording order. Fewer if the audio is shorter than that.
+    fn dense_voiced_windows(
+        samples: &[f32],
+        mask: &[bool],
+        win_secs: f32,
+        windows: usize,
+    ) -> Vec<(usize, usize)> {
+        let win_len = (win_secs * 16_000.0) as usize;
+        if samples.len() <= win_len || win_len == 0 {
+            return vec![(0, samples.len())];
+        }
+        let frames_per_win = (win_len / crate::VAD_FRAME).max(1);
+        // Score every candidate start on a window-sized stride: cheap, and
+        // non-overlapping by construction.
+        let mut scored: Vec<(usize, usize)> = mask
+            .chunks(frames_per_win)
+            .enumerate()
+            .map(|(i, frames)| (frames.iter().filter(|&&v| v).count(), i * win_len))
+            .filter(|&(_, start)| start + win_len <= samples.len())
+            .collect();
+        scored.sort_by_key(|&(voiced, _)| std::cmp::Reverse(voiced));
+        let mut picked: Vec<usize> = scored
+            .into_iter()
+            .take(windows)
+            .map(|(_, start)| start)
+            .collect();
+        picked.sort_unstable();
+        picked.into_iter().map(|s| (s, s + win_len)).collect()
+    }
+
+    /// Resolve `"auto"` to one concrete language for the whole recording.
+    ///
+    /// Left on `"auto"`, whisper.cpp re-runs detection per 30-second window, and
+    /// on a long call it can drift mid-file from transcribing into *translating*;
+    /// the carried decoder context then locks the new language in for everything
+    /// after. Reproduced on a real two-hour Russian call: correct Russian for the
+    /// first ~140 seconds, then every remaining segment arrived as English prose
+    /// ("okay, now our conversation, which we have been here..."). That is what
+    /// shipped into the stored transcript — the speech was never garbled, it was
+    /// silently translated. Pinning one language removes the per-window vote.
+    ///
+    /// Returns `None` if detection fails; the caller then keeps `"auto"`, since a
+    /// drifting transcript still beats no transcript.
+    fn pin_language(ctx: &WhisperContext, samples: &[f32], mask: &[bool]) -> Option<String> {
+        let mut votes: Vec<(String, usize)> = Vec::new();
+        for (start, end) in dense_voiced_windows(samples, mask, LANG_PROBE_SECS, LANG_PROBE_WINDOWS)
+        {
+            let Ok(mut state) = ctx.create_state() else {
+                continue;
+            };
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_language(Some("auto"));
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_special(false);
+            params.set_print_timestamps(false);
+            if state.full(params, &samples[start..end]).is_err() {
+                continue;
+            }
+            let Some(lang) = whisper_rs::get_lang_str(state.full_lang_id_from_state()) else {
+                continue;
+            };
+            match votes.iter_mut().find(|(l, _)| l == lang) {
+                Some((_, n)) => *n += 1,
+                None => votes.push((lang.to_string(), 1)),
+            }
+        }
+        // Highest vote wins; ties go to whichever was seen first, i.e. earliest
+        // in the recording.
+        let (lang, n) = votes.into_iter().max_by_key(|&(_, n)| n)?;
+        tracing::info!(language = %lang, votes = n, "pinned transcription language");
+        Some(lang)
+    }
+
     /// Blocking whisper.cpp pass over `samples`, returning raw segments.
     fn run_whisper(
         ctx: &WhisperContext,
@@ -373,9 +457,20 @@ mod local {
 
             let ctx = self.ctx.clone();
             let language = self.language.clone();
-            let raw = tokio::task::spawn_blocking(move || run_whisper(&ctx, &samples, &language))
-                .await
-                .context("whisper task join")??;
+            let probe_mask = mask.clone();
+            let raw = tokio::task::spawn_blocking(move || {
+                // Pin "auto" to a concrete language before the real pass, so the
+                // decoder can't switch languages — or start translating —
+                // partway through the recording.
+                let language = if language.eq_ignore_ascii_case("auto") {
+                    pin_language(&ctx, &samples, &probe_mask).unwrap_or_else(|| "auto".to_string())
+                } else {
+                    language
+                };
+                run_whisper(&ctx, &samples, &language)
+            })
+            .await
+            .context("whisper task join")??;
 
             Ok(raw
                 .into_iter()

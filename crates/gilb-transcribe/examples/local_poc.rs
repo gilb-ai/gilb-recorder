@@ -50,6 +50,11 @@ async fn main() {
     let lang = args.next().unwrap_or_else(|| "auto".to_string());
     let dir = Path::new(&dir);
 
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::stderr)
+        .init();
+
     let load = Instant::now();
     let t = LocalTranscriber::new(Path::new(&model), lang).expect("load model");
     eprintln!("model loaded in {:.1}s", load.elapsed().as_secs_f32());
