@@ -351,13 +351,41 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
     /// `failed` once every attempt is used up, or if [`Recorder::stop`] abandons
     /// us in the meantime.
     pub async fn arm(&self, meeting_id: i64) -> Result<()> {
-        {
+        // Three cases, and they are not the same: a duplicate event for the
+        // meeting already in hand, a *different* meeting arriving while one is
+        // being captured, or a clean slate.
+        enum Claim {
+            Duplicate,
+            Busy,
+            Ours,
+        }
+        let claim = {
             let mut state = self.state.lock().expect("recorder mutex poisoned");
-            if state.active.is_some() || state.arming.is_some() {
-                warn!(meeting_id, "arm ignored: a recording is already active");
+            if state.active == Some(meeting_id) || state.arming == Some(meeting_id) {
+                Claim::Duplicate
+            } else if state.active.is_some() || state.arming.is_some() {
+                Claim::Busy
+            } else {
+                state.arming = Some(meeting_id);
+                Claim::Ours
+            }
+        };
+        match claim {
+            Claim::Duplicate => {
+                warn!(meeting_id, "arm ignored: already handling this meeting");
                 return Ok(());
             }
-            state.arming = Some(meeting_id);
+            Claim::Busy => {
+                warn!(meeting_id, "arm ignored: another recording is active");
+                // Retire the row rather than leave it claiming to record. Nothing
+                // will ever stop a meeting that was never armed, so it would sit
+                // in `recording` until the next startup sweep and misreport an
+                // active capture until then.
+                let now = Utc::now().timestamp_millis();
+                let _ = meetings::finish_meeting(&self.db, meeting_id, now, "cancelled").await;
+                return Ok(());
+            }
+            Claim::Ours => {}
         }
 
         let stamp = recording_stamp(chrono::Local::now());

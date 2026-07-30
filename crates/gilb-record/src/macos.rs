@@ -120,6 +120,8 @@ struct VideoWriter {
     started: bool,
     /// Wall clock at the first frame; frame PTS are derived from it.
     start: Option<std::time::Instant>,
+    /// Frames the encoder refused because it was behind. Reported on `finish`.
+    dropped: u64,
 }
 
 // SAFETY: all access is serialized through the owning `Mutex<VideoWriter>`.
@@ -176,6 +178,7 @@ impl VideoWriter {
                 input,
                 started: false,
                 start: None,
+                dropped: 0,
             })
         }
     }
@@ -221,6 +224,15 @@ impl VideoWriter {
             }
             if self.input.isReadyForMoreMediaData() {
                 let _ = self.input.appendSampleBuffer(retimed);
+            } else {
+                // The encoder is behind. Dropping is the only option — buffering
+                // would grow without bound — but it used to happen invisibly, so
+                // a recording could thin out with nothing to show why. Warn once,
+                // then let `finish` report the total.
+                self.dropped += 1;
+                if self.dropped == 1 {
+                    warn!("video encoder is behind; dropping frames");
+                }
             }
             CFRelease(out as *const _);
         }
@@ -245,6 +257,12 @@ impl VideoWriter {
                 warn!("capture produced no frames; discarding the empty .mp4");
                 self.writer.cancelWriting();
                 return false;
+            }
+            if self.dropped > 0 {
+                warn!(
+                    dropped = self.dropped,
+                    "frames were dropped; the video is thinner than real time"
+                );
             }
             self.input.markAsFinished();
             if !self.writer.finishWriting() {

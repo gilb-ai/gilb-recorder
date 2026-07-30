@@ -221,6 +221,43 @@ async fn double_arm_is_ignored_until_stop() {
 }
 
 #[tokio::test]
+async fn a_second_meeting_arriving_mid_capture_is_retired_not_left_recording() {
+    let dir = temp_dir();
+    let db = temp_db(&dir).await;
+    let first = meetings::insert_meeting(&db, 0, "manual")
+        .await
+        .expect("insert");
+    let second = meetings::insert_meeting(&db, 1, "us.zoom.xos")
+        .await
+        .expect("insert");
+
+    let recorder = Recorder::new(db.clone(), dir.clone(), CountingCapturer::default());
+    recorder.arm(first).await.expect("arm the first");
+    // A different meeting detected while the first is capturing: its capture is
+    // correctly skipped, but the row must not be left claiming to record — that
+    // is how rows used to sit in `recording` indefinitely.
+    recorder.arm(second).await.expect("second arm is a no-op");
+
+    let m = meetings::get_meeting(&db, second)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "cancelled");
+    assert!(m.ended_at.is_some());
+    assert!(m.video_path.is_none(), "it never captured anything");
+
+    // The active recording is untouched.
+    let m = meetings::get_meeting(&db, first)
+        .await
+        .expect("get")
+        .expect("present");
+    assert_eq!(m.status, "recording");
+
+    db.close().await;
+    cleanup(&dir);
+}
+
+#[tokio::test]
 async fn stop_without_arm_is_noop() {
     let dir = temp_dir();
     let db = temp_db(&dir).await;
