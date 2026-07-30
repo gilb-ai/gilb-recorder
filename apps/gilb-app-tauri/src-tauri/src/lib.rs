@@ -1,6 +1,7 @@
 //! gilb Tauri shell — wires the UI to `gilb-engine`.
 
 mod analyzer_supervisor;
+mod assist;
 mod commands;
 mod events;
 mod logging;
@@ -78,6 +79,12 @@ pub fn run() {
                         Err(err) => error!(?err, "data_dir failed; meeting pipeline not started"),
                     }
 
+                    // Real-time suggestions. Started after the meeting pipeline:
+                    // it subscribes to the audio tap the pipeline installs and
+                    // to the recording bus for meeting boundaries. Silently
+                    // inert without an agent binary or the whisper model.
+                    assist::init(app.handle());
+
                     // System tray: gilb's home (open the window, toggle a manual
                     // recording, quit). Built after `AppState` is managed — the
                     // controller reads `recording` from it.
@@ -121,6 +128,12 @@ pub fn run() {
             gilb_shell_tauri::stop_meeting_recording,
             gilb_shell_tauri::get_meeting_detection,
             gilb_shell_tauri::set_meeting_detection,
+            // Full paths: generate_handler! resolves the macro-generated
+            // items next to each command, so a re-export would not do.
+            gilb_shell_tauri::assist::assist_status,
+            gilb_shell_tauri::assist::assist_set_enabled,
+            gilb_shell_tauri::assist::assist_ask,
+            gilb_shell_tauri::assist::assist_hide,
             commands::transcription::get_transcription_status,
             commands::transcription::set_transcription_language,
             commands::transcription::download_model,

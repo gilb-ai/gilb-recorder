@@ -43,7 +43,14 @@ gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
 gilb-pipeline = { workspace = true }
-gilb-shell-tauri = { workspace = true }
+gilb-shell-tauri = { workspace = true, features = [
+    # Real-time suggestions: overlay window, commands, whisper model gate.
+    "assist",
+] }
+# gilb's own halves of the assist stack: the prompt file and the local agent.
+gilb-assist = { workspace = true }
+gilb-assist-acp = { workspace = true }
+async-trait = "0.1"
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 
 [target.'cfg(unix)'.dependencies]

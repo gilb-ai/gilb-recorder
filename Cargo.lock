@@ -2047,9 +2047,12 @@ name = "gilb-app-tauri"
 version = "1.0.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "base64 0.22.1",
  "directories",
  "gilb-a11y",
+ "gilb-assist",
+ "gilb-assist-acp",
  "gilb-config",
  "gilb-core",
  "gilb-db",
@@ -2086,6 +2089,20 @@ version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "gilb-assist-acp"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "gilb-assist",
+ "serde",
+ "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
 ]
