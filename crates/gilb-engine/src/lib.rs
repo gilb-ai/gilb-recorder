@@ -23,7 +23,7 @@ use tracing::{info, warn};
 use gilb_a11y::{current_platform, CapturePlatform, Permissions, RunningCapture, StartContext};
 use gilb_config::RecordingSettings;
 use gilb_core::{SessionId, WriterMessage};
-use gilb_db::{actions, open_db, sessions, tree_snapshots, write_batch, Db};
+use gilb_db::{actions, meetings, open_db, sessions, tree_snapshots, write_batch, Db};
 use gilb_events::EventBus;
 
 const ACTION_CHANNEL_CAPACITY: usize = 4096;
@@ -69,6 +69,21 @@ pub struct EngineStatus {
 impl Engine {
     pub async fn open(db_path: std::path::PathBuf) -> Result<Self> {
         let db = open_db(&db_path).await?;
+
+        // Nothing can still be recording at startup, so any row that says it is
+        // was stranded by a previous run that never reached the recorder's stop
+        // path — a crash or a force-quit mid-call. Retire them here or they stay
+        // `recording` forever and misreport an active capture. Non-fatal: a
+        // failure here costs accurate history, not the session.
+        match meetings::fail_stale_recordings(&db).await {
+            Ok(0) => {}
+            Ok(n) => warn!(
+                count = n,
+                "retired meetings left mid-recording by a previous run"
+            ),
+            Err(err) => warn!(error = %err, "could not retire stale recording rows"),
+        }
+
         let event_bus = EventBus::new();
         let platform = current_platform();
         Ok(Self {

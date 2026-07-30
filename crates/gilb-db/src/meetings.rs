@@ -51,6 +51,28 @@ pub async fn finish_meeting(db: &Db, id: i64, ended_at_ms: i64, status: &str) ->
     Ok(())
 }
 
+/// Retire rows left in `recording` by a previous run, returning how many.
+///
+/// `status` only ever leaves `recording` through [`finish_meeting`], which runs
+/// from the recorder's stop path. Anything that skips that path — a crash, a
+/// force-quit, the app being killed mid-call, or an arm that was ignored because
+/// another capture was already active — strands the row in `recording` forever.
+/// Those rows are neither live nor eligible for transcription, and a UI that
+/// derives "is a recording in progress" from them is simply wrong.
+///
+/// Called once at startup, when by definition nothing can still be recording.
+/// `ended_at` is deliberately left as-is: the true end is unknown, and stamping
+/// "now" onto a call from last week would claim a week-long recording. A `failed`
+/// row with a NULL `ended_at` reads correctly as "we never saw this one finish".
+/// `failed` rather than a dedicated state because the CHECK constraint in
+/// `0004_meetings.sql` admits only the four existing values.
+pub async fn fail_stale_recordings(db: &Db) -> Result<u64> {
+    let res = sqlx::query("UPDATE meetings SET status = 'failed' WHERE status = 'recording'")
+        .execute(db)
+        .await?;
+    Ok(res.rows_affected())
+}
+
 /// Insert a fresh `meetings` row in the default `recording` state, returning
 /// its id. Production creates rows in the engine; this exists for tests and
 /// bring-up of the recorder.
