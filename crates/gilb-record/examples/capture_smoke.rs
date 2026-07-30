@@ -30,10 +30,7 @@ fn main() -> Result<()> {
         .init();
 
     let mut args = std::env::args().skip(1);
-    let secs: u64 = args
-        .next()
-        .and_then(|a| a.parse().ok())
-        .unwrap_or(8);
+    let secs: u64 = args.next().and_then(|a| a.parse().ok()).unwrap_or(8);
     let bundle_id = args.next();
 
     let dir = std::env::temp_dir().join("gilb-capture-smoke");
@@ -57,7 +54,10 @@ fn main() -> Result<()> {
 
     let stopping = Instant::now();
     capturer.stop()?;
-    println!("capture stopped in {:?} (includes the audio mux)", stopping.elapsed());
+    println!(
+        "capture stopped in {:?} (includes the audio mux)",
+        stopping.elapsed()
+    );
 
     for name in ["video.mp4", "audio.wav", "mic.wav", "system.wav"] {
         let path = dir.join(name);

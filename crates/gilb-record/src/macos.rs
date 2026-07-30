@@ -339,9 +339,9 @@ impl VideoHealth {
 
     /// Time since the last `Complete` frame (since capture start if none yet).
     fn since_last_frame(&self) -> Duration {
-        self.epoch
-            .elapsed()
-            .saturating_sub(Duration::from_millis(self.last_frame_ms.load(Ordering::Relaxed)))
+        self.epoch.elapsed().saturating_sub(Duration::from_millis(
+            self.last_frame_ms.load(Ordering::Relaxed),
+        ))
     }
 }
 

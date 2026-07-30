@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use chrono::Utc;
@@ -34,6 +35,25 @@ mod windows;
 /// Target sample rate of the audio sidecar — 16 kHz mono, the rate downstream
 /// transcription ([GILB-6]) consumes.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
+
+/// How many times [`Recorder::arm`] tries to bring capture up before marking the
+/// meeting failed.
+///
+/// Starting capture is racy through no fault of ours: the platform refuses when
+/// the call app's process/window set is still churning, which is exactly the
+/// moment a meeting is detected. On macOS that surfaces as ScreenCaptureKit
+/// `-3818` out of a `replayd` race, and it clears within seconds. Treating the
+/// first refusal as terminal cost a whole two-hour recording, so retry.
+pub const START_ATTEMPTS: usize = 5;
+
+/// Waits before each retry — ~15s of coverage in total, which outlasts the
+/// window in which a call app is still settling after join.
+const START_BACKOFF: [Duration; START_ATTEMPTS - 1] = [
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+];
 
 /// Terminal state written to the `meetings` row when capture stops. Maps onto
 /// the `status` CHECK constraint in `0004_meetings.sql`.
@@ -104,6 +124,33 @@ pub type PlatformCapturer = windows::WindowsCapturer;
 /// See [`PlatformCapturer`].
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub type PlatformCapturer = NoopCapturer;
+
+/// Delete what a failed capture start left behind.
+///
+/// A backend may create its output before the step that actually fails —
+/// AVAssetWriter opens `video.mp4` up front, so a refused `startCapture` leaves a
+/// zero-byte file. That file then blocks every retry, because AVAssetWriter will
+/// not open a URL that already exists (`AVErrorFileAlreadyExists`). Clearing it
+/// also keeps a permanently failed meeting from leaving an orphan on disk that
+/// nothing references, since the row never gets its paths set.
+///
+/// Best-effort: a file that cannot be removed is logged and the retry proceeds,
+/// where it will surface as the start error instead.
+fn clear_failed_attempt(video: &Path, audio: &Path) {
+    for path in [video, audio] {
+        match std::fs::remove_file(path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "cannot remove a partial recording; a retry may fail on it"
+                );
+            }
+        }
+    }
+}
 
 /// Derive the on-disk paths for a meeting's recordings: each meeting gets its
 /// own folder named by the recording start time `stamp` (e.g.
@@ -237,12 +284,27 @@ pub fn write_wav_16k_mono(path: &Path, samples: &[i16]) -> Result<()> {
 /// Drives capture in response to [`RecordingEvent`]s and owns the `meetings`
 /// row's recording fields. Generic over the capturer so tests inject a
 /// stand-in; production uses [`PlatformCapturer`].
+/// What the recorder is doing right now, behind a single mutex so [`arm`]'s
+/// retry loop and a concurrent [`stop`] can never see a half-updated view.
+///
+/// [`arm`]: Recorder::arm
+/// [`stop`]: Recorder::stop
+#[derive(Default)]
+struct State {
+    /// `meeting_id` whose capture is live.
+    active: Option<i64>,
+    /// `meeting_id` whose capture is still being brought up, i.e. `arm` is
+    /// between retries. [`Recorder::stop`] clears this, which is how a retry loop
+    /// learns the call ended before capture ever started — without it, `arm`
+    /// would happily bring a stream up minutes after everyone hung up.
+    arming: Option<i64>,
+}
+
 pub struct Recorder<C: ScreenAudioCapturer = PlatformCapturer> {
     db: Db,
     data_dir: PathBuf,
     capturer: C,
-    /// `meeting_id` currently being captured, if any.
-    active: Mutex<Option<i64>>,
+    state: Mutex<State>,
 }
 
 impl<C: ScreenAudioCapturer> Recorder<C> {
@@ -251,27 +313,61 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
             db,
             data_dir,
             capturer,
-            active: Mutex::new(None),
+            state: Mutex::new(State::default()),
         }
     }
 
+    /// The underlying capturer. Lets callers inspect backend state the trait
+    /// doesn't expose — tests assert on how many starts a retry actually made.
+    pub fn capturer(&self) -> &C {
+        &self.capturer
+    }
+
+    /// Is this `arm` call still the one the recorder wants? `stop` clears
+    /// `arming`, so `false` means we were abandoned mid-retry.
+    fn still_arming(&self, meeting_id: i64) -> bool {
+        self.state.lock().expect("recorder mutex poisoned").arming == Some(meeting_id)
+    }
+
+    /// Give up on arming `meeting_id`: clear the slot and stamp the row failed.
+    async fn abandon_arming(&self, meeting_id: i64) {
+        {
+            let mut state = self.state.lock().expect("recorder mutex poisoned");
+            if state.arming == Some(meeting_id) {
+                state.arming = None;
+            }
+        }
+        let now = Utc::now().timestamp_millis();
+        let _ = meetings::finish_meeting(&self.db, meeting_id, now, "failed").await;
+    }
+
     /// Start capturing for `meeting_id`: derive paths, kick off capture, and
-    /// record the paths on the row. A second arm while one is active is
-    /// ignored (the in-flight capture keeps running).
+    /// record the paths on the row. A second arm while one is active — or while
+    /// another is still retrying — is ignored (the in-flight one keeps going).
+    ///
+    /// Capture start is retried up to [`START_ATTEMPTS`] times with
+    /// [`START_BACKOFF`] between tries, because the platform commonly refuses for
+    /// a few seconds right after a call app joins. The row is only stamped
+    /// `failed` once every attempt is used up, or if [`Recorder::stop`] abandons
+    /// us in the meantime.
     pub async fn arm(&self, meeting_id: i64) -> Result<()> {
         {
-            let active = self.active.lock().expect("recorder mutex poisoned");
-            if active.is_some() {
+            let mut state = self.state.lock().expect("recorder mutex poisoned");
+            if state.active.is_some() || state.arming.is_some() {
                 warn!(meeting_id, "arm ignored: a recording is already active");
                 return Ok(());
             }
+            state.arming = Some(meeting_id);
         }
 
         let stamp = recording_stamp(chrono::Local::now());
         let (video, audio) = meeting_paths(&self.data_dir, &stamp);
         if let Some(parent) = video.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create meetings dir {}", parent.display()))?;
+            if let Err(err) = std::fs::create_dir_all(parent) {
+                self.abandon_arming(meeting_id).await;
+                return Err(err)
+                    .with_context(|| format!("create meetings dir {}", parent.display()));
+            }
         }
 
         // The meeting's `app` column holds the call app's bundle id; use it to
@@ -282,16 +378,88 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
             .flatten()
             .map(|m| m.app);
 
-        if let Err(err) = self
-            .capturer
-            .start(&video, &audio, app_bundle_id.as_deref())
-        {
-            let now = Utc::now().timestamp_millis();
-            let _ = meetings::finish_meeting(&self.db, meeting_id, now, "failed").await;
+        let mut last_err = None;
+        for attempt in 1..=START_ATTEMPTS {
+            // A failed attempt leaves its half-open output behind, and at least
+            // AVAssetWriter refuses to open a URL that already exists
+            // (`AVErrorFileAlreadyExists`) — so without this every retry past the
+            // first is guaranteed to fail on the leftover, whatever the original
+            // problem was.
+            if attempt > 1 {
+                clear_failed_attempt(&video, &audio);
+            }
+
+            match self
+                .capturer
+                .start(&video, &audio, app_bundle_id.as_deref())
+            {
+                Ok(()) => {
+                    last_err = None;
+                    break;
+                }
+                Err(err) => {
+                    warn!(
+                        meeting_id,
+                        attempt,
+                        attempts = START_ATTEMPTS,
+                        error = %err,
+                        "failed to start capture"
+                    );
+                    last_err = Some(err);
+                }
+            }
+
+            // Out of attempts: fall through to the failure path below.
+            let Some(backoff) = START_BACKOFF.get(attempt - 1) else {
+                break;
+            };
+            tokio::time::sleep(*backoff).await;
+
+            if !self.still_arming(meeting_id) {
+                info!(
+                    meeting_id,
+                    "meeting ended while capture start was retrying; giving up"
+                );
+                break;
+            }
+        }
+
+        if let Some(err) = last_err {
+            clear_failed_attempt(&video, &audio);
+            self.abandon_arming(meeting_id).await;
             return Err(err).context("start screen/audio capture");
         }
 
-        *self.active.lock().expect("recorder mutex poisoned") = Some(meeting_id);
+        // Capture is live. Claim it — unless `stop` cleared us while the
+        // successful start was in flight, in which case the call is already over.
+        // Decide under the lock, act outside it: the guard is not `Send` and the
+        // cleanup path awaits.
+        let claimed = {
+            let mut state = self.state.lock().expect("recorder mutex poisoned");
+            if state.arming == Some(meeting_id) {
+                state.arming = None;
+                state.active = Some(meeting_id);
+                true
+            } else {
+                false
+            }
+        };
+
+        if !claimed {
+            // Tear the capture straight back down rather than leave an orphan
+            // recording that nothing will ever stop.
+            info!(
+                meeting_id,
+                "capture started after the meeting ended; stopping it again"
+            );
+            if let Err(err) = self.capturer.stop() {
+                warn!(meeting_id, error = %err, "failed to stop an orphaned capture");
+            }
+            clear_failed_attempt(&video, &audio);
+            let now = Utc::now().timestamp_millis();
+            let _ = meetings::finish_meeting(&self.db, meeting_id, now, "cancelled").await;
+            return Ok(());
+        }
 
         meetings::set_recording_paths(
             &self.db,
@@ -310,8 +478,11 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
     /// `ended_at`. A no-op when nothing is being captured.
     pub async fn stop(&self, outcome: RecordingOutcome) -> Result<()> {
         let meeting_id = {
-            let mut active = self.active.lock().expect("recorder mutex poisoned");
-            match active.take() {
+            let mut state = self.state.lock().expect("recorder mutex poisoned");
+            // Abandon any in-flight arm: whatever it is waiting for is moot now,
+            // and `arm` checks this between retries.
+            state.arming = None;
+            match state.active.take() {
                 Some(id) => id,
                 None => return Ok(()),
             }

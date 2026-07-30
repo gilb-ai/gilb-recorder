@@ -89,7 +89,9 @@ windows = { version = "0.58", features = [
 
 [dev-dependencies]
 uuid = { workspace = true }
-tokio = { workspace = true }
+# `test-util` lets the retry tests run on paused time, so the start backoff is
+# advanced instantly instead of really sleeping ~15s.
+tokio = { workspace = true, features = ["test-util"] }
 # Lets `examples/capture_smoke.rs` surface the backend's own tracing output —
 # the capture path is macOS/Windows-only, so those logs are the only view into it.
 tracing-subscriber = { workspace = true }
