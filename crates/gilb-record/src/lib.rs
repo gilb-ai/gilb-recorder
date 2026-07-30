@@ -319,6 +319,8 @@ pub struct Recorder<C: ScreenAudioCapturer = PlatformCapturer> {
     data_dir: PathBuf,
     capturer: C,
     state: Mutex<State>,
+    /// Waits between capture-start attempts; [`START_BACKOFF`] in production.
+    start_backoff: Vec<Duration>,
 }
 
 impl<C: ScreenAudioCapturer> Recorder<C> {
@@ -328,7 +330,21 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
             data_dir,
             capturer,
             state: Mutex::new(State::default()),
+            start_backoff: START_BACKOFF.to_vec(),
         }
+    }
+
+    /// Replace the retry waits — a test hook, hidden from docs.
+    ///
+    /// Tests cannot shortcut the real backoff with tokio's paused clock:
+    /// sqlite runs on its own thread, so during any sqlx call the runtime looks
+    /// idle and auto-advances straight to the pool's acquire deadline — a race
+    /// that passes on a fast machine and times the pool out on a loaded CI
+    /// runner. Millisecond real waits are reliable everywhere.
+    #[doc(hidden)]
+    pub fn with_start_backoff(mut self, waits: Vec<Duration>) -> Self {
+        self.start_backoff = waits;
+        self
     }
 
     /// The underlying capturer. Lets callers inspect backend state the trait
@@ -452,7 +468,7 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
             }
 
             // Out of attempts: fall through to the failure path below.
-            let Some(backoff) = START_BACKOFF.get(attempt - 1) else {
+            let Some(backoff) = self.start_backoff.get(attempt - 1) else {
                 break;
             };
             tokio::time::sleep(*backoff).await;

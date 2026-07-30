@@ -347,6 +347,12 @@ impl ScreenAudioCapturer for FileClaimingCapturer {
     }
 }
 
+/// Millisecond retry waits for tests. Real waits, deliberately: pausing
+/// tokio's clock races sqlx (see `Recorder::with_start_backoff`).
+fn fast_backoff() -> Vec<std::time::Duration> {
+    vec![std::time::Duration::from_millis(10); gilb_record::START_ATTEMPTS - 1]
+}
+
 #[tokio::test]
 async fn arm_retries_a_transient_start_failure() {
     let dir = temp_dir();
@@ -362,10 +368,8 @@ async fn arm_retries_a_transient_start_failure() {
             fail_first: 2,
             ..Default::default()
         },
-    );
-    // Pause only now: the sqlx pool must be established on real time, or its
-    // acquire timeout fires the instant the clock is auto-advanced.
-    tokio::time::pause();
+    )
+    .with_start_backoff(fast_backoff());
     recorder
         .arm(id)
         .await
@@ -398,8 +402,8 @@ async fn arm_gives_up_after_exhausting_attempts() {
             fail_first: usize::MAX,
             ..Default::default()
         },
-    );
-    tokio::time::pause();
+    )
+    .with_start_backoff(fast_backoff());
     let err = recorder.arm(id).await.expect_err("every attempt fails");
     assert!(
         err.to_string().contains("start screen/audio capture"),
