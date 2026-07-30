@@ -10,7 +10,8 @@ use gilb_db::meetings::insert_meeting;
 use gilb_db::open_db;
 use gilb_db::transcripts::get_transcript;
 use gilb_transcribe::{
-    transcribe_meeting, voiced_fraction, voiced_mask, voiced_secs, Transcriber, Utterance, MODEL,
+    suppress_mic_echoes, transcribe_meeting, voiced_fraction, voiced_mask, voiced_secs, Channel,
+    Segment, Transcriber, Utterance, MODEL,
 };
 use uuid::Uuid;
 
@@ -176,4 +177,128 @@ async fn hard_failure_records_error() {
     db.close().await;
     cleanup(&dbp);
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------
+// Mic-echo suppression (`suppress_mic_echoes`).
+// ---------------------------------------------------------------------------
+
+fn seg(channel: Channel, t0: f32, text: &str) -> Segment {
+    Segment {
+        t0,
+        t1: t0 + 2.0,
+        channel,
+        text: text.to_string(),
+    }
+}
+
+#[test]
+fn mic_echo_of_a_system_line_is_dropped() {
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 10.0, "Да Катя, десять минут будет."),
+        seg(Channel::Mic, 10.4, "Да Катя десять минут будет"),
+    ]);
+    assert_eq!(dropped, 1);
+    assert_eq!(kept.len(), 1);
+    assert_eq!(kept[0].channel, Channel::System, "the system copy survives");
+}
+
+#[test]
+fn simultaneous_speech_in_different_words_is_kept() {
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(
+            Channel::System,
+            10.0,
+            "мы посмотрим что будет разворачиваться дальше",
+        ),
+        seg(Channel::Mic, 10.3, "я пока проверю логи на своей стороне"),
+    ]);
+    assert_eq!(dropped, 0);
+    assert_eq!(kept.len(), 2, "different words are never an echo");
+}
+
+#[test]
+fn short_backchannel_lines_are_ineligible() {
+    // "да"/"угу" recur constantly on both channels; too short to match on.
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 5.0, "Да."),
+        seg(Channel::Mic, 5.5, "Да."),
+    ]);
+    assert_eq!(dropped, 0);
+    assert_eq!(kept.len(), 2);
+}
+
+#[test]
+fn echo_window_is_bounded_in_both_directions() {
+    let line = "наш разговор который сейчас был я проанализировал";
+    // Outside the window on either side: not an echo.
+    let (_, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 10.0, line),
+        seg(Channel::Mic, 13.0, line),
+    ]);
+    assert_eq!(dropped, 0, "3s later is not an echo");
+    let (_, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::Mic, 7.0, line),
+        seg(Channel::System, 10.0, line),
+    ]);
+    assert_eq!(dropped, 0, "3s earlier is not an echo");
+    // Within the window it is — in both directions, because whisper's segment
+    // boundaries and the channels' clocks jitter more than the acoustic delay.
+    let (_, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 10.0, line),
+        seg(Channel::Mic, 11.0, line),
+    ]);
+    assert_eq!(dropped, 1, "mic shortly after");
+    let (_, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::Mic, 9.5, line),
+        seg(Channel::System, 10.0, line),
+    ]);
+    assert_eq!(dropped, 1, "mic shortly before (timestamp jitter)");
+}
+
+#[test]
+fn containment_matches_differently_segmented_echo() {
+    // Whisper often splits the echo differently: the mic copy carries a strict
+    // subset of the system line's words. Containment catches what Jaccard misses.
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(
+            Channel::System,
+            20.0,
+            "ну наш разговор который сейчас был я его у себя проанализировал",
+        ),
+        seg(Channel::Mic, 20.9, "наш разговор который сейчас был"),
+    ]);
+    assert_eq!(dropped, 1);
+    assert_eq!(kept[0].channel, Channel::System);
+}
+
+#[test]
+fn eligibility_counts_characters_not_bytes() {
+    // Two Cyrillic words, 14 characters — under both the 4-word and the
+    // 20-character floor, so never a match. Byte length (27 in UTF-8) would
+    // wrongly make this eligible; a two-word reply like this can genuinely be
+    // said by both sides, so it must stay.
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 10.0, "Давай выключим."),
+        seg(Channel::Mic, 10.4, "Давай выключим."),
+    ]);
+    assert_eq!(dropped, 0);
+    assert_eq!(kept.len(), 2);
+}
+
+#[test]
+fn punctuation_and_case_do_not_defeat_the_match() {
+    let (_, dropped) = suppress_mic_echoes(vec![
+        seg(
+            Channel::System,
+            30.0,
+            "Там сорок девять процентов недельной квоты уже!",
+        ),
+        seg(
+            Channel::Mic,
+            30.6,
+            "там сорок девять процентов недельной квоты уже",
+        ),
+    ]);
+    assert_eq!(dropped, 1);
 }

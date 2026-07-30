@@ -12,7 +12,7 @@ use gilb_engine::Engine;
 use parking_lot::Mutex;
 use tauri::AppHandle;
 use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::analyzer_supervisor::AnalyzerSupervisor;
 
@@ -41,20 +41,68 @@ pub struct AppState {
     pub arming_since: Mutex<Option<std::time::Instant>>,
 }
 
+/// A database that couldn't be migrated (left behind by an incompatible
+/// version) and was moved aside so the app could start with a fresh one.
+/// Reported to the user via [`show_db_rescue_notice`].
+pub struct DbRescue {
+    pub archived_to: std::path::PathBuf,
+}
+
 /// Open the SQLite database and build [`AppState`]. Pulled out of `setup()` so
 /// failures can be reported to the user before the app exits.
-pub fn build_app_state() -> Result<AppState> {
+///
+/// If the open fails because the on-disk database has an incompatible
+/// migration history (edited checksum, downgrade past a newer schema), the
+/// database files are archived next to themselves and the open is retried
+/// once with a fresh database; the returned [`DbRescue`] tells `setup()` to
+/// notify the user. Any other failure — and a failure of the retry itself —
+/// propagates as before.
+pub fn build_app_state() -> Result<(AppState, Option<DbRescue>)> {
     ensure_data_dir().context("ensure_data_dir")?;
     let path = db_path().context("db_path")?;
     info!(?path, "opening engine");
-    let engine = tauri::async_runtime::block_on(Engine::open(path))?;
-    Ok(AppState {
-        engine: Arc::new(engine),
-        pending_auth: Mutex::new(None),
-        analyzer: AnalyzerSupervisor::spawn(),
-        recording: Mutex::new(None),
-        arming_since: Mutex::new(None),
-    })
+    let (engine, rescue) = match tauri::async_runtime::block_on(Engine::open(path.clone())) {
+        Ok(engine) => (engine, None),
+        Err(err) if gilb_db::is_migrate_error(&err) => {
+            warn!(
+                ?err,
+                "incompatible db migration history; archiving and starting fresh"
+            );
+            let archived_to =
+                gilb_db::archive_incompatible_db(&path).context("archiving the incompatible db")?;
+            let engine = tauri::async_runtime::block_on(Engine::open(path))
+                .context("opening a fresh db after archiving the incompatible one")?;
+            (engine, Some(DbRescue { archived_to }))
+        }
+        Err(err) => return Err(err),
+    };
+    Ok((
+        AppState {
+            engine: Arc::new(engine),
+            pending_auth: Mutex::new(None),
+            analyzer: AnalyzerSupervisor::spawn(),
+            recording: Mutex::new(None),
+            arming_since: Mutex::new(None),
+        },
+        rescue,
+    ))
+}
+
+/// Non-blocking info dialog: the previous database was incompatible with this
+/// version and was archived at `rescue.archived_to`; recording starts fresh.
+pub fn show_db_rescue_notice(app: &AppHandle, rescue: &DbRescue) {
+    let body = format!(
+        "Your recording database was created by an incompatible version of \
+         gilb and could not be upgraded.\n\nIt was moved to:\n{}\n\ngilb will \
+         record into a fresh database. The archived file can be inspected or \
+         restored manually.",
+        rescue.archived_to.display()
+    );
+    app.dialog()
+        .message(body)
+        .title("gilb")
+        .kind(MessageDialogKind::Info)
+        .show(|_| {});
 }
 
 /// Show a modal native dialog explaining why the app can't start, and point

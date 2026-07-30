@@ -2,22 +2,40 @@
 //!
 //! This module is compiled only on macOS and is **not** exercised by CI (the
 //! workspace is built/tested on Linux). It is the thin, impure edge of the
-//! recorder: ScreenCaptureKit captures the call app's window directly (a
-//! desktop-independent window filter that follows the window across monitors;
-//! see [`build_window_stream`] + [`spawn_window_watcher`]) into an AVAssetWriter
-//! encoding HEVC to `.mp4` ([`VideoWriter`]). Audio comes from two sources — the
-//! same `SCStream` carries *system* audio ([`system_audio_samples`]) and `cpal`
-//! carries the *mic* ([`spawn_mic_capture`]) — both accumulated and, on stop,
-//! written via the host-tested helpers in [`crate::mix_to_mono_16k`] /
+//! recorder.
+//!
+//! **Two independent `SCStream`s, on purpose.** Video and system audio used to
+//! ride one window-scoped stream, which made the *audio* hostage to the
+//! *window*: every time the call app swapped or destroyed its window (join,
+//! screen-share start/stop, panels) SCK killed the stream and the far end's
+//! voice went missing for the rest of the call — silently, because the mic kept
+//! recording. Rebuilding that stream also re-ran the audio-tap setup each time,
+//! which is exactly the race that makes `startCapture` fail with `-3818`. So:
+//!
+//! * [`build_audio_stream`] — **app**-scoped ([`SCContentFilter`] over the app,
+//!   not a window), audio output only. No `window_id` in the filter, so window
+//!   churn can't touch it. Built once per recording and never rebuilt.
+//! * [`build_window_stream`] — **window**-scoped (a desktop-independent window
+//!   filter that follows the window across monitors), screen output only, audio
+//!   explicitly off. Fragile by nature, so [`spawn_window_watcher`] watches it
+//!   and re-targets onto the app's new window; a failure here costs picture, not
+//!   the transcript.
+//!
+//! Screen frames go to an AVAssetWriter encoding HEVC to `.mp4`
+//! ([`VideoWriter`]). Audio comes from two sources — the app-scoped stream
+//! carries *system* audio ([`system_audio_samples`]) and `cpal` carries the
+//! *mic* ([`spawn_mic_capture`]) — both accumulated and, on stop, written via
+//! the host-tested helpers in [`crate::mix_to_mono_16k`] /
 //! [`crate::write_wav_16k_mono`] as three sidecars: `mic.wav`, `system.wav`, and
 //! the `audio.wav` mix. The mix is then muxed into the `.mp4`
 //! ([`mux_audio_into_video`]) so the final video plays with sound.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
 use core_foundation::base::{CFRelease, TCFType};
@@ -43,7 +61,7 @@ use screencapturekit::stream::delegate_trait::SCStreamDelegateTrait;
 use screencapturekit::stream::output_trait::SCStreamOutputTrait;
 use screencapturekit::stream::output_type::SCStreamOutputType;
 use screencapturekit::stream::SCStream;
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 use crate::{mix_to_mono_16k_dual, write_wav_16k_mono, ScreenAudioCapturer};
 
@@ -55,6 +73,27 @@ const CAPTURE_SAMPLE_RATE: u32 = 48_000;
 /// low-motion, so cap to 15 (parity with the Windows backend) to roughly halve
 /// the recording size. Applied via `minimumFrameInterval` = 1/`VIDEO_FPS`.
 const VIDEO_FPS: i32 = 15;
+
+/// How often [`spawn_window_watcher`] re-examines the capture. Kept coarse: a
+/// re-target is disruptive, and `SCShareableContent::get` is not free.
+const WATCH_TICK: Duration = Duration::from_millis(1_500);
+
+/// Rebuild the video stream if no `Complete` frame arrived for this long. Covers
+/// the case SCK stops delivering *without* reporting an error through the
+/// delegate — the failure mode that silently truncated past recordings.
+///
+/// Deliberately far above the frame interval (1/[`VIDEO_FPS`]): SCK does not
+/// keep emitting frames for a window whose contents don't change. Measured on an
+/// idle window, gaps reach ~8s, so anything near that would spend the recording
+/// rebuilding a perfectly healthy stream. During a real call the window updates
+/// continuously, which makes a gap this long unambiguous — and the cost of
+/// waiting is now bounded to picture only, since audio is on its own stream.
+const FRAME_STALL: Duration = Duration::from_secs(30);
+
+/// Output size for the audio-only stream. SCK wants a valid video config even
+/// when no screen output handler is attached; keep it minimal so compositing
+/// costs nothing.
+const AUDIO_STREAM_DIMS: u32 = 16;
 
 /// Shared, interleaved-to-mono PCM accumulators for the two audio sources.
 #[derive(Default)]
@@ -81,6 +120,8 @@ struct VideoWriter {
     started: bool,
     /// Wall clock at the first frame; frame PTS are derived from it.
     start: Option<std::time::Instant>,
+    /// Frames the encoder refused because it was behind. Reported on `finish`.
+    dropped: u64,
 }
 
 // SAFETY: all access is serialized through the owning `Mutex<VideoWriter>`.
@@ -137,6 +178,7 @@ impl VideoWriter {
                 input,
                 started: false,
                 start: None,
+                dropped: 0,
             })
         }
     }
@@ -182,34 +224,74 @@ impl VideoWriter {
             }
             if self.input.isReadyForMoreMediaData() {
                 let _ = self.input.appendSampleBuffer(retimed);
+            } else {
+                // The encoder is behind. Dropping is the only option — buffering
+                // would grow without bound — but it used to happen invisibly, so
+                // a recording could thin out with nothing to show why. Warn once,
+                // then let `finish` report the total.
+                self.dropped += 1;
+                if self.dropped == 1 {
+                    warn!("video encoder is behind; dropping frames");
+                }
             }
             CFRelease(out as *const _);
         }
     }
 
-    /// Finalize the `.mp4`. The synchronous `finishWriting` is deprecated in
-    /// favour of the async completion-handler form, but synchronous is exactly
-    /// what the stop path needs — it blocks until the container is flushed and
-    /// closed before we mark the meeting completed.
+    /// Finalize the `.mp4`, returning whether a playable file was left on disk.
+    ///
+    /// The synchronous `finishWriting` is deprecated in favour of the async
+    /// completion-handler form, but synchronous is exactly what the stop path
+    /// needs — it blocks until the container is flushed and closed before we mark
+    /// the meeting completed.
+    ///
+    /// A writer that never received a frame is **cancelled**, not left alone.
+    /// `AVAssetWriter::new` creates the output during `startWriting`, so a capture
+    /// that produced nothing used to leave a zero-byte `.mp4` behind — no `moov`
+    /// atom, unopenable by anything, and indistinguishable from a real recording
+    /// to anyone browsing the folder. `cancelWriting` deletes that file.
     #[allow(deprecated)]
-    fn finish(&mut self) {
+    fn finish(&mut self) -> bool {
         unsafe {
-            if self.started {
-                self.input.markAsFinished();
-                if !self.writer.finishWriting() {
-                    warn!(error = ?self.writer.error(), "AVAssetWriter finishWriting failed");
-                }
+            if !self.started {
+                warn!("capture produced no frames; discarding the empty .mp4");
+                self.writer.cancelWriting();
+                return false;
             }
+            if self.dropped > 0 {
+                warn!(
+                    dropped = self.dropped,
+                    "frames were dropped; the video is thinner than real time"
+                );
+            }
+            self.input.markAsFinished();
+            if !self.writer.finishWriting() {
+                warn!(error = ?self.writer.error(), "AVAssetWriter finishWriting failed");
+                return false;
+            }
+            true
         }
     }
 }
 
-/// A running capture: the SCK stream, the mic thread's stop signal + handle,
-/// the shared audio buffers, and the output paths to finalize on stop.
+/// A running capture: the two SCK streams, the mic thread's stop signal +
+/// handle, the shared audio buffers, and the output paths to finalize on stop.
 struct Session {
-    /// Shared so the window watcher can swap in a fresh stream when the call
-    /// app changes its window. `stop()` stops whatever stream is current.
-    stream: Arc<Mutex<SCStream>>,
+    /// Primary system-audio source: a Core Audio process tap (macOS 14.2+).
+    /// `replayd` is not in its path, which is the point — the failures that
+    /// cost recordings all lived there. Dropped on stop.
+    system_tap: Option<crate::macos_tap::SystemAudioTap>,
+    /// Fallback system-audio source when the tap is unavailable (old macOS, or
+    /// the Audio Recording permission was denied): the SCK app-scoped stream.
+    /// `None` when the tap is active.
+    audio_stream: Option<Arc<Mutex<SCStream>>>,
+    /// Rate the system channel was captured at — the tap's device rate, or
+    /// [`CAPTURE_SAMPLE_RATE`] on the SCK path.
+    system_rate: u32,
+    /// Window-scoped, screen only. Shared so the window watcher can swap in a
+    /// fresh stream when the call app changes its window. `stop()` stops
+    /// whatever stream is current.
+    video_stream: Arc<Mutex<SCStream>>,
     /// Set true to tell the window watcher to exit; joined on stop.
     watcher_stop: Arc<AtomicBool>,
     watcher_thread: Option<JoinHandle<()>>,
@@ -220,6 +302,36 @@ struct Session {
     audio_path: PathBuf,
     video_path: PathBuf,
     sample_rate: u32,
+}
+
+/// Stops the wrapped stream on drop unless [`disarm`](Self::disarm)ed.
+///
+/// Bringing up a capture is several fallible steps with live SCK streams already
+/// running; without this, an error partway through would leave a stream (and its
+/// audio tap) capturing for the rest of the process's lifetime, since `stop()`
+/// only ever reaches streams that made it into a [`Session`].
+struct StreamGuard(Option<Arc<Mutex<SCStream>>>);
+
+impl StreamGuard {
+    fn new(stream: &Arc<Mutex<SCStream>>) -> Self {
+        Self(Some(stream.clone()))
+    }
+
+    /// Hand ownership over to the caller — the stream is now someone else's to
+    /// stop (i.e. it reached the `Session`).
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        if let Some(stream) = self.0.take() {
+            if let Ok(s) = stream.lock() {
+                let _ = s.stop_capture();
+            }
+        }
+    }
 }
 
 /// macOS [`ScreenAudioCapturer`]. Holds the active [`Session`] behind a mutex so
@@ -235,15 +347,49 @@ impl MacosCapturer {
     }
 }
 
-/// SCK stream-output handler: pushes system-audio sample buffers into the
-/// shared accumulator (audio output) and feeds video frames to the HEVC writer
-/// (screen output). `video` is `Some` only on the screen-output instance.
-struct CaptureSink {
-    audio: Arc<Mutex<AudioBuffers>>,
-    video: Option<Arc<Mutex<VideoWriter>>>,
+/// Liveness of the window-scoped video stream, shared between the SCK callbacks
+/// and [`spawn_window_watcher`].
+struct VideoHealth {
+    /// Set when SCK tears the stream down on its own (delegate callback).
+    dead: AtomicBool,
+    /// Millis since `epoch` at the last `Complete` frame.
+    last_frame_ms: AtomicU64,
+    /// Generation whose frames the writer currently accepts. Bumped at swap
+    /// time, so a replacement stream that is already capturing but not yet
+    /// swapped in — and the outgoing one just after — cannot write frames.
+    generation: AtomicU64,
+    epoch: Instant,
 }
 
-impl SCStreamOutputTrait for CaptureSink {
+impl VideoHealth {
+    fn new() -> Self {
+        Self {
+            dead: AtomicBool::new(false),
+            last_frame_ms: AtomicU64::new(0),
+            generation: AtomicU64::new(0),
+            epoch: Instant::now(),
+        }
+    }
+
+    fn mark_frame(&self) {
+        self.last_frame_ms
+            .store(self.epoch.elapsed().as_millis() as u64, Ordering::Relaxed);
+    }
+
+    /// Time since the last `Complete` frame (since capture start if none yet).
+    fn since_last_frame(&self) -> Duration {
+        self.epoch.elapsed().saturating_sub(Duration::from_millis(
+            self.last_frame_ms.load(Ordering::Relaxed),
+        ))
+    }
+}
+
+/// Audio output handler for the app-scoped stream: accumulates system audio.
+struct AudioSink {
+    audio: Arc<Mutex<AudioBuffers>>,
+}
+
+impl SCStreamOutputTrait for AudioSink {
     fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
         match of_type {
             SCStreamOutputType::Audio => {
@@ -253,33 +399,69 @@ impl SCStreamOutputTrait for CaptureSink {
                     }
                 }
             }
-            SCStreamOutputType::Screen => {
-                if let Some(video) = &self.video {
-                    // Only `Complete` frames carry a valid image buffer. Appending
-                    // idle/blank/started frames pushes the AVAssetWriter into a
-                    // failed state, so `finishWriting` later fails to write the
-                    // `moov` atom and the `.mp4` won't open. Skip the rest.
-                    let complete = SCStreamFrameInfo::from_sample_buffer(&sample)
-                        .map(|info| info.status() == SCFrameStatus::Complete)
-                        .unwrap_or(false);
-                    if complete {
-                        if let Ok(mut writer) = video.lock() {
-                            writer.append(&sample);
-                        }
-                    }
-                }
-            }
+            SCStreamOutputType::Screen => {}
         }
     }
 }
 
-/// Minimal stream delegate — SCK reports asynchronous stop/errors through it;
-/// log and continue.
-struct CaptureErrors;
+/// Screen output handler for the window-scoped stream: feeds frames to the HEVC
+/// writer while this instance's `generation` is the one the watcher installed.
+struct VideoSink {
+    video: Arc<Mutex<VideoWriter>>,
+    health: Arc<VideoHealth>,
+    generation: u64,
+}
 
-impl SCStreamDelegateTrait for CaptureErrors {
+impl SCStreamOutputTrait for VideoSink {
+    fn did_output_sample_buffer(&self, sample: CMSampleBuffer, of_type: SCStreamOutputType) {
+        match of_type {
+            SCStreamOutputType::Screen => {
+                // A stream built by the watcher starts capturing before it is
+                // swapped in; drop its frames until it becomes current so the
+                // two never interleave into the writer.
+                if self.generation != self.health.generation.load(Ordering::Acquire) {
+                    return;
+                }
+                // Only `Complete` frames carry a valid image buffer. Appending
+                // idle/blank/started frames pushes the AVAssetWriter into a
+                // failed state, so `finishWriting` later fails to write the
+                // `moov` atom and the `.mp4` won't open. Skip the rest.
+                let complete = SCStreamFrameInfo::from_sample_buffer(&sample)
+                    .map(|info| info.status() == SCFrameStatus::Complete)
+                    .unwrap_or(false);
+                if complete {
+                    if let Ok(mut writer) = self.video.lock() {
+                        writer.append(&sample);
+                    }
+                    self.health.mark_frame();
+                }
+            }
+            SCStreamOutputType::Audio => {}
+        }
+    }
+}
+
+/// Delegate for the window-scoped stream: flag it dead so the watcher rebuilds
+/// on its next tick instead of leaving a stopped stream in place.
+struct VideoStreamErrors {
+    health: Arc<VideoHealth>,
+}
+
+impl SCStreamDelegateTrait for VideoStreamErrors {
     fn did_stop_with_error(&self, _stream: SCStream, error: CFError) {
-        warn!(error = %error, "ScreenCaptureKit stream stopped with an error");
+        warn!(error = %error, "video capture stream stopped with an error; will re-target");
+        self.health.dead.store(true, Ordering::Release);
+    }
+}
+
+/// Delegate for the app-scoped audio stream. Nothing rebuilds this one, so a
+/// failure here means the far end's audio is lost for the rest of the recording
+/// — log it at that weight.
+struct AudioStreamErrors;
+
+impl SCStreamDelegateTrait for AudioStreamErrors {
+    fn did_stop_with_error(&self, _stream: SCStream, error: CFError) {
+        warn!(error = %error, "audio capture stream stopped with an error; system audio is lost for the rest of this recording");
     }
 }
 
@@ -301,11 +483,12 @@ fn pick_app_window(content: &SCShareableContent, bundle_id: &str) -> Option<SCWi
         })
 }
 
-/// Stream configuration shared by the initial capture and every watcher
+/// Video stream configuration, shared by the initial capture and every watcher
 /// re-target: a fixed `w`×`h` output (so the HEVC writer's frame size never
-/// changes when the window moves between monitors or is swapped) plus mono
-/// 48 kHz audio.
-fn make_capture_config(w: u32, h: u32) -> Result<SCStreamConfiguration> {
+/// changes when the window moves between monitors or is swapped). Audio is
+/// explicitly **off** — it rides the app-scoped stream instead, so that
+/// re-targeting this one never touches the audio tap.
+fn make_video_config(w: u32, h: u32) -> Result<SCStreamConfiguration> {
     SCStreamConfiguration::new()
         .set_width(w)
         .map_err(|e| anyhow!("set capture width: {e}"))?
@@ -320,53 +503,122 @@ fn make_capture_config(w: u32, h: u32) -> Result<SCStreamConfiguration> {
             epoch: 0,
         })
         .map_err(|e| anyhow!("set minimum frame interval: {e}"))?
+        .set_captures_audio(false)
+        .map_err(|e| anyhow!("disable audio on the video stream: {e}"))
+}
+
+/// Audio stream configuration: mono at [`CAPTURE_SAMPLE_RATE`], our own output
+/// excluded. No screen output handler is attached to this stream, but SCK still
+/// wants a valid video config, so keep the frame tiny and slow.
+fn make_audio_config() -> Result<SCStreamConfiguration> {
+    SCStreamConfiguration::new()
+        .set_width(AUDIO_STREAM_DIMS)
+        .map_err(|e| anyhow!("set audio stream width: {e}"))?
+        .set_height(AUDIO_STREAM_DIMS)
+        .map_err(|e| anyhow!("set audio stream height: {e}"))?
+        .set_minimum_frame_interval(&core_media_rs::cm_time::CMTime {
+            value: 1,
+            timescale: 1,
+            flags: 1,
+            epoch: 0,
+        })
+        .map_err(|e| anyhow!("set audio stream frame interval: {e}"))?
         .set_captures_audio(true)
         .map_err(|e| anyhow!("enable audio capture: {e}"))?
         .set_sample_rate(CAPTURE_SAMPLE_RATE)
         .map_err(|e| anyhow!("set audio sample rate: {e}"))?
         .set_channel_count(1)
-        .map_err(|e| anyhow!("set audio channel count: {e}"))
+        .map_err(|e| anyhow!("set audio channel count: {e}"))?
+        .set_excludes_current_process_audio(true)
+        .map_err(|e| anyhow!("exclude own audio: {e}"))
 }
 
-/// Build and start a desktop-independent **window** capture stream feeding the
-/// shared audio/video sinks. Used for the initial start and on every watcher
-/// re-target when the call app swaps its window. A window filter follows the
-/// window across monitors natively, so dragging the call to another display
-/// keeps recording.
-fn build_window_stream(
-    window: &SCWindow,
+/// Build and start the **audio** stream over `filter`, feeding the shared PCM
+/// accumulator. Built once per recording; never re-targeted.
+fn build_audio_stream(
+    filter: &SCContentFilter,
     config: &SCStreamConfiguration,
     audio: &Arc<Mutex<AudioBuffers>>,
-    video: &Arc<Mutex<VideoWriter>>,
 ) -> Result<SCStream> {
-    let filter = SCContentFilter::new().with_desktop_independent_window(window);
-    let mut stream = SCStream::new_with_delegate(&filter, config, CaptureErrors);
+    let mut stream = SCStream::new_with_delegate(filter, config, AudioStreamErrors);
     stream.add_output_handler(
-        CaptureSink {
+        AudioSink {
             audio: audio.clone(),
-            video: None,
         },
         SCStreamOutputType::Audio,
     );
+    stream
+        .start_capture()
+        .map_err(|e| anyhow!("start audio capture: {e}"))?;
+    Ok(stream)
+}
+
+/// Build and start a **video** stream over `filter`, feeding the HEVC writer.
+/// `generation` gates the sink: frames are dropped until the watcher publishes
+/// this generation via [`VideoHealth::generation`], so a replacement stream can
+/// be brought up while the outgoing one is still running.
+fn build_video_stream(
+    filter: &SCContentFilter,
+    config: &SCStreamConfiguration,
+    video: &Arc<Mutex<VideoWriter>>,
+    health: &Arc<VideoHealth>,
+    generation: u64,
+) -> Result<SCStream> {
+    let mut stream = SCStream::new_with_delegate(
+        filter,
+        config,
+        VideoStreamErrors {
+            health: health.clone(),
+        },
+    );
     stream.add_output_handler(
-        CaptureSink {
-            audio: audio.clone(),
-            video: Some(video.clone()),
+        VideoSink {
+            video: video.clone(),
+            health: health.clone(),
+            generation,
         },
         SCStreamOutputType::Screen,
     );
     stream
         .start_capture()
-        .map_err(|e| anyhow!("start ScreenCaptureKit capture: {e}"))?;
+        .map_err(|e| anyhow!("start video capture: {e}"))?;
     Ok(stream)
 }
 
-/// Watch the call app's main window and re-target the capture when the app
-/// swaps it. Window-direct capture follows the window across monitors on its
-/// own, but if the app replaces the window (Zoom on join/share/panel) SCK kills
-/// the stream — so we poll the window id and, when it changes, stop the old
-/// stream and start a fresh one onto the new window, reusing the same sinks and
-/// HEVC writer. Exits when `stop` is set.
+/// Build and start a desktop-independent **window** video stream. Used for the
+/// initial start and on every watcher re-target when the call app swaps its
+/// window. A window filter follows the window across monitors natively, so
+/// dragging the call to another display keeps recording.
+fn build_window_stream(
+    window: &SCWindow,
+    config: &SCStreamConfiguration,
+    video: &Arc<Mutex<VideoWriter>>,
+    health: &Arc<VideoHealth>,
+    generation: u64,
+) -> Result<SCStream> {
+    let filter = SCContentFilter::new().with_desktop_independent_window(window);
+    build_video_stream(&filter, config, video, health, generation)
+}
+
+/// Watch the call app's main window and keep the video stream alive on it.
+///
+/// Three things trigger a re-target:
+///
+/// * the captured window disappears — the app replaced it (Zoom does this on
+///   join, and on screen-share start *and* stop),
+/// * SCK tore the stream down and reported it through the delegate
+///   ([`VideoHealth::dead`]),
+/// * no `Complete` frame arrived for [`FRAME_STALL`] — the silent variant of the
+///   same failure, and the one that truncated recordings while nothing watched
+///   for it.
+///
+/// The replacement stream is started *before* the outgoing one is stopped, with
+/// the swap published by bumping [`VideoHealth::generation`]. A failed rebuild
+/// therefore leaves a working capture running rather than a stopped one, and when
+/// the app has no capturable window at this instant the loop just retries on the
+/// next tick — it never gives up while the recording is live. Audio is not
+/// touched here at all: it lives on its own app-scoped stream. Exits when `stop`
+/// is set.
 #[allow(clippy::too_many_arguments)]
 fn spawn_window_watcher(
     bundle_id: String,
@@ -374,82 +626,162 @@ fn spawn_window_watcher(
     cap_w: u32,
     cap_h: u32,
     stream: Arc<Mutex<SCStream>>,
-    audio: Arc<Mutex<AudioBuffers>>,
     video: Arc<Mutex<VideoWriter>>,
+    health: Arc<VideoHealth>,
     stop: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     std::thread::spawn(move || {
+        // 0 means "started without a window" (app-scoped or display fallback);
+        // no real window carries id 0, so the first tick looks for one to
+        // upgrade to.
         let mut current_id = initial_window_id;
+        let mut generation = 0u64;
         loop {
-            // ~1.5s between checks, but wake every 100ms so stop() is prompt.
-            for _ in 0..15 {
+            // WATCH_TICK between checks, but wake often so stop() is prompt.
+            let step = Duration::from_millis(100);
+            let mut slept = Duration::ZERO;
+            while slept < WATCH_TICK {
                 if stop.load(Ordering::Acquire) {
                     return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(step);
+                slept += step;
             }
             if stop.load(Ordering::Acquire) {
                 return;
             }
 
+            // Consume the dead flag: if the rebuild below fails we want the next
+            // tick to retry on the stall check rather than on a stale flag.
+            let dead = health.dead.swap(false, Ordering::AcqRel);
+            let stalled = health.since_last_frame() > FRAME_STALL;
+
             let content = match SCShareableContent::get() {
                 Ok(c) => c,
-                Err(_) => continue,
+                Err(e) => {
+                    // Not fatal on its own, but if it keeps failing the watcher
+                    // is blind and a dead stream never gets rebuilt — which is
+                    // exactly how truncated recordings used to happen unnoticed.
+                    warn!(error = %e, "cannot enumerate shareable content; capture is unsupervised this tick");
+                    continue;
+                }
             };
 
-            // Keep recording the current window as long as it still exists.
-            // Only the app actually closing/replacing it triggers a re-target —
-            // otherwise a larger *auxiliary* window (Zoom's share toolbar, chat,
-            // or participants panel) would steal the capture away from the main
+            // Keep recording the current window as long as it still exists and
+            // is actually delivering frames. Only the app closing/replacing it —
+            // or the stream itself breaking — triggers a re-target; otherwise a
+            // larger *auxiliary* window (Zoom's share toolbar, chat, or
+            // participants panel) would steal the capture away from the main
             // meeting/video window the moment it out-sized it.
             let current_present = content
                 .windows()
                 .into_iter()
                 .any(|w| w.window_id() == current_id);
-            if current_present {
+            // This path is the only window into a capture that has gone wrong, so
+            // it reports what the decision was made on. Gated on the level being
+            // live: it walks and formats the whole window list, which is pure
+            // waste at the default INFO.
+            if tracing::enabled!(tracing::Level::TRACE) {
+                let app_windows: Vec<String> = content
+                    .windows()
+                    .into_iter()
+                    .filter(|w| w.owning_application().bundle_identifier() == bundle_id)
+                    .map(|w| {
+                        format!(
+                            "{}(layer={},onscreen={})",
+                            w.window_id(),
+                            w.window_layer(),
+                            w.is_on_screen()
+                        )
+                    })
+                    .collect();
+                trace!(
+                    current_id,
+                    current_present,
+                    dead,
+                    stalled,
+                    since_last_frame_ms = health.since_last_frame().as_millis(),
+                    app_windows = app_windows.join(" "),
+                    "watcher tick"
+                );
+            }
+            if current_present && !dead && !stalled {
                 continue;
             }
 
-            // The current window is gone — re-target onto its replacement (the
-            // largest remaining window of the app, i.e. the new main window).
             let win = match pick_app_window(&content, &bundle_id) {
                 Some(w) => w,
-                None => continue, // no window right now; keep the old stream
+                // The app has no capturable window at this instant (it is
+                // mid-transition). Keep what we have and try again next tick.
+                None => {
+                    trace!(%bundle_id, "no capturable window yet; retrying next tick");
+                    continue;
+                }
             };
             let new_id = win.window_id();
-            if new_id == current_id {
+            // Same window and a healthy stream: nothing to do. When the stream
+            // is dead or stalled we *do* rebuild onto the same window — there
+            // the window is fine and the stream is not.
+            if new_id == current_id && !dead && !stalled {
                 continue;
             }
 
-            // The app swapped its window. Stop the old stream and start a new
-            // one on the new window. Hold the lock across both so no frames
-            // arrive from two streams at once. Rebuild the config here: the
-            // SCK config type isn't `Send`, so it can't be carried into the
-            // thread — but it's cheap to recreate at the fixed output size.
-            let config = match make_capture_config(cap_w, cap_h) {
+            // Rebuild the config here: the SCK config type isn't `Send`, so it
+            // can't be carried into the thread — but it's cheap to recreate at
+            // the fixed output size.
+            let config = match make_video_config(cap_w, cap_h) {
                 Ok(c) => c,
                 Err(e) => {
                     warn!(error = %e, "failed to rebuild capture config");
                     continue;
                 }
             };
-            if let Ok(mut slot) = stream.lock() {
-                let _ = slot.stop_capture();
-                match build_window_stream(&win, &config, &audio, &video) {
-                    Ok(fresh) => {
-                        *slot = fresh;
-                        current_id = new_id;
-                        info!(
-                            window_id = new_id,
-                            "re-targeted capture to the app's new window"
-                        );
-                    }
-                    Err(e) => {
-                        // Leave the (stopped) old stream in place; retry next tick.
-                        warn!(error = %e, "failed to re-target capture window");
-                    }
+
+            // Start the replacement first. Its frames are dropped by the sink
+            // until its generation is published below, so both streams can be
+            // live for a moment without interleaving into the writer.
+            let next_generation = generation + 1;
+            let fresh = match build_window_stream(&win, &config, &video, &health, next_generation) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(
+                        error = %e,
+                        window_id = new_id,
+                        "failed to re-target video capture; keeping the current stream"
+                    );
+                    continue;
                 }
-            }
+            };
+
+            let Ok(mut slot) = stream.lock() else {
+                // Poisoned: stop `fresh` rather than leak a running stream.
+                let _ = fresh.stop_capture();
+                warn!("video stream mutex poisoned; cannot re-target");
+                continue;
+            };
+            let _ = slot.stop_capture();
+            *slot = fresh;
+            generation = next_generation;
+            // Reset staleness before publishing so the fresh stream gets a full
+            // FRAME_STALL window to deliver its first frame.
+            health.mark_frame();
+            health.generation.store(generation, Ordering::Release);
+            drop(slot);
+
+            let reason = if dead {
+                "stream reported dead"
+            } else if stalled {
+                "frames stalled"
+            } else {
+                "window replaced"
+            };
+            info!(
+                from_window_id = current_id,
+                window_id = new_id,
+                reason,
+                "re-targeted video capture"
+            );
+            current_id = new_id;
         }
     })
 }
@@ -510,22 +842,72 @@ impl ScreenAudioCapturer for MacosCapturer {
             }
         };
 
-        let config = make_capture_config(cap_w, cap_h)?;
-
         // HEVC `.mp4` writer for the screen frames, at the fixed output size.
         let video = Arc::new(Mutex::new(
             VideoWriter::new(video_path, cap_w, cap_h).context("create video writer")?,
         ));
+        let health = Arc::new(VideoHealth::new());
+        let display = &displays[0];
 
-        // Capture the call app's **window** directly when we found one: a
+        // --- Audio first: it carries the far end's voice. Primary source is a
+        // Core Audio process tap — `replayd` (where the `-3818` race and the
+        // mid-call stream deaths lived) is not in its path, and nothing the
+        // call app does to its windows or process set can invalidate it. If
+        // the tap is unavailable (macOS < 14.2, or the Audio Recording
+        // permission is denied) fall back to the SCK app-scoped stream.
+        let system_tap = {
+            let audio = audio.clone();
+            match crate::macos_tap::SystemAudioTap::start(move |chunk| {
+                if let Ok(mut buffers) = audio.lock() {
+                    buffers.system.extend_from_slice(chunk);
+                }
+            }) {
+                Ok(tap) => Some(tap),
+                Err(err) => {
+                    warn!(error = %err, "process tap unavailable; system audio falls back to ScreenCaptureKit");
+                    None
+                }
+            }
+        };
+        let system_rate = system_tap
+            .as_ref()
+            .map_or(CAPTURE_SAMPLE_RATE, |t| t.sample_rate());
+
+        // SCK fallback: the filter names the *application*, not a window, so
+        // join/share/panel transitions leave it alone, and it is never
+        // re-targeted — the audio tap inside SCK is negotiated exactly once.
+        let audio_stream = if system_tap.is_some() {
+            None
+        } else {
+            let audio_filter = match &app {
+                Some(app) => SCContentFilter::new()
+                    .with_display_including_application_excepting_windows(display, &[app], &[]),
+                None => {
+                    if let Some(bid) = app_bundle_id {
+                        warn!(
+                            bundle = bid,
+                            "call app not in shareable content; capturing system-wide audio"
+                        );
+                    }
+                    SCContentFilter::new().with_display_excluding_windows(display, &[])
+                }
+            };
+            Some(Arc::new(Mutex::new(build_audio_stream(
+                &audio_filter,
+                &make_audio_config()?,
+                &audio,
+            )?)))
+        };
+        let mut audio_guard = audio_stream.as_ref().map(StreamGuard::new);
+
+        // --- Video second: the call app's **window** when we have one. A
         // desktop-independent window filter follows the window across monitors
         // natively, so dragging the call to another display keeps recording, and
-        // it crops tight. The risk is that the app swaps its window (Zoom does
-        // this on join/share/panel) and SCK kills the stream — a watcher thread
-        // re-targets the new window to absorb that. With no window, fall back to
-        // a full-display capture (can't follow the window, but never vanishes).
-        let watcher_stop = Arc::new(AtomicBool::new(false));
-        let (stream, watcher_thread) = match &window {
+        // it crops tight. It is also the fragile half — the app can swap or
+        // destroy the window at any moment — which is why the watcher below owns
+        // its lifecycle. A failure here now costs picture only.
+        let video_config = make_video_config(cap_w, cap_h)?;
+        let video_stream = match &window {
             Some(win) => {
                 info!(
                     bundle = %win.owning_application().bundle_identifier(),
@@ -534,72 +916,59 @@ impl ScreenAudioCapturer for MacosCapturer {
                     cap_h,
                     "capturing the call app window directly"
                 );
-                let stream = build_window_stream(win, &config, &audio, &video)?;
-                let stream = Arc::new(Mutex::new(stream));
-
-                // Watcher: poll the app's main window; if its id changes (the app
-                // swapped its window) rebuild the stream onto the new window,
-                // reusing the same sinks and writer. Wall-clock retiming in
-                // `VideoWriter::append` absorbs the brief gap.
-                let thread = spawn_window_watcher(
-                    app_bundle_id.unwrap_or_default().to_string(),
-                    win.window_id(),
-                    cap_w,
-                    cap_h,
-                    stream.clone(),
-                    audio.clone(),
-                    video.clone(),
-                    watcher_stop.clone(),
-                );
-                (stream, Some(thread))
+                build_window_stream(win, &video_config, &video, &health, 0)?
             }
             None => {
-                let display = &displays[0];
+                // No trackable window *yet*. Stay scoped to the app when we can —
+                // recording the whole desktop is not what this product does — and
+                // let the watcher upgrade to the window as soon as one appears.
                 let filter = match &app {
                     Some(app) => {
-                        warn!(bundle = %app.bundle_identifier(), "no trackable window; capturing the app on its display");
+                        warn!(bundle = %app.bundle_identifier(), "no trackable window yet; capturing the app on its display");
                         SCContentFilter::new().with_display_including_application_excepting_windows(
                             display,
                             &[app],
                             &[],
                         )
                     }
-                    None => {
-                        if let Some(bid) = app_bundle_id {
-                            warn!(
-                                bundle = bid,
-                                "call app not in shareable content; capturing full display"
-                            );
-                        }
-                        SCContentFilter::new().with_display_excluding_windows(display, &[])
-                    }
+                    None => SCContentFilter::new().with_display_excluding_windows(display, &[]),
                 };
-                let mut stream = SCStream::new_with_delegate(&filter, &config, CaptureErrors);
-                stream.add_output_handler(
-                    CaptureSink {
-                        audio: audio.clone(),
-                        video: None,
-                    },
-                    SCStreamOutputType::Audio,
-                );
-                stream.add_output_handler(
-                    CaptureSink {
-                        audio: audio.clone(),
-                        video: Some(video.clone()),
-                    },
-                    SCStreamOutputType::Screen,
-                );
-                stream
-                    .start_capture()
-                    .map_err(|e| anyhow!("start ScreenCaptureKit capture: {e}"))?;
-                (Arc::new(Mutex::new(stream)), None)
+                build_video_stream(&filter, &video_config, &video, &health, 0)?
             }
         };
+        let video_stream = Arc::new(Mutex::new(video_stream));
+        let mut video_guard = StreamGuard::new(&video_stream);
 
         let (mic_stop, mic_thread, sample_rate) = spawn_mic_capture(audio.clone())?;
 
+        // Watcher last: it is the only step that isn't fallible, so nothing can
+        // orphan a running thread behind it.
+        let watcher_stop = Arc::new(AtomicBool::new(false));
+        let watcher_thread = app_bundle_id.map(|bid| {
+            spawn_window_watcher(
+                bid.to_string(),
+                window.as_ref().map_or(0, |w| w.window_id()),
+                cap_w,
+                cap_h,
+                video_stream.clone(),
+                video.clone(),
+                health.clone(),
+                watcher_stop.clone(),
+            )
+        });
+
+        // Both sources reached the session; it owns stopping them from here.
+        // (The tap needs no guard: it is RAII — dropped on any error path.)
+        if let Some(g) = audio_guard.as_mut() {
+            g.disarm();
+        }
+        video_guard.disarm();
+
         *guard = Some(Session {
-            stream,
+            system_tap,
+            audio_stream,
+            system_rate,
+            video_stream,
             watcher_stop,
             watcher_thread,
             mic_stop: Some(mic_stop),
@@ -627,9 +996,19 @@ impl ScreenAudioCapturer for MacosCapturer {
         if let Some(handle) = session.watcher_thread.take() {
             let _ = handle.join();
         }
-        if let Ok(stream) = session.stream.lock() {
+        if let Ok(stream) = session.video_stream.lock() {
             if let Err(e) = stream.stop_capture() {
-                warn!(error = ?e, "stopping ScreenCaptureKit stream");
+                warn!(error = ?e, "stopping the video capture stream");
+            }
+        }
+        // Stop the system-audio source before the buffers are read: the tap's
+        // IO block appends from its own queue until destroyed.
+        drop(session.system_tap.take());
+        if let Some(stream) = &session.audio_stream {
+            if let Ok(stream) = stream.lock() {
+                if let Err(e) = stream.stop_capture() {
+                    warn!(error = ?e, "stopping the audio capture stream");
+                }
             }
         }
         if let Some(stop) = session.mic_stop.take() {
@@ -640,9 +1019,15 @@ impl ScreenAudioCapturer for MacosCapturer {
         }
 
         // Finalize the `.mp4` (stops the stream first so no more frames arrive).
-        if let Ok(mut writer) = session.video.lock() {
-            writer.finish();
-        }
+        // `false` means no playable video was produced and the empty file has
+        // been discarded — the audio sidecars below are then the whole recording.
+        let have_video = match session.video.lock() {
+            Ok(mut writer) => writer.finish(),
+            Err(_) => {
+                warn!("video writer poisoned; cannot finalize the .mp4");
+                false
+            }
+        };
 
         let buffers = session
             .audio
@@ -655,12 +1040,12 @@ impl ScreenAudioCapturer for MacosCapturer {
             &buffers.mic,
             session.sample_rate,
             &buffers.system,
-            CAPTURE_SAMPLE_RATE,
+            session.system_rate,
         );
         // Single channel each: `mix_*_dual` with an empty second source just
         // resamples the first to 16 kHz.
         let mic_only = mix_to_mono_16k_dual(&buffers.mic, session.sample_rate, &[], 1);
-        let sys_only = mix_to_mono_16k_dual(&buffers.system, CAPTURE_SAMPLE_RATE, &[], 1);
+        let sys_only = mix_to_mono_16k_dual(&buffers.system, session.system_rate, &[], 1);
 
         let dir = session
             .audio_path
@@ -682,9 +1067,18 @@ impl ScreenAudioCapturer for MacosCapturer {
         // blocking here only delays the upload enqueue — exactly what we want —
         // without hanging the UI. Best-effort: on failure the video stays silent
         // and the WAV sidecars remain.
-        match mux_audio_into_video(&session.video_path, &session.audio_path) {
-            Ok(()) => info!(video = %session.video_path.display(), "muxed audio into video"),
-            Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
+        if have_video {
+            match mux_audio_into_video(&session.video_path, &session.audio_path) {
+                Ok(()) => info!(video = %session.video_path.display(), "muxed audio into video"),
+                Err(err) => warn!(error = %err, "failed to mux audio into video; mp4 stays silent"),
+            }
+        } else {
+            // Nothing to mux into. Say so plainly rather than letting the mux
+            // fail on a file that was deliberately deleted.
+            warn!(
+                audio = %session.audio_path.display(),
+                "no video was captured; the recording is audio-only"
+            );
         }
 
         info!(video = %session.video_path.display(), "macOS capture stopped");
@@ -857,4 +1251,34 @@ fn spawn_mic_capture(
     });
 
     Ok((tx, handle, sample_rate))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A writer that never received a frame must leave nothing behind.
+    ///
+    /// `AVAssetWriter` creates its output during `startWriting`, i.e. before any
+    /// frame arrives, so a capture that produced nothing used to strand a
+    /// zero-byte `.mp4` with no `moov` atom — unopenable, yet indistinguishable
+    /// from a real recording when browsing the folder. Only runs on a macOS host;
+    /// CI builds this module but never executes it.
+    #[test]
+    fn finish_without_frames_discards_the_empty_file() {
+        let dir = std::env::temp_dir().join(format!("gilb-videowriter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("video.mp4");
+
+        let mut writer = VideoWriter::new(&path, 320, 240).expect("create writer");
+        assert!(path.exists(), "AVAssetWriter creates its output up front");
+
+        assert!(!writer.finish(), "no frames means no playable video");
+        assert!(
+            !path.exists(),
+            "the empty .mp4 must be discarded, not orphaned"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

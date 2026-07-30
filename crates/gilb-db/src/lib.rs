@@ -19,7 +19,7 @@ use anyhow::{Context, Result};
 use gilb_core::WriterMessage;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous};
 use sqlx::SqlitePool;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::info;
@@ -86,6 +86,73 @@ pub async fn migrate(db: &Db) -> Result<()> {
         .await
         .context("running gilb-db migrations")?;
     Ok(())
+}
+
+/// True when `err`'s chain contains a sqlx migration error — the database on
+/// disk carries a migration history incompatible with this binary (modified
+/// checksum, a version this binary doesn't know, or a migration that failed
+/// to apply). Callers use this to tell "archive the DB and start fresh" apart
+/// from environment errors (permissions, disk full) where recreating the
+/// database wouldn't help.
+pub fn is_migrate_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<sqlx::migrate::MigrateError>()
+            .is_some()
+            || matches!(
+                cause.downcast_ref::<sqlx::Error>(),
+                Some(sqlx::Error::Migrate(_))
+            )
+    })
+}
+
+/// Move an incompatible database out of the way so a fresh one can be created
+/// at `path`. The main file becomes `<name>.old-<UTC timestamp>` in the same
+/// directory, and any `-wal` / `-shm` sidecars are renamed to match so the
+/// archived copy stays openable as-is. Returns the archived main-file path.
+/// Nothing is deleted — the user can recover the data manually.
+pub fn archive_incompatible_db(path: impl AsRef<Path>) -> Result<PathBuf> {
+    let path = path.as_ref();
+    let file_name = path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .with_context(|| format!("db path {} has no usable file name", path.display()))?;
+    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+
+    let stamp = chrono::Utc::now().format("%Y%m%d-%H%M%S");
+    let mut archived_name = format!("{file_name}.old-{stamp}");
+    let mut counter = 1;
+    while dir.join(&archived_name).exists() {
+        counter += 1;
+        archived_name = format!("{file_name}.old-{stamp}.{counter}");
+    }
+
+    let archived = dir.join(&archived_name);
+    std::fs::rename(path, &archived).with_context(|| {
+        format!(
+            "failed to archive {} to {}",
+            path.display(),
+            archived.display()
+        )
+    })?;
+    // SQLite derives sidecar names from the main file's, so they must be
+    // renamed in lockstep: a stray old `-wal` next to a fresh db would be
+    // rejected (or worse, replayed) on the next open.
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = dir.join(format!("{file_name}{suffix}"));
+        if sidecar.exists() {
+            let sidecar_archived = dir.join(format!("{archived_name}{suffix}"));
+            std::fs::rename(&sidecar, &sidecar_archived).with_context(|| {
+                format!(
+                    "failed to archive {} to {}",
+                    sidecar.display(),
+                    sidecar_archived.display()
+                )
+            })?;
+        }
+    }
+    info!(from = ?path, to = ?archived, "archived incompatible db");
+    Ok(archived)
 }
 
 /// Insert a batch of [`WriterMessage`]s in a single transaction.

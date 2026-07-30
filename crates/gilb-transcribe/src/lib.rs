@@ -9,9 +9,12 @@
 //!
 //! An energy [`voiced_mask`] gates Whisper's silence hallucinations: a silent
 //! channel is skipped entirely and segments landing in unvoiced spans are
-//! dropped. The whisper.cpp call lives behind the [`Transcriber`] trait (and the
-//! `local-whisper` feature) so the orchestration is unit-testable with a mock —
-//! no model, no GPU. Only [`LocalTranscriber`] loads a real model.
+//! dropped. After the merge, [`suppress_mic_echoes`] removes mic utterances that
+//! are just the speakers bleeding into the microphone (the same line would
+//! otherwise appear as both "Me" and "Others"). The whisper.cpp call lives
+//! behind the [`Transcriber`] trait (and the `local-whisper` feature) so the
+//! orchestration is unit-testable with a mock — no model, no GPU. Only
+//! [`LocalTranscriber`] loads a real model.
 
 use std::path::Path;
 
@@ -206,6 +209,113 @@ fn write_transcript_files(dir: &Path, segs: &[Segment]) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Acoustic-echo suppression at the transcript level.
+//
+// The two channels are not acoustically isolated: without headphones the mic
+// also hears the speakers, so a remote participant's sentence is transcribed on
+// *both* channels and shows up twice — once as "Me", once as "Others". Observed
+// on a real recording (single remote line duplicated across channels within a
+// second). The suppression below mirrors the approach OpenOats ships in its
+// `AcousticEchoFilter` (MIT): treat a mic utterance as an echo when it starts
+// shortly *after* a system utterance that says (almost) the same thing, and
+// drop the mic copy. Always the mic copy: the system tap physically cannot
+// contain the local voice, so a cross-channel text match identifies the mic
+// side as the bleed. Matching on text (not energy — measured unreliable here:
+// the near-field mic wins every loudness comparison) means genuinely
+// simultaneous speech in different words is never dropped.
+// ---------------------------------------------------------------------------
+
+/// A mic utterance counts as an echo when it starts within this window of the
+/// matching system utterance, in either direction. Physically the echo always
+/// trails the tap, but whisper segments each channel independently (boundary
+/// jitter well over the acoustic delay) and the channels' clocks drift
+/// (~2s/hour measured), so strict "mic after system" ordering misses real
+/// echoes — OpenOats ships this same both-directions mode for its filter.
+const ECHO_WINDOW_SECS: f32 = 1.75;
+/// Word-set Jaccard similarity at or above which two texts are "the same".
+const ECHO_SIMILARITY_MIN: f64 = 0.78;
+/// Texts shorter than this many words *and* this many characters are too short
+/// to match reliably ("да", "угу" recur constantly on both channels).
+const ECHO_MIN_WORDS: usize = 4;
+const ECHO_MIN_CHARS: usize = 20;
+
+/// Lowercased alphanumeric words of `text`; everything else is a separator.
+fn normalized_words(text: &str) -> Vec<String> {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Whether `mic_text` reads as an echo of `sys_text`: both long enough to be
+/// distinctive, and either near-identical word sets or one normalized text
+/// containing the other (whisper often segments the echo differently, so one
+/// side may carry a strict subset of the other's words).
+fn is_echo_text(mic_text: &str, sys_text: &str) -> bool {
+    let (mic_words, sys_words) = (normalized_words(mic_text), normalized_words(sys_text));
+    // Characters, not bytes: byte length would halve the effective threshold
+    // for Cyrillic and make short lines eligible that the filter is meant to
+    // ignore. Counts the normalized text's length, separators included.
+    let eligible = |words: &[String]| {
+        words.len() >= ECHO_MIN_WORDS
+            || words.iter().map(|w| w.chars().count()).sum::<usize>()
+                + words.len().saturating_sub(1)
+                >= ECHO_MIN_CHARS
+    };
+    if !eligible(&mic_words) || !eligible(&sys_words) {
+        return false;
+    }
+
+    let mic_set: std::collections::HashSet<&str> = mic_words.iter().map(String::as_str).collect();
+    let sys_set: std::collections::HashSet<&str> = sys_words.iter().map(String::as_str).collect();
+    let intersection = mic_set.intersection(&sys_set).count();
+    let union = mic_set.union(&sys_set).count();
+    let jaccard = if union == 0 {
+        1.0
+    } else {
+        intersection as f64 / union as f64
+    };
+
+    let (mic_norm, sys_norm) = (mic_words.join(" "), sys_words.join(" "));
+    jaccard >= ECHO_SIMILARITY_MIN || mic_norm.contains(&sys_norm) || sys_norm.contains(&mic_norm)
+}
+
+/// Remove mic segments that are acoustic echoes of system segments. Segments
+/// must be time-sorted. Returns the surviving segments plus how many were
+/// dropped (for logging). Only mic segments are ever removed, so no content can
+/// vanish — the system copy of every dropped line remains.
+pub fn suppress_mic_echoes(segs: Vec<Segment>) -> (Vec<Segment>, usize) {
+    let system: Vec<(f32, String)> = segs
+        .iter()
+        .filter(|s| s.channel == Channel::System)
+        .map(|s| (s.t0, s.text.clone()))
+        .collect();
+
+    let mut dropped = 0usize;
+    let kept = segs
+        .into_iter()
+        .filter(|seg| {
+            if seg.channel != Channel::Mic {
+                return true;
+            }
+            // Newest candidate first: the echo's source is the closest
+            // system line, so search backwards from the segment.
+            let is_echo = system
+                .iter()
+                .rev()
+                .filter(|(sys_t0, _)| (seg.t0 - sys_t0).abs() <= ECHO_WINDOW_SECS)
+                .any(|(_, sys_text)| is_echo_text(&seg.text, sys_text));
+            if is_echo {
+                dropped += 1;
+            }
+            !is_echo
+        })
+        .collect();
+    (kept, dropped)
+}
+
 /// Transcribe both channels next to `audio_path` and return their merged,
 /// time-sorted segments. A channel file that doesn't exist is skipped.
 async fn transcribe_channels(audio_path: &Path, t: &dyn Transcriber) -> Result<Vec<Segment>> {
@@ -229,6 +339,10 @@ async fn transcribe_channels(audio_path: &Path, t: &dyn Transcriber) -> Result<V
         }));
     }
     segs.sort_by(|a, b| a.t0.partial_cmp(&b.t0).unwrap_or(std::cmp::Ordering::Equal));
+    let (segs, dropped) = suppress_mic_echoes(segs);
+    if dropped > 0 {
+        info!(dropped, "suppressed mic echoes of system audio");
+    }
     Ok(segs)
 }
 
@@ -326,6 +440,97 @@ mod local {
             .collect()
     }
 
+    /// Seconds per language-probe window. 30s is whisper's own detection window;
+    /// a longer probe wouldn't make the vote any better, only slower.
+    const LANG_PROBE_SECS: f32 = 30.0;
+
+    /// How many probe windows vote on the language. Three dense, well-separated
+    /// stretches outvote a single unlucky one — an opening line in the "wrong"
+    /// language, or thirty seconds of hold music.
+    const LANG_PROBE_WINDOWS: usize = 3;
+
+    /// The `LANG_PROBE_WINDOWS` most speech-dense, non-overlapping windows of
+    /// `win_secs`, in recording order. Fewer if the audio is shorter than that.
+    fn dense_voiced_windows(
+        samples: &[f32],
+        mask: &[bool],
+        win_secs: f32,
+        windows: usize,
+    ) -> Vec<(usize, usize)> {
+        let win_len = (win_secs * 16_000.0) as usize;
+        if samples.len() <= win_len || win_len == 0 {
+            return vec![(0, samples.len())];
+        }
+        let frames_per_win = (win_len / crate::VAD_FRAME).max(1);
+        // Score every candidate start on a window-sized stride: cheap, and
+        // non-overlapping by construction.
+        let mut scored: Vec<(usize, usize)> = mask
+            .chunks(frames_per_win)
+            .enumerate()
+            .map(|(i, frames)| (frames.iter().filter(|&&v| v).count(), i * win_len))
+            .filter(|&(_, start)| start + win_len <= samples.len())
+            .collect();
+        scored.sort_by_key(|&(voiced, _)| std::cmp::Reverse(voiced));
+        let mut picked: Vec<usize> = scored
+            .into_iter()
+            .take(windows)
+            .map(|(_, start)| start)
+            .collect();
+        picked.sort_unstable();
+        picked.into_iter().map(|s| (s, s + win_len)).collect()
+    }
+
+    /// Resolve `"auto"` to one concrete language for the whole recording.
+    ///
+    /// Left on `"auto"`, whisper.cpp re-runs detection per 30-second window, and
+    /// on a long call it can drift mid-file from transcribing into *translating*;
+    /// the carried decoder context then locks the new language in for everything
+    /// after. Reproduced on a real two-hour Russian call: correct Russian for the
+    /// first ~140 seconds, then every remaining segment arrived as English prose
+    /// ("okay, now our conversation, which we have been here..."). That is what
+    /// shipped into the stored transcript — the speech was never garbled, it was
+    /// silently translated. Pinning one language removes the per-window vote.
+    ///
+    /// Returns `None` if detection fails; the caller then keeps `"auto"`, since a
+    /// drifting transcript still beats no transcript.
+    fn pin_language(ctx: &WhisperContext, samples: &[f32], mask: &[bool]) -> Option<String> {
+        let mut votes: Vec<(String, usize)> = Vec::new();
+        for (start, end) in dense_voiced_windows(samples, mask, LANG_PROBE_SECS, LANG_PROBE_WINDOWS)
+        {
+            let Ok(mut state) = ctx.create_state() else {
+                continue;
+            };
+            let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+            params.set_language(Some("auto"));
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_special(false);
+            params.set_print_timestamps(false);
+            if state.full(params, &samples[start..end]).is_err() {
+                continue;
+            }
+            let Some(lang) = whisper_rs::get_lang_str(state.full_lang_id_from_state()) else {
+                continue;
+            };
+            match votes.iter_mut().find(|(l, _)| l == lang) {
+                Some((_, n)) => *n += 1,
+                None => votes.push((lang.to_string(), 1)),
+            }
+        }
+        // Highest vote wins; ties go to whichever was seen first, i.e. earliest
+        // in the recording. (Strictly-greater fold: `max_by_key` would return
+        // the *last* maximum on a tie.)
+        let (lang, n) =
+            votes
+                .into_iter()
+                .fold(None::<(String, usize)>, |best, cand| match best {
+                    Some(b) if b.1 >= cand.1 => Some(b),
+                    _ => Some(cand),
+                })?;
+        tracing::info!(language = %lang, votes = n, "pinned transcription language");
+        Some(lang)
+    }
+
     /// Blocking whisper.cpp pass over `samples`, returning raw segments.
     fn run_whisper(
         ctx: &WhisperContext,
@@ -373,9 +578,20 @@ mod local {
 
             let ctx = self.ctx.clone();
             let language = self.language.clone();
-            let raw = tokio::task::spawn_blocking(move || run_whisper(&ctx, &samples, &language))
-                .await
-                .context("whisper task join")??;
+            let probe_mask = mask.clone();
+            let raw = tokio::task::spawn_blocking(move || {
+                // Pin "auto" to a concrete language before the real pass, so the
+                // decoder can't switch languages — or start translating —
+                // partway through the recording.
+                let language = if language.eq_ignore_ascii_case("auto") {
+                    pin_language(&ctx, &samples, &probe_mask).unwrap_or_else(|| "auto".to_string())
+                } else {
+                    language
+                };
+                run_whisper(&ctx, &samples, &language)
+            })
+            .await
+            .context("whisper task join")??;
 
             Ok(raw
                 .into_iter()
