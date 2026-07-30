@@ -273,6 +273,20 @@ fn containment_matches_differently_segmented_echo() {
 }
 
 #[test]
+fn eligibility_counts_characters_not_bytes() {
+    // Two Cyrillic words, 14 characters — under both the 4-word and the
+    // 20-character floor, so never a match. Byte length (27 in UTF-8) would
+    // wrongly make this eligible; a two-word reply like this can genuinely be
+    // said by both sides, so it must stay.
+    let (kept, dropped) = suppress_mic_echoes(vec![
+        seg(Channel::System, 10.0, "Давай выключим."),
+        seg(Channel::Mic, 10.4, "Давай выключим."),
+    ]);
+    assert_eq!(dropped, 0);
+    assert_eq!(kept.len(), 2);
+}
+
+#[test]
 fn punctuation_and_case_do_not_defeat_the_match() {
     let (_, dropped) = suppress_mic_echoes(vec![
         seg(

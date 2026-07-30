@@ -137,7 +137,17 @@ pub type PlatformCapturer = NoopCapturer;
 /// Best-effort: a file that cannot be removed is logged and the retry proceeds,
 /// where it will surface as the start error instead.
 fn clear_failed_attempt(video: &Path, audio: &Path) {
-    for path in [video, audio] {
+    // The mic/system sidecars exist only on the abandoned-successful-start
+    // path, where the capturer's stop already wrote them; on plain start
+    // failures they are absent and skipped as NotFound.
+    let sidecars: Vec<PathBuf> = audio
+        .parent()
+        .map(|d| vec![d.join("mic.wav"), d.join("system.wav")])
+        .unwrap_or_default();
+    for path in [video, audio]
+        .into_iter()
+        .chain(sidecars.iter().map(PathBuf::as_path))
+    {
         match std::fs::remove_file(path) {
             Ok(()) => {}
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}

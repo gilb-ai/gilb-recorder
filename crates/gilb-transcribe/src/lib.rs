@@ -255,9 +255,13 @@ fn normalized_words(text: &str) -> Vec<String> {
 /// side may carry a strict subset of the other's words).
 fn is_echo_text(mic_text: &str, sys_text: &str) -> bool {
     let (mic_words, sys_words) = (normalized_words(mic_text), normalized_words(sys_text));
+    // Characters, not bytes: byte length would halve the effective threshold
+    // for Cyrillic and make short lines eligible that the filter is meant to
+    // ignore. Counts the normalized text's length, separators included.
     let eligible = |words: &[String]| {
         words.len() >= ECHO_MIN_WORDS
-            || words.iter().map(|w| w.len()).sum::<usize>() + words.len().saturating_sub(1)
+            || words.iter().map(|w| w.chars().count()).sum::<usize>()
+                + words.len().saturating_sub(1)
                 >= ECHO_MIN_CHARS
     };
     if !eligible(&mic_words) || !eligible(&sys_words) {
@@ -514,8 +518,15 @@ mod local {
             }
         }
         // Highest vote wins; ties go to whichever was seen first, i.e. earliest
-        // in the recording.
-        let (lang, n) = votes.into_iter().max_by_key(|&(_, n)| n)?;
+        // in the recording. (Strictly-greater fold: `max_by_key` would return
+        // the *last* maximum on a tie.)
+        let (lang, n) =
+            votes
+                .into_iter()
+                .fold(None::<(String, usize)>, |best, cand| match best {
+                    Some(b) if b.1 >= cand.1 => Some(b),
+                    _ => Some(cand),
+                })?;
         tracing::info!(language = %lang, votes = n, "pinned transcription language");
         Some(lang)
     }
