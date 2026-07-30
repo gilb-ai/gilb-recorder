@@ -90,3 +90,6 @@ windows = { version = "0.58", features = [
 [dev-dependencies]
 uuid = { workspace = true }
 tokio = { workspace = true }
+# Lets `examples/capture_smoke.rs` surface the backend's own tracing output —
+# the capture path is macOS/Windows-only, so those logs are the only view into it.
+tracing-subscriber = { workspace = true }
