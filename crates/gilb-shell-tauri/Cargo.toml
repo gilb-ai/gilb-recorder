@@ -7,7 +7,7 @@ publish.workspace = true
 description = "Reusable Tauri meeting-flow glue (countdown windows, settings/privacy commands, MeetingUi) for gilb-based shells"
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
 url = "2"
 tracing = { workspace = true }
@@ -21,3 +21,27 @@ gilb-pipeline = { workspace = true }
 gilb-record = { workspace = true }
 gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
+
+# Real-time suggestions (feature `assist`): the engine, the audio front-end and
+# the model download. Optional because a shell that does not ship suggestions
+# should not build whisper.cpp.
+gilb-assist = { workspace = true, optional = true }
+gilb-assist-audio = { workspace = true, optional = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true, optional = true }
+tauri-plugin-notification = { version = "2", optional = true }
+tauri-plugin-global-shortcut = { version = "2", optional = true }
+
+[features]
+# The overlay, its commands and the whisper-model gate. Pulls in whisper.cpp
+# through gilb-assist-audio, so it is off unless a shell asks for it.
+assist = [
+    "dep:gilb-assist",
+    "dep:gilb-assist-audio",
+    "gilb-assist-audio/whisper",
+    "gilb-assist-audio/silero",
+    "dep:reqwest",
+    "dep:tauri-plugin-notification",
+    "dep:tauri-plugin-global-shortcut",
+]

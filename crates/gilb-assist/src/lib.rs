@@ -111,6 +111,35 @@ pub trait AssistSession: Send + Sync {
     }
 }
 
+/// Boxed implementations count as implementations.
+///
+/// The engine takes its two halves by generic, which is what a product wants
+/// when it knows both at compile time. A *shell* does not: it hands the choice
+/// to whatever product embeds it (Rodnik's server-backed config, gilb's local
+/// file plus an agent), and that choice can only travel as a trait object.
+/// Without these, `spawn(Box<dyn AssistConfig>, Box<dyn AssistBackend>, ..)`
+/// does not compile and every shell has to be generic over both halves — which
+/// spreads two type parameters through the whole Tauri layer for no gain.
+#[async_trait]
+impl AssistConfig for Box<dyn AssistConfig> {
+    async fn system_prompt(&self) -> Result<String> {
+        (**self).system_prompt().await
+    }
+    async fn enabled(&self) -> bool {
+        (**self).enabled().await
+    }
+    async fn turns_before_analysis(&self) -> u32 {
+        (**self).turns_before_analysis().await
+    }
+}
+
+#[async_trait]
+impl AssistBackend for Box<dyn AssistBackend> {
+    async fn begin(&self, system_prompt: &str) -> Result<Box<dyn AssistSession>> {
+        (**self).begin(system_prompt).await
+    }
+}
+
 /// What the engine tells the UI. Mirrors the webview events in §4.4:
 /// `Loading` drives the spinner, `Update` carries ready-to-render markdown,
 /// silence stays silent.

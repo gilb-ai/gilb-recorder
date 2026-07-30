@@ -22,6 +22,11 @@ mod privacy;
 mod settings;
 pub mod tray;
 
+/// Real-time meeting suggestions: overlay window, commands, model gate.
+/// Behind the `assist` feature — it builds whisper.cpp.
+#[cfg(feature = "assist")]
+pub mod assist;
+
 use std::path::PathBuf;
 
 use gilb_db::Db;

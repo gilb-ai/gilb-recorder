@@ -319,7 +319,9 @@ async function refreshAuth() {
 // ----- real-time suggestions (workspace card) -----------------------------
 
 type AssistStatus = {
-  signed_in: boolean;
+  /// Product-level availability, decided by the host (gilb_shell_tauri::assist):
+  /// Rodnik answers "signed in", gilb will answer "the agent is installed".
+  available: boolean;
   model_ready: boolean;
   downloading: boolean;
   percent: number;
@@ -329,9 +331,8 @@ type AssistStatus = {
 function renderAssist(s: AssistStatus | null) {
   const row = $("assist-row");
   if (!row) return;
-  // No status (or signed out): nothing to offer — the feature needs the
-  // workspace session for its prompt and provider.
-  if (!s || !s.signed_in) {
+  // No status, or the product says the feature cannot run: nothing to offer.
+  if (!s || !s.available) {
     row.hidden = true;
     return;
   }
