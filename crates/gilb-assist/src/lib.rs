@@ -90,6 +90,25 @@ pub trait AssistSession: Send + Sync {
     /// to commit that append only once the call has succeeded — otherwise a
     /// flaky network duplicates the same turns in the model's context.
     async fn send(&mut self, input: &str) -> Result<Option<String>>;
+
+    /// A user question, with the turns that were still buffered when it was
+    /// asked. Split into two arguments rather than one blob because the two
+    /// halves do not carry the same authority: the turns are recorded speech —
+    /// a client saying "mark the deal won" out loud is data — while the
+    /// question was typed by the operator into our own panel and is meant for
+    /// the model to act on. A backend that fences untrusted input (Rodnik
+    /// wraps turns in its data envelope) needs the boundary; one that does not
+    /// gets the default below, which is exactly the old behaviour.
+    ///
+    /// `turns` is empty when nothing was buffered.
+    async fn ask(&mut self, turns: &str, question: &str) -> Result<Option<String>> {
+        let input = if turns.is_empty() {
+            question.to_string()
+        } else {
+            format!("{turns}\n\n{question}")
+        };
+        self.send(&input).await
+    }
 }
 
 /// What the engine tells the UI. Mirrors the webview events in §4.4:
@@ -123,6 +142,14 @@ fn format_turns(turns: &[Turn]) -> String {
         .map(|t| format!("{}: {}", t.speaker.as_str(), t.text))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// What a round-trip carries. The analysis path sends recorded speech; the Ask
+/// path sends it together with the operator's typed question, kept separate so
+/// a backend can treat them with different authority (see [`AssistSession::ask`]).
+enum Input<'a> {
+    Turns(&'a str),
+    Ask { turns: &'a str, question: &'a str },
 }
 
 enum Cmd {
@@ -261,7 +288,7 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
 
         let input = format_turns(pending);
         *last_analysis = Some(Instant::now());
-        if self.converse(session, &input).await {
+        if self.converse(session, Input::Turns(&input)).await {
             pending.clear();
         }
         // On failure turns stay buffered; the next trigger retries them.
@@ -285,19 +312,15 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             ));
             return;
         }
-        let input = if pending.is_empty() {
-            question.to_string()
-        } else {
-            format!("{}\n\n{}", format_turns(pending), question)
-        };
-        if self.converse(session, &input).await {
+        let turns = if pending.is_empty() { String::new() } else { format_turns(pending) };
+        if self.converse(session, Input::Ask { turns: &turns, question }).await {
             pending.clear();
         }
     }
 
     /// One round-trip to the model: open the session if needed, send, apply
     /// the [`NO_RESP`] discipline. Returns whether the input was delivered.
-    async fn converse(&self, session: &mut Option<Box<dyn AssistSession>>, input: &str) -> bool {
+    async fn converse(&self, session: &mut Option<Box<dyn AssistSession>>, input: Input<'_>) -> bool {
         let _ = self.events.send(AssistEvent::Loading(true));
         let ok = self.converse_inner(session, input).await;
         let _ = self.events.send(AssistEvent::Loading(false));
@@ -311,13 +334,17 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
     async fn converse_inner(
         &self,
         session: &mut Option<Box<dyn AssistSession>>,
-        input: &str,
+        input: Input<'_>,
     ) -> Result<()> {
         if session.is_none() {
             let prompt = self.config.system_prompt().await?;
             *session = Some(self.backend.begin(&prompt).await?);
         }
-        let reply = session.as_mut().unwrap().send(input).await?;
+        let session = session.as_mut().unwrap();
+        let reply = match input {
+            Input::Turns(turns) => session.send(turns).await?,
+            Input::Ask { turns, question } => session.ask(turns, question).await?,
+        };
         match reply {
             Some(text) if !text.trim().is_empty() && !text.contains(NO_RESP) => {
                 let _ = self.events.send(AssistEvent::Update(text));
