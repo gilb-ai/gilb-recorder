@@ -14,9 +14,9 @@
 //! ([`parse_attribution_line`]) and the count state machine ([`Tracker`])
 //! are pure and unit-tested without the subprocess.
 //!
-//! The predicate, the debounce window and the allowlist are carried over
-//! unchanged from an earlier Electron implementation — they are the part
-//! that took real meetings to get right.
+//! The predicate, the debounce window and the allowlist are the part that
+//! took real meetings to get right — change them against recorded log
+//! output, not by reasoning about what the OS ought to emit.
 
 use chrono::{DateTime, Utc};
 

@@ -1,10 +1,9 @@
 //! Meeting-app allowlist.
 //!
 //! Maps bundle IDs of known meeting/telephony apps to a display name.
-//! Carried over unchanged from an earlier Electron implementation, where
-//! the list had already been corrected against real meetings. Shared
-//! between the macOS unified-log detector here and the Windows detector,
-//! so changes belong in this one place.
+//! Shared between the macOS unified-log detector and the Windows one, so
+//! an app added for one platform is recognised by both — changes belong
+//! in this one place.
 //!
 //! Browsers are intentionally omitted — they produce too many false
 //! positives from voice search and similar in-page audio.

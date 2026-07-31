@@ -9,9 +9,9 @@
 //! the mic, and feeds that snapshot into `Tracker`, which owns the
 //! `Started`/`AppsChanged`/`Ended` count logic shared with macOS.
 //!
-//! The mapping and the active/inactive/expired set semantics come from an
-//! earlier Electron implementation and its native mic tracker, which had
-//! already been shaken out against real calls. `SessionTracker` and
+//! The mapping and the active/inactive/expired set semantics were shaken
+//! out against real calls; treat them the same way as the macOS
+//! predicate. `SessionTracker` and
 //! the process map are pure and unit-tested without COM; the live COM
 //! chain ([`WindowsDetector`]) is `cfg(target_os = "windows")` and
 //! smoke-tested by hand on a Windows host.

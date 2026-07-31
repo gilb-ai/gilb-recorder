@@ -32,8 +32,7 @@ pub const NO_RESP: &str = "[NO_RESP]";
 /// gets a few minutes of conversation rather than the whole hour.
 const MAX_PENDING: usize = 60;
 
-/// Who said a turn. Formatted as `me:`/`them:` in the model input, the same
-/// shape the Electron prototype used.
+/// Who said a turn. Formatted as `me:`/`them:` in the model input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Speaker {
     Me,
@@ -168,7 +167,8 @@ impl Default for EngineParams {
 }
 
 /// The model's view of a stretch of conversation: one `me:`/`them:` line per
-/// turn, the shape the Electron prototype established and the prompts expect.
+/// turn — the shape the shipped prompts expect, so changing it means
+/// changing them.
 fn format_turns(turns: &[Turn]) -> String {
     turns
         .iter()
