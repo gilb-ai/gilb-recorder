@@ -91,6 +91,27 @@ pub(super) const HARNESSES: &[Harness] = &[
         npx_package: None,
         cli_acp_args: &["acp"],
     },
+    Harness {
+        id: "opencode",
+        // Lowercase is the project's own spelling.
+        name: "opencode",
+        // Nothing preferred, because there is nothing universal to prefer:
+        // opencode's model list is whatever providers the user configured, so
+        // the names differ from machine to machine. Its own default is the
+        // only choice that is right everywhere, and seeding only ever applies
+        // values the agent actually advertises anyway.
+        preferred_model: None,
+        preferred_effort: None,
+        // Unused — opencode advertises `model` and `mode`, no thinking tier.
+        // The effort row simply does not appear in Settings for it.
+        effort_config_id: "effort",
+        cli: &["opencode"],
+        // Speaks the protocol itself: `opencode acp` starts an ACP server, so
+        // there is no adapter to fetch.
+        adapter_bin: None,
+        npx_package: None,
+        cli_acp_args: &["acp"],
+    },
 ];
 
 impl Harness {
@@ -308,6 +329,36 @@ pub(super) fn seed_choices(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every harness has to have an answer to "how does this speak ACP?".
+    ///
+    /// The two answers are an adapter we fetch (`npx_package`) and a flag that
+    /// puts the CLI itself into ACP mode (`cli_acp_args`). An entry with
+    /// neither resolves to a bare interactive CLI, which reads our handshake,
+    /// answers nothing, and fails at the startup timeout — the exact shape of
+    /// the bug that made this feature look broken for a week.
+    #[test]
+    fn every_harness_knows_how_to_reach_its_agent() {
+        for h in HARNESSES {
+            assert!(
+                h.npx_package.is_some() || !h.cli_acp_args.is_empty(),
+                "{}: no adapter to fetch and no ACP flag — nothing would answer",
+                h.id
+            );
+            assert!(!h.cli.is_empty(), "{}: no command to look for", h.id);
+        }
+    }
+
+    /// Ids are persisted in preferences and matched on; two entries sharing one
+    /// would make the user's choice ambiguous.
+    #[test]
+    fn harness_ids_are_unique() {
+        let mut seen = std::collections::HashSet::new();
+        for h in HARNESSES {
+            assert!(seen.insert(h.id), "duplicate harness id `{}`", h.id);
+        }
+    }
+
     use gilb_assist_acp::{SessionChoice, SessionOption};
 
     fn opt(category: &str, id: &str, values: &[&str]) -> SessionOption {

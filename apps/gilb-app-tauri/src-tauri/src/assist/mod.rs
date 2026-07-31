@@ -266,8 +266,8 @@ impl AssistHost for GilbAssistHost {
             app_name: "gilb".into(),
             model_downloaded: "Speech model ready — suggestions start at the next meeting.".into(),
             model_failed: "Could not download the speech model. Try again from the app.".into(),
-            unavailable: "Needs a coding agent: install Claude Code, Codex or Cursor \
-                 and this turns on."
+            unavailable: "Needs a coding agent: install Claude Code, Codex, Cursor \
+                 or opencode and this turns on."
                 .into(),
         }
     }

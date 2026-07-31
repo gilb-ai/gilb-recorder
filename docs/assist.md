@@ -259,8 +259,15 @@ finding that out at setup beats finding it out mid-meeting.
 The CLI a user has is usually *not* the thing that speaks ACP. `claude` is an
 interactive REPL: pipe an `initialize` into it and nothing comes back, so the
 session dies at the handshake timeout — a failure that looks like a hang and
-says nothing about the cause. Claude Code reaches ACP through an adapter
-package; Gemini speaks it itself behind `--experimental-acp`.
+says nothing about the cause. Claude Code and Codex reach ACP through adapter
+packages; Cursor (`agent acp`) and opencode (`opencode acp`) serve the protocol
+themselves, and need nothing fetched.
+
+Which of the two a harness needs is the whole content of its table entry, and
+the one thing a new entry must get right: an entry with neither an adapter to
+fetch nor a flag that starts a server resolves to the bare interactive CLI, and
+that is precisely the hang described above. A test asserts every harness has
+one or the other.
 
 So gilb looks for the *harness* and works out what to run for it:
 
