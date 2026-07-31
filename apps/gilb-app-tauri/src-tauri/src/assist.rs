@@ -71,6 +71,8 @@ const HARNESSES: &[Harness] = &[
     Harness {
         id: "claude",
         name: "Claude Code",
+        preferred_model: Some("haiku"),
+        preferred_effort: Some("low"),
         cli: &["claude"],
         // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
         // `@agentclientprotocol/claude-agent-acp`, and a machine may have
@@ -82,6 +84,8 @@ const HARNESSES: &[Harness] = &[
     Harness {
         id: "codex",
         name: "Codex",
+        preferred_model: None,
+        preferred_effort: None,
         cli: &["codex"],
         adapter_bin: Some(&["codex-acp"]),
         npx_package: Some("@agentclientprotocol/codex-acp"),
@@ -90,6 +94,8 @@ const HARNESSES: &[Harness] = &[
     Harness {
         id: "cursor",
         name: "Cursor",
+        preferred_model: None,
+        preferred_effort: None,
         // Cursor renamed its CLI from `cursor-agent` to `agent`. The specific
         // name goes first: `agent` is generic enough to belong to something
         // else entirely on a given machine.
@@ -122,6 +128,15 @@ impl Harness {
 struct Harness {
     /// Stable id, persisted in preferences and sent to the UI. Never shown.
     id: &'static str,
+    /// Session model to select when the user sets this agent up, matched
+    /// against what the agent actually advertises — never sent blind. A
+    /// prompter's answer expires in seconds, so the fast tier is the right
+    /// default; the coding default (here, whatever `~/.claude/settings.json`
+    /// says) is tuned for the opposite trade. Visible and changeable in
+    /// Settings — a default, not a decision made behind the user's back.
+    preferred_model: Option<&'static str>,
+    /// Same for reasoning effort.
+    preferred_effort: Option<&'static str>,
     /// What to call it in the UI — the product's name, not our binary.
     name: &'static str,
     /// Names the coding CLI may go by, most specific first. Its presence is
@@ -305,21 +320,46 @@ impl AssistHost for GilbAssistHost {
         }
         let agent = agent().ok_or_else(|| anyhow!("could not resolve {}", harness.name))?;
         info!(bin = %agent.bin.display(), args = ?agent.args, "preparing assist agent");
-        let backend = AcpBackend::new(AcpConfig {
+        let acp = AcpConfig {
             bin: agent.bin,
             args: agent.args,
             startup_timeout: agent.startup_timeout,
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
-            // The install check needs only the handshake; session knobs are
-            // the real session's business.
             ..AcpConfig::default()
-        });
-        // Dropped immediately: the session's only job here was to prove it
-        // could exist. The meeting gets its own.
-        tauri::async_runtime::block_on(backend.begin(""))
-            .map(|_| ())
-            .with_context(|| format!("{} could not start", harness.name))
+        };
+        // The options probe *is* the handshake check — initialize plus
+        // session/new — and it comes back with the knobs, which is what lets
+        // the default below be honest: preferred values are applied only when
+        // the agent actually advertises them, never sent blind.
+        let options = tauri::async_runtime::block_on(gilb_assist_acp::probe_session_options(&acp))
+            .with_context(|| format!("{} could not start", harness.name))?;
+
+        let advertised = |id: &str, wanted: &str| {
+            options
+                .iter()
+                .find(|o| o.id == id)
+                .is_some_and(|o| o.choices.iter().any(|c| c.value == wanted))
+        };
+        let model = harness
+            .preferred_model
+            .filter(|m| advertised("model", m))
+            .map(str::to_string);
+        let effort = harness
+            .preferred_effort
+            .filter(|e| advertised("effort", e))
+            .map(str::to_string);
+        if model.is_some() || effort.is_some() {
+            info!(?model, ?effort, "assist session defaults for this agent");
+            gilb_config::update_preferences(|p| {
+                // Setting up an agent is when its session gets its defaults —
+                // including on a re-pick, where keeping the previous agent's
+                // leftovers would be the surprise.
+                p.assist_model = model.clone();
+                p.assist_effort = effort.clone();
+            })?;
+        }
+        Ok(())
     }
 
     /// `assist.md` in the meeting's own folder, next to `video.mp4` and

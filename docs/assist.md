@@ -278,7 +278,15 @@ coding — a heavyweight with high reasoning effort — spends longer than that
 thinking. If the panel is mostly silent while the agent is clearly working,
 this is the first place to look.
 
-So the session's model is chosen in **Settings → Suggestions model**, without
+So when an agent is set up, gilb selects the fast tier as the session's
+default — for Claude Code that is Haiku with low effort — and only when the
+agent's own `configOptions` advertise those values; nothing is ever sent
+blind. It is a visible default, not a hidden decision: Settings shows it
+selected, and "Agent default" is one click away for someone who wants the
+heavyweight. Re-picking an agent re-seeds the defaults — the previous agent's
+model may not even exist on the new one.
+
+Beyond that, the session's model is chosen in **Settings → Suggestions model**, without
 touching the coding setup. The dropdown is populated by the agent itself —
 gilb opens a throwaway session and reads `configOptions`, so the list can
 never drift from what the agent actually offers — and "Agent default" shows
