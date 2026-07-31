@@ -100,6 +100,102 @@ impl Default for AcpConfig {
     }
 }
 
+/// One selectable value of a [`SessionOption`].
+#[derive(Debug, Clone)]
+pub struct SessionChoice {
+    pub value: String,
+    pub label: String,
+}
+
+/// A session knob the agent advertises in `session/new`'s `configOptions` —
+/// model, reasoning effort, permission mode. The set is the agent's, not
+/// ours, which is what makes a UI built on it honest: nothing to hardcode,
+/// nothing to fall out of date.
+#[derive(Debug, Clone)]
+pub struct SessionOption {
+    pub id: String,
+    pub name: String,
+    /// The agent's own current value — its default when nothing was applied.
+    pub current: String,
+    pub choices: Vec<SessionChoice>,
+}
+
+/// Ask the agent which session knobs it has: spawn it, shake hands, open a
+/// session, read `configOptions`, and drop the whole thing. Costs one agent
+/// start (cached-npx fast), so callers should cache the answer per agent.
+pub async fn probe_session_options(config: &AcpConfig) -> Result<Vec<SessionOption>> {
+    let mut child = Command::new(&config.bin)
+        .args(&config.args)
+        .current_dir(&config.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("spawn agent {}", config.bin.display()))?;
+    let stdin = child.stdin.take().context("agent stdin")?;
+    let stdout = child.stdout.take().context("agent stdout")?;
+    let _guard = ChildGuard(child);
+    let conn = Connection::spawn(stdin, stdout);
+
+    let handshake = async {
+        conn.request(
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
+                "clientInfo": { "name": "gilb-assist", "version": env!("CARGO_PKG_VERSION") },
+            }),
+        )
+        .await?;
+        conn.request(
+            "session/new",
+            json!({ "cwd": config.cwd.to_string_lossy(), "mcpServers": [] }),
+        )
+        .await
+    };
+    let session = tokio::time::timeout(config.startup_timeout, handshake)
+        .await
+        .map_err(|_| anyhow!("`{}` did not answer the handshake", config.bin.display()))??;
+
+    let options = session
+        .get("configOptions")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter(|o| o.get("type").and_then(Value::as_str) == Some("select"))
+                .filter_map(|o| {
+                    Some(SessionOption {
+                        id: o.get("id")?.as_str()?.to_string(),
+                        name: o.get("name")?.as_str()?.to_string(),
+                        current: o
+                            .get("currentValue")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
+                        choices: o
+                            .get("options")?
+                            .as_array()?
+                            .iter()
+                            .filter_map(|c| {
+                                Some(SessionChoice {
+                                    value: c.get("value")?.as_str()?.to_string(),
+                                    label: c
+                                        .get("name")
+                                        .and_then(Value::as_str)
+                                        .unwrap_or(c.get("value")?.as_str()?)
+                                        .to_string(),
+                                })
+                            })
+                            .collect(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(options)
+}
+
 pub struct AcpBackend {
     config: AcpConfig,
 }

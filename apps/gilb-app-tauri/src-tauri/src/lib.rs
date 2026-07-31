@@ -158,6 +158,8 @@ pub fn run() {
             gilb_shell_tauri::assist::assist_status,
             gilb_shell_tauri::assist::assist_set_enabled,
             gilb_shell_tauri::assist::assist_choose_agent,
+            gilb_shell_tauri::assist::assist_session_options,
+            gilb_shell_tauri::assist::assist_set_session_option,
             gilb_shell_tauri::assist::assist_ask,
             gilb_shell_tauri::assist::assist_hide,
             commands::transcription::get_transcription_status,

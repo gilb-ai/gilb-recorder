@@ -106,6 +106,29 @@
               </select>
             </label>
           </div>
+
+          <!-- Model for the live suggestions, separate from the agent's own
+               coding configuration: a suggestion is worth having within
+               seconds, so speed usually beats depth here. The choices come
+               from the agent itself over ACP; hidden until it has answered
+               (and entirely, when no agent is set up). -->
+          <div class="settings-row settings-row-stacked" id="assist-model-row" hidden>
+            <div class="settings-row-text">
+              <span class="settings-row-label" data-i18n="assist.modelLabel">Suggestions model</span>
+              <span class="settings-row-desc" data-i18n="assist.modelDesc">
+                For live suggestions speed matters more than depth. This only
+                affects suggestions — your agent's own setup is untouched.
+              </span>
+            </div>
+            <label class="model-lang">
+              <span class="settings-row-label" data-i18n="assist.model">Model</span>
+              <select id="select-assist-model" class="key-input"></select>
+            </label>
+            <label class="model-lang" id="assist-effort-wrap" hidden>
+              <span class="settings-row-label" data-i18n="assist.effort">Effort</span>
+              <select id="select-assist-effort" class="key-input"></select>
+            </label>
+          </div>
         </div>
 
         <div class="settings-actions">

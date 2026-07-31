@@ -545,10 +545,12 @@ async function signOut() {
 async function openSettings() {
   const overlay = $("settings-overlay");
   if (!overlay) return;
-  // Only transcription is left in here, and only its language picker is part
-  // of Save/Cancel — both capture switches moved to the main window, where
-  // they apply on the spot.
+  // Only edited values live in here — the capture switches are on the main
+  // window, where they apply on the spot.
   if (FEATURE_TRANSCRIPTION) await loadTranscription();
+  // Async on purpose: the first ask starts the agent, and the overlay should
+  // open now, not in three seconds.
+  if (FEATURE_ASSIST) void loadAssistOptions();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
@@ -594,8 +596,29 @@ async function closeSettings(save: boolean) {
         console.warn("set_transcription_language failed", e);
       }
     }
-  } else if (lang) {
-    lang.value = settingsLangSnapshot; // Cancel: revert the language picker
+    const model = $<HTMLSelectElement>("select-assist-model");
+    const effort = $<HTMLSelectElement>("select-assist-effort");
+    for (const [el, key, configId] of [
+      [model, "model", "model"],
+      [effort, "effort", "effort"],
+    ] as const) {
+      if (el && el.value !== assistOptSnapshot[key]) {
+        try {
+          await invoke("assist_set_session_option", {
+            configId,
+            value: el.value,
+          });
+        } catch (e) {
+          console.warn("assist_set_session_option failed", e);
+        }
+      }
+    }
+  } else {
+    if (lang) lang.value = settingsLangSnapshot; // Cancel: revert
+    const model = $<HTMLSelectElement>("select-assist-model");
+    const effort = $<HTMLSelectElement>("select-assist-effort");
+    if (model) model.value = assistOptSnapshot.model;
+    if (effort) effort.value = assistOptSnapshot.effort;
   }
   if (overlay) overlay.hidden = true;
 }
@@ -615,6 +638,66 @@ interface ModelProgress {
 }
 
 let settingsLangSnapshot = "auto";
+// Pre-open snapshot of the suggestion-session knobs ("" = agent default), so
+// Cancel reverts and Save only persists what actually changed.
+let assistOptSnapshot = { model: "", effort: "" };
+
+type SessionOptionsPayload = {
+  options: {
+    id: string;
+    name: string;
+    agent_default: string;
+    choices: { value: string; label: string }[];
+  }[];
+  model: string | null;
+  effort: string | null;
+};
+
+/// The suggestions-model row in Settings. The list is the agent's own,
+/// fetched over ACP (and cached backend-side), so opening the screen is what
+/// asks the question — a row that guessed at model names would be wrong the
+/// day the agent updates.
+async function loadAssistOptions() {
+  const row = $("assist-model-row");
+  if (!row) return;
+  let payload: SessionOptionsPayload;
+  try {
+    payload = await invoke<SessionOptionsPayload>("assist_session_options");
+  } catch (e) {
+    // No agent set up (or it failed to answer): nothing to configure.
+    console.warn("assist_session_options failed", e);
+    row.hidden = true;
+    return;
+  }
+  const fill = (
+    selectId: string,
+    optionId: string,
+    chosen: string | null,
+  ): boolean => {
+    const select = $<HTMLSelectElement>(selectId);
+    const option = payload.options.find((o) => o.id === optionId);
+    if (!select || !option || option.choices.length === 0) return false;
+    select.textContent = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = t("assist.agentDefault", { value: option.agent_default });
+    select.appendChild(def);
+    for (const c of option.choices) {
+      const el = document.createElement("option");
+      el.value = c.value;
+      el.textContent = c.label;
+      select.appendChild(el);
+    }
+    select.value = chosen ?? "";
+    return true;
+  };
+  const hasModel = fill("select-assist-model", "model", payload.model);
+  const hasEffort = fill("select-assist-effort", "effort", payload.effort);
+  const effortWrap = $("assist-effort-wrap");
+  if (effortWrap) effortWrap.hidden = !hasEffort;
+  row.hidden = !hasModel;
+  assistOptSnapshot = { model: payload.model ?? "", effort: payload.effort ?? "" };
+}
 // Tracks an in-flight download so reopening Settings keeps showing progress
 // (the backend exposes no "downloading" status — only presence of the model).
 let modelDownloading = false;

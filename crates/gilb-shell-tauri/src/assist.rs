@@ -126,6 +126,13 @@ pub trait AssistHost: Send + Sync + 'static {
         Ok(())
     }
 
+    /// The session knobs the current agent advertises (model, effort), for a
+    /// settings screen. Costs an agent start, so the shell caches the answer;
+    /// the default says "nothing to configure".
+    fn session_options(&self) -> Result<Vec<SessionOptionInfo>> {
+        Ok(Vec::new())
+    }
+
     /// Where to write a transcript of the suggestions and questions for the
     /// meeting now recording, if the product keeps one.
     ///
@@ -137,6 +144,24 @@ pub trait AssistHost: Send + Sync + 'static {
     /// User-visible text. Kept out of the shared code because it carries the
     /// product's name and voice.
     fn strings(&self) -> AssistStrings;
+}
+
+/// A session knob and its choices, as a settings screen renders them.
+#[derive(Clone, serde::Serialize)]
+pub struct SessionOptionInfo {
+    /// ACP `configId` (`"model"`, `"effort"`). Persisted; never shown.
+    pub id: String,
+    /// The agent's own name for it.
+    pub name: String,
+    /// The agent's default, shown as what "Agent default" currently means.
+    pub agent_default: String,
+    pub choices: Vec<SessionChoiceInfo>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct SessionChoiceInfo {
+    pub value: String,
+    pub label: String,
 }
 
 /// One agent a user can pick, as the picker shows it.
@@ -183,6 +208,9 @@ pub struct AssistState {
     /// An agent install is in flight. Kept here rather than in the frontend so
     /// a reopened window sees it, and so two clicks cannot start two installs.
     preparing: AtomicBool,
+    /// Cached [`AssistHost::session_options`] — probing costs an agent start.
+    /// Cleared when the agent changes; the knobs belong to the agent.
+    session_options: parking_lot::Mutex<Option<Vec<SessionOptionInfo>>>,
     /// Where this meeting's suggestions are being written, if anywhere. Set
     /// when a recording arms and cleared when it ends, so a suggestion that
     /// arrives between meetings is not filed under the previous one.
@@ -364,6 +392,7 @@ pub fn init(app: &AppHandle, host: impl AssistHost) {
             auto_show_suppressed: AtomicBool::new(false),
             download: ModelDownload::default(),
             preparing: AtomicBool::new(false),
+            session_options: parking_lot::Mutex::new(None),
             journal: parking_lot::Mutex::new(None),
         });
     }
@@ -782,6 +811,14 @@ pub fn assist_choose_agent(app: AppHandle, agent: String) -> Result<(), String> 
         shared.preparing.store(false, Ordering::SeqCst);
         return Err(format!("could not save the choice: {err}"));
     }
+    // The knobs belong to the agent: a new agent means a new set, and a model
+    // chosen for the old one may not even exist on this one.
+    *shared.session_options.lock() = None;
+    if let Err(err) =
+        gilb_config::update_preferences(|p| (p.assist_model, p.assist_effort) = (None, None))
+    {
+        warn!(error = %err, "could not clear the session options");
+    }
     emit_status(&app);
 
     let app_bg = app.clone();
@@ -823,6 +860,67 @@ pub fn assist_choose_agent(app: AppHandle, agent: String) -> Result<(), String> 
             }
         }
     });
+    Ok(())
+}
+
+/// What the current agent lets a session configure, plus what the user chose.
+/// The probe starts the agent once; the answer is cached until the agent
+/// changes.
+#[derive(serde::Serialize)]
+pub struct SessionOptionsPayload {
+    pub options: Vec<SessionOptionInfo>,
+    /// The persisted choices (`None` = agent default).
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+#[tauri::command]
+pub async fn assist_session_options(app: AppHandle) -> Result<SessionOptionsPayload, String> {
+    let cached = state(&app).and_then(|s| s.session_options.lock().clone());
+    let options = match cached {
+        Some(options) => options,
+        None => {
+            let probe_app = app.clone();
+            let options = tauri::async_runtime::spawn_blocking(move || {
+                state(&probe_app)
+                    .map(|s| s.host.session_options())
+                    .unwrap_or_else(|| Ok(Vec::new()))
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+            if let Some(s) = state(&app) {
+                *s.session_options.lock() = Some(options.clone());
+            }
+            options
+        }
+    };
+    let prefs = gilb_config::load_preferences();
+    Ok(SessionOptionsPayload {
+        options,
+        model: prefs.assist_model,
+        effort: prefs.assist_effort,
+    })
+}
+
+/// Persist a session knob and rebuild the pipeline so the *next* session runs
+/// on it. Empty value = back to the agent's default.
+#[tauri::command]
+pub fn assist_set_session_option(
+    app: AppHandle,
+    config_id: String,
+    value: String,
+) -> Result<(), String> {
+    let value = Some(value).filter(|v| !v.trim().is_empty());
+    let applied = match config_id.as_str() {
+        "model" => gilb_config::update_preferences(|p| p.assist_model = value),
+        "effort" => gilb_config::update_preferences(|p| p.assist_effort = value),
+        other => return Err(format!("unknown session option `{other}`")),
+    };
+    applied.map_err(|e| e.to_string())?;
+    // Rewire: the engine reads the knobs when it builds the backend, and a
+    // running meeting keeps its session — the change lands on the next one.
+    refresh(&app);
     Ok(())
 }
 

@@ -27,7 +27,9 @@ use async_trait::async_trait;
 use gilb_assist::{AssistBackend, AssistConfig};
 use gilb_assist_acp::{agent_available, AcpBackend, AcpConfig};
 use gilb_assist_audio::{LocalTranscriber, SharedModel};
-use gilb_shell_tauri::assist::{AgentChoice, AssistHost, AssistStrings};
+use gilb_shell_tauri::assist::{
+    AgentChoice, AssistHost, AssistStrings, SessionChoiceInfo, SessionOptionInfo,
+};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
@@ -195,13 +197,18 @@ impl AssistHost for GilbAssistHost {
             )
         })?;
         info!(bin = %agent.bin.display(), args = ?agent.args, "assist backend");
+        // The settings screen persists the choice; the env vars are a dev
+        // override and win when set.
+        let prefs = gilb_config::load_preferences();
         let mut config_options = Vec::new();
-        for (env, config_id) in [(MODEL_ENV, "model"), (EFFORT_ENV, "effort")] {
-            if let Ok(value) = std::env::var(env) {
-                if !value.trim().is_empty() {
-                    info!(config_id, value = %value, "assist session option");
-                    config_options.push((config_id.to_string(), value));
-                }
+        for (env, config_id, saved) in [
+            (MODEL_ENV, "model", prefs.assist_model),
+            (EFFORT_ENV, "effort", prefs.assist_effort),
+        ] {
+            let value = std::env::var(env).ok().filter(|v| !v.trim().is_empty());
+            if let Some(value) = value.or(saved) {
+                info!(config_id, value = %value, "assist session option");
+                config_options.push((config_id.to_string(), value));
             }
         }
         let acp = AcpConfig {
@@ -222,6 +229,39 @@ impl AssistHost for GilbAssistHost {
     /// — it decides which vendor sees the conversation.
     fn backend_label(&self) -> Option<String> {
         agent().map(|a| a.label)
+    }
+
+    /// Ask the chosen agent what a session can configure. The list is the
+    /// agent's own — nothing to hardcode, nothing to fall out of date — and
+    /// only the knobs a prompter cares about are surfaced: model and effort.
+    /// Permission modes and the like stay ours to decide.
+    fn session_options(&self) -> anyhow::Result<Vec<SessionOptionInfo>> {
+        let agent = agent().ok_or_else(|| anyhow!("no agent chosen"))?;
+        let acp = AcpConfig {
+            bin: agent.bin,
+            args: agent.args,
+            startup_timeout: agent.startup_timeout,
+            cwd: std::env::temp_dir(),
+            ..AcpConfig::default()
+        };
+        let options = tauri::async_runtime::block_on(gilb_assist_acp::probe_session_options(&acp))?;
+        Ok(options
+            .into_iter()
+            .filter(|o| o.id == "model" || o.id == "effort")
+            .map(|o| SessionOptionInfo {
+                id: o.id,
+                name: o.name,
+                agent_default: o.current,
+                choices: o
+                    .choices
+                    .into_iter()
+                    .map(|c| SessionChoiceInfo {
+                        value: c.value,
+                        label: c.label,
+                    })
+                    .collect(),
+            })
+            .collect())
     }
 
     /// The same model the post-meeting transcription worker uses.

@@ -278,8 +278,15 @@ coding — a heavyweight with high reasoning effort — spends longer than that
 thinking. If the panel is mostly silent while the agent is clearly working,
 this is the first place to look.
 
-So the session's model can be set independently, without touching the coding
-setup:
+So the session's model is chosen in **Settings → Suggestions model**, without
+touching the coding setup. The dropdown is populated by the agent itself —
+gilb opens a throwaway session and reads `configOptions`, so the list can
+never drift from what the agent actually offers — and "Agent default" shows
+what not choosing means. The choice persists in prefs and applies from the
+next session (a meeting already running keeps its model).
+
+`GILB_ASSIST_MODEL` / `GILB_ASSIST_EFFORT` remain as dev overrides and win
+over the saved choice:
 
 ```sh
 GILB_ASSIST_MODEL=haiku GILB_ASSIST_EFFORT=low npm run tauri dev

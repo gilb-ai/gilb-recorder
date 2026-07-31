@@ -522,6 +522,16 @@ pub struct Preferences {
     /// picking whose model sees the meeting.
     #[serde(default)]
     pub assist_agent: Option<String>,
+    /// Model for the suggestions session (an ACP `configOptions` value from
+    /// the chosen agent). `None` = the agent's own default. Separate from the
+    /// agent's coding configuration on purpose: a suggestion is worth having
+    /// within seconds, and the model someone picked for interactive coding is
+    /// usually the wrong shape for that.
+    #[serde(default)]
+    pub assist_model: Option<String>,
+    /// Reasoning effort for the suggestions session; same mechanism.
+    #[serde(default)]
+    pub assist_effort: Option<String>,
 }
 
 impl Default for Preferences {
@@ -532,6 +542,8 @@ impl Default for Preferences {
             transcription_language: "auto".to_string(),
             assist_enabled: true,
             assist_agent: None,
+            assist_model: None,
+            assist_effort: None,
         }
     }
 }
