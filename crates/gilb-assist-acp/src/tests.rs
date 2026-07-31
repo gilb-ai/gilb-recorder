@@ -317,3 +317,39 @@ sleep 5
         "effort was withdrawn and must not be asked for: {log}"
     );
 }
+
+/// The agent is spawned with the PATH we hand it, not the one we inherited.
+///
+/// This is what broke the packaged app while dev worked fine: an `npx`
+/// adapter is a `#!/usr/bin/env node` script, so it resolves `node` by name
+/// from its own PATH. A terminal-launched build inherits a login shell's and
+/// never notices; an `.app` from Finder gets launchd's, where no node exists,
+/// and the agent dies before the handshake — "agent closed the connection".
+#[tokio::test]
+async fn the_agent_is_given_the_path_we_configured() {
+    let dir = tempfile::tempdir().unwrap();
+    let seen = dir.path().join("path.txt");
+    let bin = fake_agent(
+        &dir,
+        &format!(
+            r#"printf '%s' "$PATH" > {seen}
+{HANDSHAKE}
+printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
+sleep 5
+"#,
+            seen = seen.display()
+        ),
+    );
+
+    let mut cfg = config(bin);
+    cfg.path_env = Some("/gilb-test-node-lives-here:/usr/bin:/bin".to_string());
+    let backend = AcpBackend::new(cfg);
+    let mut session = backend.begin("").await.unwrap();
+    let _ = session.send("them: раз").await;
+
+    let path = std::fs::read_to_string(&seen).expect("the agent recorded its PATH");
+    assert!(
+        path.starts_with("/gilb-test-node-lives-here"),
+        "the agent must run with the PATH it was given, got {path}"
+    );
+}

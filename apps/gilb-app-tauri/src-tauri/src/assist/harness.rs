@@ -289,6 +289,10 @@ impl Agent {
             startup_timeout: self.startup_timeout,
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
+            // The bin directories, ahead of whatever we were launched with.
+            // Resolving the agent's own path is not enough: `npx` goes on to
+            // look up `node` by name, and a bundle's PATH has no node in it.
+            path_env: Some(gilb_config::agent_path_env()),
             // Written down so the next launch can finish the job if this one
             // ends without running any destructors.
             registry: super::agent_registry(),

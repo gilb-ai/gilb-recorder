@@ -77,6 +77,15 @@ pub struct AcpConfig {
     /// from the turn deadline: a cold agent may be slow once, and failing the
     /// handshake disables the feature rather than losing one suggestion.
     pub startup_timeout: Duration,
+    /// `PATH` for the spawned agent, when it must differ from ours.
+    ///
+    /// An adapter reached through `npx` is a script with a `#!/usr/bin/env
+    /// node` shebang: it needs `node` on the *child's* PATH, not ours. A
+    /// terminal-launched app inherits a login shell's PATH and never notices;
+    /// an `.app` from Finder is handed launchd's, where there is no node, and
+    /// the agent dies in five milliseconds with the connection closing on the
+    /// first read. `None` inherits ours unchanged.
+    pub path_env: Option<String>,
     /// Where to write down the agent process groups this app starts, so a
     /// launch after a crash can clean up what no destructor got to.
     ///
@@ -106,6 +115,7 @@ impl Default for AcpConfig {
             cwd: std::env::temp_dir(),
             turn_timeout: Duration::from_secs(20),
             startup_timeout: Duration::from_secs(30),
+            path_env: None,
             registry: None,
             config_options: Vec::new(),
         }
@@ -241,6 +251,9 @@ async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .kill_on_drop(true);
+    if let Some(path) = &config.path_env {
+        command.env("PATH", path);
+    }
     // Its own process group, so the whole npx → node → agent chain can be
     // signalled at once. Without this only the wrapper dies (see ChildGuard).
     #[cfg(unix)]
