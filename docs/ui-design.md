@@ -130,6 +130,28 @@ auto-apply:
 - **Amber** = warning, **gray** = muted/neutral (`.key-status[data-kind=…]`).
 - A pulsing dot signals a live/ongoing state; static UI does not pulse.
 
+## Global shortcuts
+
+Two, and they are taken from every app on the machine — that is the cost, and
+it is why there are two rather than ten:
+
+| Keys | Action |
+|---|---|
+| `Cmd/Ctrl+Shift+R` | start / stop a manual recording |
+| `Cmd/Ctrl+\\` | show / hide the suggestions overlay |
+
+Register through `gilb_shell_tauri::shortcut::register`, never by calling
+`global_shortcut()` directly: that call *panics* when the app forgot the
+plugin, inside a callback that cannot unwind, so a missing plugin takes the
+whole process down over a keyboard shortcut. The helper checks first and
+degrades to "no hotkey".
+
+Pick combinations nothing else needs. `Cmd+R` reloads in every browser and
+editor, `Cmd+M` minimises on macOS — a global binding steals those everywhere,
+not just in our window. And put the shortcut next to the action it triggers
+(the tray's toggle item carries it via `TrayConfig::toggle_accelerator`): a
+hotkey nobody is told about may as well not exist.
+
 ## Countdown progress-button pattern
 
 Both countdown popups use one pattern: a button whose translucent fill sweeps

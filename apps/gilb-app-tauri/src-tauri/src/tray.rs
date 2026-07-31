@@ -75,6 +75,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             open_label: "Open gilb".into(),
             start_label: "Start Recording".into(),
             stop_label: "Stop Recording".into(),
+            toggle_accelerator: Some(crate::recording::RECORD_SHORTCUT.into()),
             quit_label: "Quit".into(),
             icon_idle: ICON_IDLE,
             icon_recording: ICON_RECORDING,

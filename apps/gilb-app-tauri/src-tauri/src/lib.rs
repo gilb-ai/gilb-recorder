@@ -113,6 +113,9 @@ pub fn run() {
                     if let Err(err) = tray::setup(app.handle()) {
                         error!(?err, "tray setup failed");
                     }
+                    // Same toggle from the keyboard, for when the tray is not
+                    // where the user is looking.
+                    recording::register_shortcut(app.handle());
 
                     // Deep-link auth callbacks (gilb://auth/callback?token=…).
                     use tauri_plugin_deep_link::DeepLinkExt;

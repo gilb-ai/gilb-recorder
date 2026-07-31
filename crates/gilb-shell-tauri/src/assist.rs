@@ -600,39 +600,7 @@ fn toggle_window(app: &AppHandle) {
 }
 
 fn register_shortcut(app: &AppHandle) {
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    {
-        use tauri_plugin_global_shortcut::{GlobalShortcut, GlobalShortcutExt, ShortcutState};
-
-        // `global_shortcut()` *panics* if the product did not register the
-        // plugin — and a panic here aborts the app, because it happens inside
-        // a Tauri callback that cannot unwind. A shell must not take the whole
-        // product down over a hotkey, so ask first and degrade instead: the
-        // overlay is still reachable from the UI.
-        if app.try_state::<GlobalShortcut<tauri::Wry>>().is_none() {
-            warn!(
-                shortcut = ASSIST_SHORTCUT,
-                "no global-shortcut plugin registered; assist hotkey disabled. \
-                 Add tauri_plugin_global_shortcut to the app's builder to enable it"
-            );
-            return;
-        }
-
-        let result = app
-            .global_shortcut()
-            .on_shortcut(ASSIST_SHORTCUT, |app, _shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
-                    toggle_window(app);
-                }
-            });
-        if let Err(err) = result {
-            warn!(
-                ?err,
-                shortcut = ASSIST_SHORTCUT,
-                "failed to register assist hotkey"
-            );
-        }
-    }
+    crate::shortcut::register(app, ASSIST_SHORTCUT, toggle_window);
 }
 
 // ---------------------------------------------------------------------------

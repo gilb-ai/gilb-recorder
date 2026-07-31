@@ -30,6 +30,7 @@ pub mod assist;
 /// Downloading the local whisper model — shared by transcription and assist.
 #[cfg(feature = "model-download")]
 pub mod model;
+pub mod shortcut;
 
 use std::path::PathBuf;
 
