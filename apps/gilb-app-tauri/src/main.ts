@@ -383,7 +383,7 @@ function renderAssist(s: AssistStatus | null) {
     if (toggle) toggle.disabled = false;
     progress?.setAttribute("hidden", "");
     renderAgentPicker(s, false);
-  renderCaptureToggle(s);
+  renderAssistSettings(s);
     // "Choose an agent" is the wrong thing to say when there is nothing to
     // choose from — then the answer is which one to install.
     const anyInstalled = s.agents.some((a) => a.installed);
@@ -632,14 +632,14 @@ type SessionOptionsPayload = {
   effort: string | null;
 };
 
-/// The "show it on screen shares" switch in Settings.
+/// The Realtime Assistant section in Settings: what the suggestions run on,
+/// and who can see them.
 ///
-/// Hidden until the feature is actually usable: a switch that governs the
-/// visibility of a panel the user cannot yet open explains nothing. Flipping
-/// it takes effect immediately, on a panel that is already open — this is a
-/// setting people reach for mid-demo.
-function renderCaptureToggle(s: AssistStatus) {
-  const row = $("assist-capture-row");
+/// Shown once the feature is available at all — before that there is no panel
+/// to configure and nothing the switch could govern. The model lines inside
+/// arrive later, when the agent has answered.
+function renderAssistSettings(s: AssistStatus) {
+  const row = $("assist-settings-row");
   const toggle = $<HTMLButtonElement>("toggle-assist-capture");
   if (!row || !toggle) return;
   row.hidden = !s.available;
@@ -671,8 +671,9 @@ function initCaptureToggle() {
 /// asks the question — a row that guessed at model names would be wrong the
 /// day the agent updates.
 async function loadAssistOptions() {
-  const row = $("assist-model-row");
-  if (!row) return;
+  const row = $("assist-settings-row");
+  const modelWrap = $("assist-model-wrap");
+  if (!row || !modelWrap) return;
   // The first ask starts the agent — seconds, not milliseconds. An empty
   // select for that long reads as broken, so say what is happening: the row
   // shows immediately with a disabled "Asking the agent…" placeholder, and
@@ -690,14 +691,16 @@ async function loadAssistOptions() {
   placeholder("select-assist-model");
   $("assist-effort-wrap")?.setAttribute("hidden", "");
   row.setAttribute("aria-busy", "true");
-  row.hidden = false;
+  modelWrap.hidden = false;
   let payload: SessionOptionsPayload;
   try {
     payload = await invoke<SessionOptionsPayload>("assist_session_options");
   } catch (e) {
-    // No agent set up (or it failed to answer): nothing to configure.
+    // No agent set up (or it failed to answer): nothing to *choose*. The
+    // section itself stays — the visibility switch does not depend on an
+    // agent answering, and hiding it here would make it come and go.
     console.warn("assist_session_options failed", e);
-    row.hidden = true;
+    modelWrap.hidden = true;
     row.removeAttribute("aria-busy");
     return;
   }
@@ -729,7 +732,7 @@ async function loadAssistOptions() {
   const hasEffort = fill("select-assist-effort", "effort", payload.effort);
   const effortWrap = $("assist-effort-wrap");
   if (effortWrap) effortWrap.hidden = !hasEffort;
-  row.hidden = !hasModel;
+  modelWrap.hidden = !hasModel;
   assistOptSnapshot = { model: payload.model ?? "", effort: payload.effort ?? "" };
 }
 // Tracks an in-flight download so reopening Settings keeps showing progress

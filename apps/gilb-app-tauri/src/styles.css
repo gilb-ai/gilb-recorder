@@ -732,6 +732,18 @@ body.countdown-window {
   }
 }
 
+/* A line inside a stacked settings row: label + description on the left, a
+   control on the right. Not a `.settings-row` — nesting one would draw a card
+   inside a card; the hairline is enough to separate it from what it belongs
+   to. */
+.settings-subrow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
 .model-lang {
   display: flex;
   align-items: center;
@@ -743,6 +755,7 @@ body.countdown-window {
 @media (prefers-color-scheme: dark) {
   .model-progress { background: #2f3340; }
   .settings-row { background: #1a1c24; border-color: #2f3340; }
+  .settings-subrow { border-top-color: #2f3340; }
   .settings-row-desc { color: #9ca3af; }
   .key-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
   .key-input::placeholder { color: #6b7280; }

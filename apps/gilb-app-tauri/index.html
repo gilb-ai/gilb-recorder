@@ -107,20 +107,25 @@
             </label>
           </div>
 
-          <!-- Model for the live suggestions, separate from the agent's own
-               coding configuration: a suggestion is worth having within
-               seconds, so speed usually beats depth here. The choices come
-               from the agent itself over ACP; hidden until it has answered
-               (and entirely, when no agent is set up). -->
-          <div class="settings-row settings-row-stacked" id="assist-model-row" hidden>
+          <!-- One section for the assistant, because these are one
+               decision: what it runs on and who gets to see it. They were two
+               rows, which made the visibility switch read as a separate
+               feature rather than a property of the panel above it.
+
+               The model choices come from the agent itself over ACP, so the
+               model lines stay hidden until it has answered — the switch does
+               not wait for them. -->
+          <div class="settings-row settings-row-stacked" id="assist-settings-row" hidden>
             <div class="settings-row-text">
-              <span class="settings-row-label" data-i18n="assist.modelLabel">Suggestions model</span>
-              <span class="settings-row-desc" data-i18n="assist.modelDesc">
-                For live suggestions speed matters more than depth. This only
-                affects suggestions — your agent's own setup is untouched.
+              <span class="settings-row-label" data-i18n="assist.settingsTitle">Realtime Assistant</span>
+              <span class="settings-row-desc" data-i18n="assist.settingsDesc">
+                Suggestions during a live call. Speed matters more than depth
+                here, so a fast model usually beats a clever one — this only
+                affects suggestions, your agent's own setup is untouched.
               </span>
             </div>
-            <label class="model-lang">
+
+            <label class="model-lang" id="assist-model-wrap" hidden>
               <span class="settings-row-label" data-i18n="assist.model">Model</span>
               <select id="select-assist-model" class="key-input"></select>
             </label>
@@ -128,33 +133,29 @@
               <span class="settings-row-label" data-i18n="assist.effort">Effort</span>
               <select id="select-assist-effort" class="key-input"></select>
             </label>
-          </div>
 
-          <!-- The panel is hidden from screen capture by default: it is a
-               prompter, and what it says is for the person reading it. This
-               is the deliberate exception — demoing the assistant on a call
-               means the other side has to see it. -->
-          <div class="settings-row" id="assist-capture-row" hidden>
-            <div class="settings-row-text">
-              <span class="settings-row-label" id="assist-capture-label" data-i18n="assist.captureLabel">
-                Show suggestions on screen shares
-              </span>
-              <span class="settings-row-desc" data-i18n="assist.captureDesc">
-                Off, the panel stays out of recordings and shared screens — only
-                you see it. On, it is visible to everyone you share with, which
-                is what you want when demoing the assistant itself.
-              </span>
+            <div class="settings-subrow">
+              <div class="settings-row-text">
+                <span class="settings-row-label" id="assist-capture-label" data-i18n="assist.captureLabel">
+                  Visible on screen shares
+                </span>
+                <span class="settings-row-desc" data-i18n="assist.captureDesc">
+                  Off, the panel stays out of recordings and shared screens —
+                  only you see it. On, everyone you share with sees it, which
+                  is what you want when demoing the assistant itself.
+                </span>
+              </div>
+              <button
+                id="toggle-assist-capture"
+                class="toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="assist-capture-label"
+              >
+                <span class="toggle-knob" aria-hidden="true"></span>
+              </button>
             </div>
-            <button
-              id="toggle-assist-capture"
-              class="toggle"
-              type="button"
-              role="switch"
-              aria-checked="false"
-              aria-labelledby="assist-capture-label"
-            >
-              <span class="toggle-knob" aria-hidden="true"></span>
-            </button>
           </div>
         </div>
 
