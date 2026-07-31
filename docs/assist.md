@@ -201,6 +201,21 @@ tools that pioneered this (Zed, block/buzz) fetch the adapter the same way. The
 first cold start pays a download, so the handshake deadline is raised to three
 minutes when the npx path is taken and left at thirty seconds otherwise.
 
+### Which model it uses
+
+Not ours to choose: the agent brings its own, and gilb never overrides it.
+Codex reads `~/.codex/config.toml` (`model = …`), Claude Code reads
+`~/.claude/settings.json` (`"model": …`) or `ANTHROPIC_MODEL`. That is the
+right default — a user who set a model for their coding agent means it — but
+worth knowing that a heavy reasoning configuration is the wrong shape for this
+feature: a suggestion is worth having for about fifteen seconds, and
+`model_reasoning_effort = "high"` spends longer than that thinking. If the
+panel is mostly silent while the agent is clearly working, that is where to
+look first.
+
+`GILB_ASSIST_AGENT_ARGS` replaces the arguments gilb passes, for an agent that
+takes the model on its command line.
+
 Whichever agent won is **named in the UI** — a chip under the switch, "Runs on
 Claude Code". With more than one CLI installed the choice is ours to make but
 not ours to hide: it decides which vendor sees the conversation, and a user

@@ -142,10 +142,17 @@
           </span>
         </div>
 
-        <!-- Every capture subsystem as a switch: each one turns something on
-             or off with an effect the user sees immediately, which is why they
-             live here and not behind Save/Cancel in the gear
-             (docs/ui-design.md). -->
+        <p id="message" class="message" role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- The switches are their own card: the one above answers "what is
+           happening right now", this one "what is turned on". Two questions,
+           two boxes — a single card made the live indicator and the settings
+           read as one list (docs/ui-design.md). -->
+      <section class="card">
+        <div class="capture-head">
+          <h2 data-i18n="capture.controls">What Gilb does</h2>
+        </div>
         <div class="card-toggles">
           <div class="settings-row" id="track-row">
             <div class="settings-row-text">
@@ -221,8 +228,6 @@
             </div>
           </div>
         </div>
-
-        <p id="message" class="message" role="status" aria-live="polite"></p>
       </section>
 
       <section class="card auth" id="auth-card">

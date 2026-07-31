@@ -39,12 +39,11 @@ const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 
 /// Coding agents we know how to reach over ACP, in preference order.
 ///
-/// The CLI a user has installed is **not** the thing that speaks ACP. `claude`
-/// is an interactive REPL: pipe an ACP `initialize` into it and nothing comes
-/// back, and the session dies at the handshake timeout. Both agents here reach
-/// ACP through an adapter package. (`cli_acp_args` exists for agents that
-/// speak it natively — Gemini does, behind `--experimental-acp` — but nothing
-/// uses it today.)
+/// The CLI a user has installed may or may not be the thing that speaks ACP.
+/// `claude` is an interactive REPL: pipe an ACP `initialize` into it and
+/// nothing comes back, and the session dies at the handshake timeout — so
+/// Claude Code and Codex are reached through adapter packages. Cursor speaks
+/// the protocol itself, behind an `acp` subcommand.
 ///
 /// So: find the CLI, then work out what to run *for* it. Nothing here asks the
 /// user to install a second thing — if the adapter is not on disk it is
@@ -53,7 +52,7 @@ const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 const HARNESSES: &[Harness] = &[
     Harness {
         name: "Claude Code",
-        cli: "claude",
+        cli: &["claude"],
         // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
         // `@agentclientprotocol/claude-agent-acp`, and a machine may have
         // either installed. We *fetch* the current one.
@@ -63,17 +62,36 @@ const HARNESSES: &[Harness] = &[
     },
     Harness {
         name: "Codex",
-        cli: "codex",
+        cli: &["codex"],
         adapter_bin: Some(&["codex-acp"]),
         npx_package: Some("@agentclientprotocol/codex-acp"),
         cli_acp_args: &[],
+    },
+    Harness {
+        name: "Cursor",
+        // Cursor renamed its CLI from `cursor-agent` to `agent`. The specific
+        // name goes first: `agent` is generic enough to belong to something
+        // else entirely on a given machine.
+        cli: &["cursor-agent", "agent"],
+        adapter_bin: None,
+        npx_package: None,
+        cli_acp_args: &["acp"],
     },
 ];
 
 impl Harness {
     /// An adapter for this harness that is already installed, if any.
     fn installed_adapter(&self) -> Option<PathBuf> {
-        self.adapter_bin?
+        Self::first_installed(self.adapter_bin?)
+    }
+
+    /// The harness's own CLI, if the user has it.
+    fn installed_cli(&self) -> Option<PathBuf> {
+        Self::first_installed(self.cli)
+    }
+
+    fn first_installed(names: &[&str]) -> Option<PathBuf> {
+        names
             .iter()
             .map(|name| resolve(name))
             .find(|bin| agent_available(bin))
@@ -83,9 +101,10 @@ impl Harness {
 struct Harness {
     /// What to call it in the UI — the product's name, not our binary.
     name: &'static str,
-    /// The coding CLI the user installed. Its presence is what makes this
-    /// harness a candidate — the adapter is our problem, not theirs.
-    cli: &'static str,
+    /// Names the coding CLI may go by, most specific first. Its presence is
+    /// what makes this harness a candidate — the adapter is our problem, not
+    /// theirs.
+    cli: &'static [&'static str],
     /// Adapter executables to look for before fetching one, newest name first.
     adapter_bin: Option<&'static [&'static str]>,
     /// npm package providing that adapter, run through `npx` when the binary
@@ -267,12 +286,10 @@ fn agent() -> Option<Agent> {
         // The harness itself has to be installed for either remaining path:
         // the adapter drives that CLI, and npx-fetching one for a CLI the user
         // does not have would fail slowly instead of quickly.
-        if !agent_available(&resolve(h.cli)) {
-            return None;
-        }
+        let cli = h.installed_cli()?;
         if !h.cli_acp_args.is_empty() {
             return Some(Agent {
-                bin: resolve(h.cli),
+                bin: cli,
                 args: env_args
                     .clone()
                     .unwrap_or_else(|| h.cli_acp_args.iter().map(|a| a.to_string()).collect()),

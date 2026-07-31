@@ -117,18 +117,14 @@ button:disabled {
    `[hidden]{display:none}`. Meetings-only builds hide the tracking row. */
 .track[hidden] { display: none; }
 
-/* The capture switches (meeting detection, live suggestions) under the status
-   rows. Same `.settings-row` grammar the gear uses — label, description,
-   switch — but on the main window, because flipping one takes effect at once.
-   Separated from the status rows above by a hairline so the card reads as
-   "what is happening" then "what is on". */
+/* The capture switches, in a card of their own. Same `.settings-row` grammar
+   the gear uses — label, description, switch — but on the main window, because
+   flipping one takes effect at once. No separator: the card edge is the
+   separator now. */
 .card-toggles {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #eceef1;
 }
 /* No rows to show (a build with neither switch) — drop the separator too. */
 .card-toggles:empty { display: none; }
@@ -144,11 +140,12 @@ button:disabled {
    Headless-tracking builds hide the "Capture" caption. */
 .capture-head[hidden] { display: none; }
 .capture-head h2 { margin: 0; }
-/* Headless-tracking build (VITE_FEATURE_TRACKING_UI=0): the engine still runs
-   but the card has no tracking row. Collapse the whole card when nothing else is
-   live — no active meeting recording (#rec-indicator shown) and no status text
-   (.message non-empty) — so it doesn't render as an empty box. */
-.capture-ui-hidden:not(:has(#rec-indicator:not([hidden]))):not(:has(.message:not(:empty))) {
+/* The Capture card holds only live state: the recording pill and the status
+   line. With the switches moved to their own card, an idle app would render
+   this as an empty box with a heading — so it collapses when there is nothing
+   to report: no meeting recording (#rec-indicator hidden) and no status text.
+   Nothing is happening, so no box says so. */
+.card.capture:not(:has(#rec-indicator:not([hidden]))):not(:has(.message:not(:empty))) {
   display: none;
 }
 .track-state { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -752,7 +749,6 @@ body.countdown-window {
   :root { color: #f5f5f7; background: #0f1117; }
   body { background: #0f1117; }
   .card { background: #1a1c24; box-shadow: none; }
-  .card-toggles { border-top-color: #2f3340; }
   button { background: #232631; color: #f5f5f7; border-color: #2f3340; }
   button:hover:not(:disabled) { background: #2c2f3a; }
   .settings-gear { background: none; color: #6b7280; }
