@@ -54,7 +54,6 @@ const en = {
   "model.failedWith": "Download failed — {error}",
 
   "capture.title": "Capture",
-  "capture.controls": "What {brand} does",
   "capture.recordingMeeting": "Recording meeting — ",
   "capture.recordingManual": "Recording screen",
   "capture.thisMeeting": "this meeting",
@@ -157,7 +156,6 @@ const ru: typeof en = {
   "model.failedWith": "Ошибка загрузки — {error}",
 
   "capture.title": "Запись",
-  "capture.controls": "Что делает {brand}",
   "capture.recordingMeeting": "Идёт запись встречи — ",
   "capture.recordingManual": "Идёт запись экрана",
   "capture.thisMeeting": "эта встреча",

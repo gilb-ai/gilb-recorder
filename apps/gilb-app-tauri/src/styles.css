@@ -126,6 +126,25 @@ button:disabled {
   flex-direction: column;
   gap: 8px;
 }
+
+/* The switches card carries nothing but switches, so they are the card: no
+   caption above them and no outline around each. A row keeps its own box in
+   Settings, where it sits among other kinds of row and the border is what
+   separates them; here every row is the same kind and the outlines only added
+   a frame inside a frame. Hairlines between them do the separating. */
+.card-switches .card-toggles { gap: 0; }
+.card-switches .settings-row {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 14px 0;
+}
+.card-switches .settings-row + .settings-row {
+  border-top: 1px solid #e5e7eb;
+}
+/* First and last hug the card's own padding rather than doubling it. */
+.card-switches .settings-row:first-child { padding-top: 0; }
+.card-switches .settings-row:last-child { padding-bottom: 0; }
 /* No rows to show (a build with neither switch) — drop the separator too. */
 .card-toggles:empty { display: none; }
 /* Capture card header: just the "Capture" caption. App-level Settings lives in
@@ -756,6 +775,8 @@ body.countdown-window {
   .model-progress { background: #2f3340; }
   .settings-row { background: #1a1c24; border-color: #2f3340; }
   .settings-subrow { border-top-color: #2f3340; }
+  .card-switches .settings-row { background: none; }
+  .card-switches .settings-row + .settings-row { border-top-color: #2f3340; }
   .settings-row-desc { color: #9ca3af; }
   .key-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
   .key-input::placeholder { color: #6b7280; }
