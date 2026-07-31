@@ -72,6 +72,7 @@ const en = {
   "assist.desc":
     "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them. The first turn-on downloads a speech model (~570 MB).",
   "assist.descDownloading": "Downloading the model… {pct}%",
+  "assist.runsOn": "Runs on {agent}",
   "capture.trackingLabel": "Activity tracking",
   "capture.trackingDesc":
     "Windows you open, keys you type, clicks, scrolling and the clipboard — recorded to this Mac.",
@@ -158,6 +159,7 @@ const ru: typeof en = {
   "assist.desc":
     "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть. При первом включении скачается модель речи (~570 МБ).",
   "assist.descDownloading": "Загрузка модели… {pct}%",
+  "assist.runsOn": "Работает на {agent}",
   "capture.trackingLabel": "Отслеживание активности",
   "capture.trackingDesc":
     "Открытые окна, нажатия клавиш, клики, прокрутка и буфер обмена — записываются на этот Mac.",

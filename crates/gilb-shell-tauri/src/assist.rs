@@ -77,6 +77,18 @@ pub trait AssistHost: Send + Sync + 'static {
         DEFAULT_MODEL_URL.to_string()
     }
 
+    /// What the suggestions will actually run on, in the user's words — the
+    /// agent gilb found on this machine, the workspace a hosted product is
+    /// signed into. Shown next to the switch, because "which of my tools is
+    /// this using" is the first question a local-agent feature raises, and
+    /// silently picking one of several installed agents is how a user ends up
+    /// surprised by a bill or a model.
+    ///
+    /// `None` means "nothing to say" and shows nothing.
+    fn backend_label(&self) -> Option<String> {
+        None
+    }
+
     /// User-visible text. Kept out of the shared code because it carries the
     /// product's name and voice.
     fn strings(&self) -> AssistStrings;
@@ -139,6 +151,8 @@ pub struct AssistStatus {
     /// Effective state of the switch: on only when everything it needs is in
     /// place, so a stale "on" preference never renders as a working feature.
     pub enabled: bool,
+    /// What it will run on ([`AssistHost::backend_label`]), or `None`.
+    pub backend: Option<String>,
 }
 
 fn state(app: &AppHandle) -> Option<tauri::State<'_, AssistState>> {
@@ -165,6 +179,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             downloading: false,
             percent: 0,
             enabled: false,
+            backend: None,
         };
     };
     let available = state.host.available();
@@ -179,6 +194,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             0
         },
         enabled: available && model_ready() && is_enabled(),
+        backend: state.host.backend_label(),
     }
 }
 

@@ -182,6 +182,12 @@ tools that pioneered this (Zed, block/buzz) fetch the adapter the same way. The
 first cold start pays a download, so the handshake deadline is raised to three
 minutes when the npx path is taken and left at thirty seconds otherwise.
 
+Whichever agent won is **named in the UI** — a chip under the switch, "Runs on
+Claude Code". With more than one CLI installed the choice is ours to make but
+not ours to hide: it decides which vendor sees the conversation, and a user
+who did not know which one was picked cannot object to it. `AssistHost::
+backend_label` is where a product answers.
+
 The prompt itself lives in `~/Documents/Gilb/prompts/realtime_assist.md`, shipped with a default
 on first run and re-read whenever a session opens — once per meeting, since
 the engine starts a fresh session for each. Editing it therefore takes effect

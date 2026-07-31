@@ -331,6 +331,10 @@ type AssistStatus = {
   downloading: boolean;
   percent: number;
   enabled: boolean;
+  /// Which agent the suggestions will run on, named by the backend. Shown as
+  /// a chip: with several coding CLIs installed, *which* one gets the
+  /// conversation is not a detail to leave implicit.
+  backend: string | null;
 };
 
 function renderAssist(s: AssistStatus | null) {
@@ -343,6 +347,7 @@ function renderAssist(s: AssistStatus | null) {
   }
   row.hidden = false;
 
+  renderAssistBackend(s.backend);
   const toggle = $<HTMLButtonElement>("toggle-assist");
   const progress = $("assist-progress");
   const bar = $("assist-progress-bar");
@@ -364,6 +369,20 @@ function renderAssist(s: AssistStatus | null) {
   // label that rewrites itself as you flip it makes the control harder to
   // read, not easier — the switch already says which way it is.
   setText("assist-desc", t("assist.desc"));
+}
+
+/// The detected agent, as a chip under the label. Hidden when the backend has
+/// nothing to name (a product where the answer is "your workspace" and the
+/// card already says so).
+function renderAssistBackend(backend: string | null) {
+  const el = $("assist-backend");
+  if (!el) return;
+  if (!backend) {
+    el.hidden = true;
+    return;
+  }
+  el.textContent = t("assist.runsOn", { agent: backend });
+  el.hidden = false;
 }
 
 async function refreshAssist() {

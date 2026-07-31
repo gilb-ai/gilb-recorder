@@ -51,6 +51,7 @@ const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 /// (Zed, block/buzz) do it too.
 const HARNESSES: &[Harness] = &[
     Harness {
+        name: "Claude Code",
         cli: "claude",
         // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
         // `@agentclientprotocol/claude-agent-acp`, and a machine may have
@@ -60,6 +61,7 @@ const HARNESSES: &[Harness] = &[
         cli_acp_args: &[],
     },
     Harness {
+        name: "Gemini CLI",
         cli: "gemini",
         adapter_bin: None,
         npx_package: None,
@@ -78,6 +80,8 @@ impl Harness {
 }
 
 struct Harness {
+    /// What to call it in the UI — the product's name, not our binary.
+    name: &'static str,
     /// The coding CLI the user installed. Its presence is what makes this
     /// harness a candidate — the adapter is our problem, not theirs.
     cli: &'static str,
@@ -159,6 +163,13 @@ impl AssistHost for GilbAssistHost {
         Ok((Box::new(config), Box::new(AcpBackend::new(acp))))
     }
 
+    /// Name the agent the suggestions will run on. Whichever of several
+    /// installed CLIs we picked is not something to leave the user guessing at
+    /// — it decides which vendor sees the conversation.
+    fn backend_label(&self) -> Option<String> {
+        agent().map(|a| a.label)
+    }
+
     fn strings(&self) -> AssistStrings {
         AssistStrings {
             window_title: "gilb".into(),
@@ -176,6 +187,8 @@ struct Agent {
     args: Vec<String>,
     /// Longer when the first run has to fetch the adapter.
     startup_timeout: Duration,
+    /// For the UI: which agent this is, and how we are reaching it.
+    label: String,
 }
 
 /// The ACP agent to run, resolved from what the user already has installed.
@@ -198,10 +211,16 @@ fn agent() -> Option<Agent> {
 
     if let Ok(bin) = std::env::var(AGENT_BIN_ENV) {
         if !bin.trim().is_empty() {
+            let bin = PathBuf::from(bin);
+            let label = bin
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| bin.display().to_string());
             return Some(Agent {
-                bin: PathBuf::from(bin),
+                bin,
                 args: env_args.unwrap_or_default(),
                 startup_timeout: AcpConfig::default().startup_timeout,
+                label: format!("{label} (set by {AGENT_BIN_ENV})"),
             });
         }
     }
@@ -213,6 +232,7 @@ fn agent() -> Option<Agent> {
                 bin,
                 args: env_args.clone().unwrap_or_default(),
                 startup_timeout: AcpConfig::default().startup_timeout,
+                label: h.name.to_string(),
             });
         }
         // The harness itself has to be installed for either remaining path:
@@ -228,6 +248,7 @@ fn agent() -> Option<Agent> {
                     .clone()
                     .unwrap_or_else(|| h.cli_acp_args.iter().map(|a| a.to_string()).collect()),
                 startup_timeout: AcpConfig::default().startup_timeout,
+                label: h.name.to_string(),
             });
         }
         let package = h.npx_package?;
@@ -238,6 +259,7 @@ fn agent() -> Option<Agent> {
             // is there to answer.
             args: vec!["-y".into(), package.into()],
             startup_timeout: NPX_STARTUP_TIMEOUT,
+            label: h.name.to_string(),
         })
     })
 }
