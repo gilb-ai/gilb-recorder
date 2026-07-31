@@ -2256,6 +2256,7 @@ name = "gilb-shell-tauri"
 version = "1.0.4"
 dependencies = [
  "anyhow",
+ "chrono",
  "gilb-a11y",
  "gilb-assist",
  "gilb-assist-audio",

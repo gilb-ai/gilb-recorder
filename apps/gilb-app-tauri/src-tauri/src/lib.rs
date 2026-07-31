@@ -93,6 +93,7 @@ pub fn run() {
                     // the meeting pipeline so the queue exists when meetings end;
                     // also used by the language setting and the model downloader.
                     app.manage(transcribe_worker::spawn_transcription_worker(db.clone()));
+                    let assist_db = std::sync::Arc::new(db.clone());
                     match gilb_config::data_dir() {
                         Ok(data_dir) => {
                             meeting::spawn_meeting_pipeline(app.handle().clone(), bus, db, data_dir)
@@ -104,7 +105,7 @@ pub fn run() {
                     // it subscribes to the audio tap the pipeline installs and
                     // to the recording bus for meeting boundaries. Silently
                     // inert without an agent binary or the whisper model.
-                    assist::init(app.handle());
+                    assist::init(app.handle(), assist_db);
 
                     // System tray: gilb's home (open the window, toggle a manual
                     // recording, quit). Built after `AppState` is managed — the

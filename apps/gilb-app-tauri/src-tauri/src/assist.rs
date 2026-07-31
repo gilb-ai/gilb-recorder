@@ -39,11 +39,12 @@ const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 
 /// Coding agents we know how to reach over ACP, in preference order.
 ///
-/// The CLI a user has installed is usually **not** the thing that speaks ACP.
-/// `claude` is an interactive REPL: pipe an ACP `initialize` into it and
-/// nothing comes back, and the session dies at the handshake timeout. Claude
-/// Code reaches ACP through an adapter package; Gemini speaks it itself behind
-/// a flag.
+/// The CLI a user has installed is **not** the thing that speaks ACP. `claude`
+/// is an interactive REPL: pipe an ACP `initialize` into it and nothing comes
+/// back, and the session dies at the handshake timeout. Both agents here reach
+/// ACP through an adapter package. (`cli_acp_args` exists for agents that
+/// speak it natively — Gemini does, behind `--experimental-acp` — but nothing
+/// uses it today.)
 ///
 /// So: find the CLI, then work out what to run *for* it. Nothing here asks the
 /// user to install a second thing — if the adapter is not on disk it is
@@ -61,11 +62,11 @@ const HARNESSES: &[Harness] = &[
         cli_acp_args: &[],
     },
     Harness {
-        name: "Gemini CLI",
-        cli: "gemini",
-        adapter_bin: None,
-        npx_package: None,
-        cli_acp_args: &["--experimental-acp"],
+        name: "Codex",
+        cli: "codex",
+        adapter_bin: Some(&["codex-acp"]),
+        npx_package: Some("@agentclientprotocol/codex-acp"),
+        cli_acp_args: &[],
     },
 ];
 
@@ -111,7 +112,7 @@ const BUNDLED_PROMPT: &str = "resources/prompts/realtime_assist.md";
 /// enough for a local model's first token, short enough to stay a suggestion.
 const TURN_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub fn init(app: &AppHandle) {
+pub fn init(app: &AppHandle, db: std::sync::Arc<gilb_db::Db>) {
     // Resolve the bundled prompt once, at init: `AssistHost::engine` is called
     // from the pipeline with no `AppHandle` in reach, and resource paths differ
     // between a dev run and an installed bundle.
@@ -120,7 +121,7 @@ pub fn init(app: &AppHandle) {
         .resolve(BUNDLED_PROMPT, BaseDirectory::Resource)
         .inspect_err(|err| warn!(error = %err, "bundled assist prompt not found"))
         .ok();
-    gilb_shell_tauri::assist::init(app, GilbAssistHost { bundled });
+    gilb_shell_tauri::assist::init(app, GilbAssistHost { bundled, db });
 }
 
 // `gilb_shell_tauri::assist::refresh` re-evaluates availability. Nothing calls
@@ -133,6 +134,9 @@ struct GilbAssistHost {
     /// missing from this build — in which case the feature refuses to start
     /// rather than inventing a prompt of its own.
     bundled: Option<PathBuf>,
+    /// Only to look up where a meeting is being recorded, so its suggestions
+    /// can be filed in the same folder.
+    db: std::sync::Arc<gilb_db::Db>,
 }
 
 impl AssistHost for GilbAssistHost {
@@ -146,7 +150,7 @@ impl AssistHost for GilbAssistHost {
         let config = FileAssistConfig::load(self.bundled.as_deref())?;
         let agent = agent().ok_or_else(|| {
             anyhow!(
-                "no coding agent found — install Claude Code or Gemini CLI, \
+                "no coding agent found — install Claude Code or Codex, \
                  or point {AGENT_BIN_ENV} at an ACP-speaking command"
             )
         })?;
@@ -170,13 +174,38 @@ impl AssistHost for GilbAssistHost {
         agent().map(|a| a.label)
     }
 
+    /// `assist.md` in the meeting's own folder, next to `video.mp4` and
+    /// `audio.wav`. A meeting is a thing the user opens as a folder; what the
+    /// assistant said during it belongs there, not in a separate archive they
+    /// have to know about.
+    ///
+    /// The recorder decides that folder (it stamps it with the start time), so
+    /// it is read back off the meeting row rather than derived a second time —
+    /// two places computing the same path is how they end up disagreeing.
+    fn journal_path(&self, meeting_id: i64) -> Option<PathBuf> {
+        let db = self.db.clone();
+        let meeting = tauri::async_runtime::block_on(async move {
+            gilb_db::meetings::get_meeting(&db, meeting_id).await
+        });
+        let meeting = meeting
+            .inspect_err(|err| warn!(error = %err, meeting_id, "assist journal: meeting lookup"))
+            .ok()??;
+        // Audio is written for every recording; video may be absent.
+        let dir = meeting
+            .audio_path
+            .as_deref()
+            .or(meeting.video_path.as_deref())
+            .and_then(|p| Path::new(p).parent().map(Path::to_path_buf))?;
+        Some(dir.join("assist.md"))
+    }
+
     fn strings(&self) -> AssistStrings {
         AssistStrings {
             window_title: "gilb".into(),
             app_name: "gilb".into(),
             model_downloaded: "Speech model ready — suggestions start at the next meeting.".into(),
             model_failed: "Could not download the speech model. Try again from the app.".into(),
-            unavailable: "needs Claude Code or Gemini CLI installed".into(),
+            unavailable: "needs Claude Code or Codex installed".into(),
         }
     }
 }

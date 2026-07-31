@@ -159,6 +159,25 @@ Three things the ACP client does that a naive JSON-RPC client would not:
 The system prompt has no slot in ACP, so it rides in as the opening turn —
 once per session, not on every suggestion.
 
+### Silence, and its one exception
+
+`[NO_RESP]` is the model's licence to stay out of a conversation it is only
+watching. It does **not** apply to a question the user typed: they are sitting
+in front of the panel having pressed Enter, and silence there is
+indistinguishable from a broken feature. The engine strips the marker from an
+answer to a direct question, and says so plainly if that is all there was.
+
+### Where it is written down
+
+Each meeting's folder gets an `assist.md` next to `video.mp4` and `audio.wav`:
+the questions asked and the suggestions given, stamped with wall-clock time. A
+meeting is a thing people open as a folder, so what the assistant said during
+it belongs there rather than in a separate archive they have to learn about.
+The path comes off the meeting row rather than being derived a second time —
+two places computing the same path is how they end up disagreeing. Writing is
+best-effort: the panel is the product, the file is a record of it, and a failed
+write must never cost a suggestion.
+
 ### Finding an agent
 
 The CLI a user has is usually *not* the thing that speaks ACP. `claude` is an

@@ -121,7 +121,7 @@ async fn analysis_waits_for_threshold_and_formats_turns() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn no_resp_never_touches_the_ui() {
+async fn no_resp_never_touches_the_ui_when_nobody_asked() {
     let backend = ScriptedBackend::new();
     backend.script.lock().unwrap().push(None); // scripted [NO_RESP]
     let (handle, mut rx) = crate::spawn(StaticConfig::default(), backend, params());
@@ -132,6 +132,49 @@ async fn no_resp_never_touches_the_ui() {
         events,
         vec![AssistEvent::Loading(true), AssistEvent::Loading(false)]
     );
+}
+
+/// The mirror image of the test above. `[NO_RESP]` is the model's licence to
+/// stay out of a conversation it was only watching — it is not a licence to
+/// ignore a question the user typed and is sitting there waiting on. Silence
+/// after pressing Enter is indistinguishable from a broken feature.
+#[tokio::test(start_paused = true)]
+async fn a_typed_question_is_always_answered() {
+    let backend = ScriptedBackend::new();
+    backend.script.lock().unwrap().push(None); // the model reaches for [NO_RESP]
+    let (handle, mut rx) = crate::spawn(StaticConfig::default(), backend, params());
+
+    handle.ask("сколько стоит?".into());
+    let events = drain(&mut rx).await;
+
+    let update = events.iter().find_map(|e| match e {
+        AssistEvent::Update(text) => Some(text.clone()),
+        _ => None,
+    });
+    let update = update.expect("a question must produce an answer in the panel");
+    assert!(
+        !update.contains(NO_RESP),
+        "the marker itself must never be shown: {update}"
+    );
+    assert!(!update.trim().is_empty());
+}
+
+/// And when the model answers *and* tacks the marker on — which they do — the
+/// answer survives and the marker does not.
+#[tokio::test(start_paused = true)]
+async fn an_answer_carrying_the_marker_keeps_the_answer() {
+    let backend = ScriptedBackend::new();
+    backend
+        .script
+        .lock()
+        .unwrap()
+        .push(Some(format!("**Около 200 тысяч** {NO_RESP}")));
+    let (handle, mut rx) = crate::spawn(StaticConfig::default(), backend, params());
+
+    handle.ask("сколько стоит?".into());
+    let events = drain(&mut rx).await;
+
+    assert!(events.contains(&AssistEvent::Update("**Около 200 тысяч**".into())));
 }
 
 #[tokio::test(start_paused = true)]

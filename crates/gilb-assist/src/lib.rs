@@ -26,6 +26,11 @@ use tracing::{info, warn};
 /// silent by default is an invariant of the feature.
 pub const NO_RESP: &str = "[NO_RESP]";
 
+/// Shown when a direct question comes back with nothing but [`NO_RESP`]. The
+/// user is owed *something*: an empty panel after pressing Enter reads as a
+/// bug, and this at least says the request arrived.
+const NO_ANSWER: &str = "_No answer — try rephrasing._";
+
 /// Turns kept while analysis is disabled or failing before the oldest are
 /// dropped. Doubles as the cap on a single request: when the feature flag
 /// flips on mid-meeting, or the network returns after an outage, the model
@@ -400,17 +405,35 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             *session = Some(self.backend.begin(&prompt).await?);
         }
         let session = session.as_mut().unwrap();
+        let asked = matches!(input, Input::Ask { .. });
         let reply = match input {
             Input::Turns(turns) => session.send(turns).await?,
             Input::Ask { turns, question } => session.ask(turns, question).await?,
         };
-        match reply {
-            Some(text) if !text.trim().is_empty() && !text.contains(NO_RESP) => {
+        let text = reply.unwrap_or_default();
+
+        // `[NO_RESP]` governs the *unprompted* half of the feature: the model
+        // watching a conversation and deciding it has nothing worth
+        // interrupting for. A question the user typed is not that. Silence
+        // there is indistinguishable from a broken feature, and they are
+        // sitting in front of the panel waiting.
+        if !asked {
+            if !text.trim().is_empty() && !text.contains(NO_RESP) {
                 let _ = self.events.send(AssistEvent::Update(text));
             }
-            // Empty or [NO_RESP]: the UI is not touched at all.
-            _ => {}
+            return Ok(());
         }
+
+        // Models trained on the prompt's silence rule still reach for the
+        // marker; strip it rather than show it, and say something if that is
+        // all there was.
+        let answer = text.replace(NO_RESP, "");
+        let answer = answer.trim();
+        let _ = self.events.send(AssistEvent::Update(if answer.is_empty() {
+            NO_ANSWER.to_string()
+        } else {
+            answer.to_string()
+        }));
         Ok(())
     }
 }

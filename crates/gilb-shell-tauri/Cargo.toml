@@ -9,6 +9,8 @@ description = "Reusable Tauri meeting-flow glue (countdown windows, settings/pri
 [dependencies]
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-opener = "2"
+# Wall-clock stamps in the meeting's assist journal.
+chrono = { workspace = true }
 url = "2"
 tracing = { workspace = true }
 anyhow = { workspace = true }

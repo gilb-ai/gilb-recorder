@@ -70,7 +70,7 @@ const en = {
   // the speech model, so the off state says so up front.
   "assist.label": "Live suggestions",
   "assist.desc":
-    "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them. The first turn-on downloads a speech model (~570 MB).",
+    "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
   "assist.descDownloading": "Downloading the model… {pct}%",
   "assist.runsOn": "Runs on {agent}",
   "capture.trackingLabel": "Activity tracking",
@@ -157,7 +157,7 @@ const ru: typeof en = {
 
   "assist.label": "Онлайн-подсказки",
   "assist.desc":
-    "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть. При первом включении скачается модель речи (~570 МБ).",
+    "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
   "assist.descDownloading": "Загрузка модели… {pct}%",
   "assist.runsOn": "Работает на {agent}",
   "capture.trackingLabel": "Отслеживание активности",

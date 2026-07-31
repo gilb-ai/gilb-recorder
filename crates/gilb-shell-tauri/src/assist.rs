@@ -28,6 +28,8 @@
 //! registered before the first suggestion, and only surfaces when the model
 //! actually says something — silence never opens it.
 
+use std::io::Write;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 use anyhow::Result;
@@ -89,6 +91,14 @@ pub trait AssistHost: Send + Sync + 'static {
         None
     }
 
+    /// Where to write a transcript of the suggestions and questions for the
+    /// meeting now recording, if the product keeps one.
+    ///
+    /// Called when a recording arms. `None` — the default — writes nothing.
+    fn journal_path(&self, _meeting_id: i64) -> Option<PathBuf> {
+        None
+    }
+
     /// User-visible text. Kept out of the shared code because it carries the
     /// product's name and voice.
     fn strings(&self) -> AssistStrings;
@@ -122,6 +132,51 @@ pub struct AssistState {
     /// suggestion.
     auto_show_suppressed: AtomicBool,
     download: ModelDownload,
+    /// Where this meeting's suggestions are being written, if anywhere. Set
+    /// when a recording arms and cleared when it ends, so a suggestion that
+    /// arrives between meetings is not filed under the previous one.
+    journal: parking_lot::Mutex<Option<PathBuf>>,
+}
+
+/// Append one entry to the meeting's assist journal.
+///
+/// Best-effort and synchronous: it is one short line on a local disk, and a
+/// failure here must never cost the user a suggestion — the panel is the
+/// product, the file is a record of it. Markdown because a meeting folder is
+/// something people open, and this sits next to `video.mp4` and `audio.wav`.
+fn open_journal(app: &AppHandle, meeting_id: i64) {
+    let Some(state) = state(app) else { return };
+    let path = state.host.journal_path(meeting_id);
+    if let Some(path) = &path {
+        info!(path = %path.display(), "assist journal");
+    }
+    *state.journal.lock() = path;
+}
+
+fn close_journal(app: &AppHandle) {
+    if let Some(state) = state(app) {
+        *state.journal.lock() = None;
+    }
+}
+
+fn journal(app: &AppHandle, heading: &str, body: &str) {
+    let Some(path) = state(app).and_then(|s| s.journal.lock().clone()) else {
+        return;
+    };
+    let stamp = chrono::Local::now().format("%H:%M:%S");
+    let entry = format!("\n## {stamp} · {heading}\n\n{}\n", body.trim());
+    let opened = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path);
+    match opened {
+        Ok(mut file) => {
+            if let Err(err) = file.write_all(entry.as_bytes()) {
+                warn!(error = %err, path = %path.display(), "assist journal write failed");
+            }
+        }
+        Err(err) => warn!(error = %err, path = %path.display(), "assist journal open failed"),
+    }
 }
 
 struct Wired {
@@ -214,6 +269,7 @@ pub fn init(app: &AppHandle, host: impl AssistHost) {
             shortcut_registered: AtomicBool::new(false),
             auto_show_suppressed: AtomicBool::new(false),
             download: ModelDownload::default(),
+            journal: parking_lot::Mutex::new(None),
         });
     }
     if is_enabled() {
@@ -350,8 +406,16 @@ fn wire(app: &AppHandle) {
         let mut rx = bus_for_boundary.subscribe_recording();
         tauri::async_runtime::spawn(async move {
             while let Ok(msg) = rx.recv().await {
-                if let gilb_events::RecordingEvent::Armed { .. } = msg.payload {
-                    set_auto_show_suppressed(&app, false);
+                match msg.payload {
+                    gilb_events::RecordingEvent::Armed { meeting_id } => {
+                        set_auto_show_suppressed(&app, false);
+                        // File this meeting's suggestions next to its video and
+                        // audio. Opened here rather than on the first
+                        // suggestion so the path is decided while we still know
+                        // which meeting we are in.
+                        open_journal(&app, meeting_id);
+                    }
+                    gilb_events::RecordingEvent::Cancelled { .. } => close_journal(&app),
                 }
             }
         });
@@ -371,6 +435,7 @@ fn wire(app: &AppHandle) {
                     );
                 }
                 AssistEvent::Update(text) => {
+                    journal(&app, "Suggestion", &text);
                     // Always delivered, so a reopened panel has the full
                     // history; only the pop-up respects an explicit hide.
                     if !auto_show_suppressed(&app) {
@@ -598,6 +663,9 @@ pub fn assist_ask(app: AppHandle, question: String) -> Result<(), String> {
     let handle = state(&app).and_then(|s| s.wired.lock().as_ref().map(|w| w.handle.clone()));
     match handle {
         Some(handle) => {
+            // Recorded before sending: the question is the user's own words,
+            // and it belongs in the record whatever the model answers.
+            journal(&app, "Question", &question);
             handle.ask(question);
             Ok(())
         }

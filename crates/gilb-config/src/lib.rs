@@ -598,13 +598,59 @@ pub fn update_preferences(update: impl FnOnce(&mut Preferences)) -> Result<Prefe
 /// than in whichever crate needed it first.
 pub fn agent_bin_dirs() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_default();
-    vec![
+    let mut dirs = vec![
         format!("{home}/.local/bin"),
         format!("{home}/.claude/local"),
         "/opt/homebrew/bin".to_string(),
         "/usr/local/bin".to_string(),
         format!("{home}/.npm-global/bin"),
-    ]
+        // Version managers put global npm binaries under the *active* runtime,
+        // which a GUI app never sees: they work by rewriting PATH in a login
+        // shell, and a bundle launched from Finder gets none of that. Omitting
+        // them means a user with a perfectly good agent installed is told they
+        // have none.
+        format!("{home}/.volta/bin"),
+        format!("{home}/.bun/bin"),
+    ];
+    dirs.extend(node_version_dirs(&home));
+    dirs
+}
+
+/// `bin/` of every installed nvm/fnm node version, newest first.
+///
+/// Newest first because a binary installed globally under an old runtime is
+/// usually a leftover, and running it under that old node is how you get an
+/// error from inside the agent rather than from us.
+fn node_version_dirs(home: &str) -> Vec<String> {
+    let roots = [
+        format!("{home}/.nvm/versions/node"),
+        format!("{home}/.local/share/fnm/node-versions"),
+    ];
+    let mut found = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut versions: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        // Version-aware order: v10 after v9, not before it.
+        versions.sort_by_key(|name| std::cmp::Reverse(version_key(name)));
+        for name in versions {
+            // nvm: <root>/<version>/bin. fnm: <root>/<version>/installation/bin.
+            found.push(format!("{root}/{name}/bin"));
+            found.push(format!("{root}/{name}/installation/bin"));
+        }
+    }
+    found
+}
+
+fn version_key(name: &str) -> Vec<u32> {
+    name.trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
 }
 
 /// Locate an agent CLI by name. `env_override` (when set and non-empty) wins
