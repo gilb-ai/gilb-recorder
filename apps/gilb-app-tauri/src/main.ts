@@ -396,7 +396,9 @@ function renderAssist(s: AssistStatus | null) {
     return;
   }
 
-  renderAssistBackend(s.backend);
+  // No chip: with the picker always on screen, the highlighted button already
+  // says what it runs on, and two of them would disagree the moment one lags.
+  renderAssistBackend(s.agents.length > 0 ? null : s.backend);
   renderAgentPicker(s, false);
   if (toggle) toggle.disabled = false;
   const bar = $("assist-progress-bar");
@@ -434,14 +436,17 @@ function renderAssistBackend(backend: string | null) {
   el.hidden = false;
 }
 
-/// The agent picker: one button per agent gilb knows, disabled when its CLI is
-/// not on the machine. Shown only while the choice is open — once made, the
-/// chip says what it runs on and the buttons would be clutter.
+/// The agent picker: one button per agent gilb knows, the current one marked,
+/// the ones this machine lacks disabled.
+///
+/// It stays after the choice is made. A first-run wizard that disappears
+/// leaves the user with a decision they cannot revisit — and this one is
+/// "whose model hears my meetings", which is exactly the decision people
+/// change their mind about. Switching re-installs and re-wires on the spot.
 function renderAgentPicker(s: AssistStatus, busy: boolean) {
   const box = $("assist-agents");
   if (!box) return;
-  const open = !s.available && s.agents.length > 0;
-  if (!open) {
+  if (s.agents.length === 0) {
     box.hidden = true;
     box.textContent = "";
     return;

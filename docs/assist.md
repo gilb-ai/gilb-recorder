@@ -187,6 +187,12 @@ machine has; picking one saves the choice and installs its adapter (a first
 where the user is told to go and run an npm command: that is a feature that
 stays off forever.
 
+The picker stays after the choice is made, with the current agent marked. A
+first-run wizard that disappears leaves the user with a decision they cannot
+revisit — and this one is "whose model hears my meetings", which is exactly the
+decision people change their mind about. Switching re-installs and re-wires on
+the spot.
+
 Nothing is chosen by default, even when only one agent is installed. Which CLI
 runs the suggestions decides whose model hears the meeting, and picking that on
 someone's behalf because it happened to be first in a list is not a decision to
