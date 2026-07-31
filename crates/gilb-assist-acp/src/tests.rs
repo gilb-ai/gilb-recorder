@@ -261,3 +261,59 @@ async fn a_failed_handshake_takes_the_whole_process_group() {
         "a group that was cleaned up must not stay on the reaper's list: {left}"
     );
 }
+
+/// Choosing a model can withdraw the other knobs, and the client must notice.
+///
+/// The real case, from Claude Code's adapter: `model=haiku` succeeds and comes
+/// back with an option set that no longer has `effort` in it — haiku has no
+/// thinking tiers. Sending the remembered effort anyway earns an "Unknown
+/// config option: effort" and a warning in the log on every single session.
+///
+/// The fake agent below withdraws the option the same way, and records what it
+/// was asked for; passing means the client dropped the withdrawn knob and went
+/// straight on with the meeting.
+#[tokio::test]
+async fn an_option_withdrawn_by_an_earlier_choice_is_not_asked_for() {
+    let dir = tempfile::tempdir().unwrap();
+    let asked = dir.path().join("asked.log");
+    let bin = fake_agent(
+        &dir,
+        &format!(
+            r#"
+read_line() {{ IFS= read -r line; printf '%s\n' "$line" >> {log}; }}
+read_line   # initialize
+printf '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}\n'
+read_line   # session/new — both knobs on offer
+printf '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-1","configOptions":[{{"id":"model"}},{{"id":"effort"}}]}}}}\n'
+read_line   # set_config_option(model) — and effort goes away with the answer
+printf '{{"jsonrpc":"2.0","id":3,"result":{{"configOptions":[{{"id":"model"}}]}}}}\n'
+read_line   # must already be the prompt
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"готово"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
+sleep 5
+"#,
+            log = asked.display()
+        ),
+    );
+
+    let mut cfg = config(bin);
+    cfg.config_options = vec![
+        ("model".to_string(), "haiku".to_string()),
+        ("effort".to_string(), "low".to_string()),
+    ];
+
+    let backend = AcpBackend::new(cfg);
+    let mut session = backend.begin("ты суфлёр").await.unwrap();
+    let reply = session.send("them: привет").await.unwrap();
+    assert_eq!(reply.as_deref(), Some("готово"), "the meeting carried on");
+
+    let log = std::fs::read_to_string(&asked).unwrap_or_default();
+    assert!(
+        log.contains(r#""configId":"model""#),
+        "the model must still be applied: {log}"
+    );
+    assert!(
+        !log.contains(r#""configId":"effort""#),
+        "effort was withdrawn and must not be asked for: {log}"
+    );
+}

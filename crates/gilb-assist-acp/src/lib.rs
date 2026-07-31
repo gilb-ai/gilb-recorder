@@ -136,6 +136,21 @@ pub struct SessionOption {
     pub choices: Vec<SessionChoice>,
 }
 
+/// The ids of the session options carried by a `session/new` or
+/// `session/set_config_option` reply. Empty when the reply says nothing about
+/// them, which is not the same as "it has none" — see the caller.
+fn option_ids(reply: &Value) -> std::collections::HashSet<String> {
+    reply
+        .get("configOptions")
+        .and_then(Value::as_array)
+        .map(|list| {
+            list.iter()
+                .filter_map(|o| Some(o.get("id")?.as_str()?.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Ask the agent which session knobs it has: one [`bootstrap`], read
 /// `configOptions` off `session/new`, drop everything. Costs an agent start
 /// (cached-npx fast), so callers should cache the answer per agent.
@@ -322,7 +337,25 @@ impl AcpSession {
         // the configured model. Failures are logged and skipped: the option
         // set differs per adapter, and a knob that does not exist must not
         // cost the feature.
+        // What the agent will accept, which is not fixed for the session: the
+        // knobs depend on each other. Choosing Claude's `haiku` withdraws
+        // `effort` in the same breath, because that model has no thinking
+        // tiers — so a client that applies a remembered model and a remembered
+        // effort in order asks for something the agent stopped offering one
+        // message ago, and gets "Unknown config option: effort" for its
+        // trouble. Each reply carries the option set as it now stands; follow
+        // it.
+        let mut offered = option_ids(&boot.session);
         for (config_id, value) in &config.config_options {
+            // Empty means the agent said nothing about its options at
+            // `session/new` — no grounds to second-guess it, so try anyway.
+            if !offered.is_empty() && !offered.contains(config_id) {
+                debug!(
+                    config_id,
+                    value, "session option withdrawn by an earlier choice — skipped"
+                );
+                continue;
+            }
             let result = boot
                 .conn
                 .request(
@@ -331,7 +364,13 @@ impl AcpSession {
                 )
                 .await;
             match result {
-                Ok(_) => debug!(config_id, value, "session option set"),
+                Ok(reply) => {
+                    debug!(config_id, value, "session option set");
+                    let next = option_ids(&reply);
+                    if !next.is_empty() {
+                        offered = next;
+                    }
+                }
                 Err(err) => {
                     warn!(error = %err, config_id, value, "session option not applied")
                 }
