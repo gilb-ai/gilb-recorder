@@ -20,7 +20,7 @@ fn data_dir_is_visible_and_the_old_one_is_moved_into_it() {
     std::fs::write(legacy.join("db.sqlite"), b"sessions and actions").unwrap();
     std::fs::write(legacy.join("models/whisper.bin"), b"570 MB, pretend").unwrap();
 
-    let expected = home.path().join("Documents").join("gilb");
+    let expected = home.path().join("Documents").join("Gilb");
     assert_eq!(
         gilb_config::data_dir().unwrap(),
         expected,
@@ -53,6 +53,30 @@ fn data_dir_is_visible_and_the_old_one_is_moved_into_it() {
         std::fs::read_to_string(expected.join("db.sqlite")).unwrap(),
         "sessions and actions"
     );
+    std::fs::remove_dir_all(&legacy).unwrap();
+
+    // The lowercase folder from the window before the name was capitalised.
+    // On a case-insensitive filesystem `expected.exists()` is true for it, so
+    // this is the case the migration cannot detect by asking the path.
+    let lowercase = home.path().join("Documents").join("gilb");
+    std::fs::rename(&expected, &lowercase).unwrap();
+    let moved = gilb_config::migrate_legacy_data_dir().unwrap();
+    assert_eq!(moved.as_deref(), Some(lowercase.as_path()));
+    assert_eq!(
+        std::fs::read_to_string(expected.join("db.sqlite")).unwrap(),
+        "sessions and actions",
+        "the data survived the rename to the capitalised name"
+    );
+    assert_eq!(
+        std::fs::read_dir(home.path().join("Documents"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        vec!["Gilb".to_string()],
+        "exactly one folder, spelled the way the app spells it"
+    );
+    assert_eq!(gilb_config::migrate_legacy_data_dir().unwrap(), None);
 
     // The paths everything else derives from, including the prompt the user is
     // meant to find and edit.

@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// gilb produces — the database, meeting recordings, transcripts, the prompt
 /// the assistant runs on — is the user's own data, and data you cannot find in
 /// Finder or Explorer is data you cannot delete, back up or inspect.
-const DATA_DIR_NAME: &str = "gilb";
+const DATA_DIR_NAME: &str = "Gilb";
 /// Where installs before the move kept everything. Migrated on first run.
 const LEGACY_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
@@ -119,21 +119,21 @@ static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 ///
 /// First write wins: returns `Err` with the rejected path if an override is
 /// already in place. When never called, [`data_dir`] resolves to
-/// `<Documents>/gilb`.
+/// `<Documents>/Gilb`.
 pub fn set_data_dir(dir: impl Into<PathBuf>) -> std::result::Result<(), PathBuf> {
     DATA_DIR_OVERRIDE.set(dir.into())
 }
 
 /// The per-user data directory: the [`set_data_dir`] override when one was
-/// installed, otherwise `<Documents>/gilb/` — `~/Documents/gilb` on macOS,
-/// `%USERPROFILE%\Documents\gilb` on Windows.
+/// installed, otherwise `<Documents>/Gilb/` — `~/Documents/Gilb` on macOS,
+/// `%USERPROFILE%\Documents\Gilb` on Windows.
 ///
 /// Documents is resolved through the OS rather than assembled from `$HOME`,
 /// because on Windows it is a known folder the user (or OneDrive) may have
 /// moved, and writing to a literal `%USERPROFILE%\Documents` that nothing
 /// points at any more would hide the data as effectively as the old dotfile
-/// did. When the OS has no answer, fall back to `$HOME/Documents/gilb` and
-/// finally to `$HOME/gilb` — never silently to a hidden directory.
+/// did. When the OS has no answer, fall back to `$HOME/Documents/Gilb` and
+/// finally to `$HOME/Gilb` — never silently to a hidden directory.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(dir) = DATA_DIR_OVERRIDE.get() {
         return Ok(dir.clone());
@@ -159,43 +159,83 @@ fn home_dir() -> Result<PathBuf> {
         .to_path_buf())
 }
 
-/// Move a pre-move install (`$HOME/.gilb`) to the visible directory, once.
+/// Bring an older install's directory to where (and what) [`data_dir`] says,
+/// once, at startup — before anything opens the database.
 ///
-/// Called at startup, before anything opens the database. A rename, so the
-/// ~570 MB model and the meeting recordings are not copied — and if the two
-/// directories somehow live on different volumes and the rename fails, the old
-/// data is left exactly where it is and the caller is told, rather than the app
-/// half-migrating and losing history.
+/// Two shapes of "older": the hidden `$HOME/.gilb` every install had before the
+/// move into Documents, and a `Documents/Gilb` from the short window when the
+/// folder was lowercase. The second is a rename that only changes case, which
+/// macOS and Windows will do happily on their case-insensitive filesystems and
+/// which is invisible to `Path::exists` — so it is detected by reading the
+/// parent directory, not by asking whether the target is there.
 ///
-/// Returns the path that was migrated, or `None` when there was nothing to do
+/// A rename in both cases, so the ~570 MB model and the meeting recordings are
+/// never copied. If it fails — the two paths on different volumes, a permission
+/// problem — the old directory is left exactly as it was and the caller is
+/// told, rather than the app half-migrating and losing history.
+///
+/// Returns where the data came from, or `None` when there was nothing to do
 /// (fresh install, already migrated, or a [`set_data_dir`] override in force —
 /// a product with its own directory is not ours to move).
 pub fn migrate_legacy_data_dir() -> Result<Option<PathBuf>> {
     if DATA_DIR_OVERRIDE.get().is_some() {
         return Ok(None);
     }
-    let legacy = home_dir()?.join(LEGACY_DATA_DIR_NAME);
-    if !legacy.is_dir() {
-        return Ok(None);
-    }
     let target = data_dir()?;
-    if target.exists() {
-        // Both present: the new one wins (it is what the app has been writing
-        // to), and the old one stays for the user to look through and delete.
+
+    if let Some(previous) = differently_cased_sibling(&target)? {
+        rename_into_place(&previous, &target)?;
+        return Ok(Some(previous));
+    }
+
+    let legacy = home_dir()?.join(LEGACY_DATA_DIR_NAME);
+    if !legacy.is_dir() || target.exists() {
+        // Nothing to move, or both are present — in which case the new one
+        // wins (it is what the app has been writing to) and the old one stays
+        // for the user to look through and delete.
         return Ok(None);
     }
-    if let Some(parent) = target.parent() {
+    rename_into_place(&legacy, &target)?;
+    Ok(Some(legacy))
+}
+
+/// A directory next to `target` whose name matches it apart from case. `None`
+/// when the name on disk is already exactly right — including when nothing is
+/// there at all.
+fn differently_cased_sibling(target: &Path) -> Result<Option<PathBuf>> {
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name().and_then(|n| n.to_str()))
+    else {
+        return Ok(None);
+    };
+    if !parent.is_dir() {
+        return Ok(None);
+    }
+    for entry in std::fs::read_dir(parent)
+        .with_context(|| format!("failed to read {}", parent.display()))?
+        .flatten()
+    {
+        let Some(found) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if found != name && found.eq_ignore_ascii_case(name) && entry.path().is_dir() {
+            return Ok(Some(parent.join(found)));
+        }
+    }
+    Ok(None)
+}
+
+fn rename_into_place(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    std::fs::rename(&legacy, &target).with_context(|| {
+    std::fs::rename(from, to).with_context(|| {
         format!(
             "failed to move {} to {} — the old directory is untouched; move it by hand",
-            legacy.display(),
-            target.display()
+            from.display(),
+            to.display()
         )
-    })?;
-    Ok(Some(legacy))
+    })
 }
 
 /// The database file inside [`data_dir`]. Caller is responsible for creating

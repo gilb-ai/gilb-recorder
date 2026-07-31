@@ -1,6 +1,6 @@
 # gilb-mcp
 
-Stdio MCP server exposing the user's recorded activity (`<Documents>/gilb/db.sqlite`)
+Stdio MCP server exposing the user's recorded activity (`<Documents>/Gilb/db.sqlite`)
 to Claude Code / any MCP-aware client.
 
 This crate is read-only — the writer is `gilb-app-tauri`. SQLite WAL mode
@@ -47,7 +47,7 @@ Or hand-edit `~/.claude.json` / project-level `.mcp.json`:
 }
 ```
 
-By default the binary opens `<Documents>/gilb/db.sqlite` (same path as the Tauri
+By default the binary opens `<Documents>/Gilb/db.sqlite` (same path as the Tauri
 app).
 
 ## Quick smoke test

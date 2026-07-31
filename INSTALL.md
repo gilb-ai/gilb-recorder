@@ -11,10 +11,10 @@ both. For build and release instructions, see
 gilb is a macOS desktop app that records your on-screen activity —
 clicks, typed text, navigation keys, scrolls, clipboard, focus
 changes — through the macOS Accessibility API. Each event is written
-to a local SQLite database at `~/Documents/gilb/db.sqlite`.
+to a local SQLite database at `~/Documents/Gilb/db.sqlite`.
 
 It also records meetings: when a video-conference app starts a call,
-gilb captures the screen and audio to `~/Documents/gilb/meetings/` and, once
+gilb captures the screen and audio to `~/Documents/Gilb/meetings/` and, once
 the call ends, transcribes it on your own machine.
 
 Your recordings stay on your machine — nothing is uploaded, and there
@@ -127,7 +127,7 @@ The `.app` bundle ships a read-only MCP server, `gilb-mcp`, at:
 /Applications/Gilb.app/Contents/MacOS/gilb-mcp
 ```
 
-It reads `~/Documents/gilb/db.sqlite` directly over stdio MCP transport. It
+It reads `~/Documents/Gilb/db.sqlite` directly over stdio MCP transport. It
 does not need `Gilb.app` itself to be running. To wire it into
 Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -147,8 +147,8 @@ binary. Restart the client after editing the config.
 ## Where your data lives
 
 Everything is in **one visible folder** you can open, back up or delete
-like any other — `~/Documents/gilb` on macOS,
-`%USERPROFILE%\Documents\gilb` on Windows (wherever Windows actually
+like any other — `~/Documents/Gilb` on macOS,
+`%USERPROFILE%\Documents\Gilb` on Windows (wherever Windows actually
 puts your Documents, including a OneDrive-redirected one):
 
 | Path                     | What it is                                        |
@@ -191,7 +191,7 @@ before upgrading.
    ```
    (Or System Settings → General → Login Items → uncheck `Gilb`.)
 3. Drag `Gilb.app` from `/Applications` to the Trash.
-4. Optionally, remove `~/Documents/gilb/` to delete all recorded data.
+4. Optionally, remove `~/Documents/Gilb/` to delete all recorded data.
 5. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
    removed).

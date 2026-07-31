@@ -40,7 +40,7 @@ struct Cli {
 enum Command {
     /// Run the analysis job over a window and POST findings to gilb-web.
     Find {
-        /// DB path (default: <Documents>/gilb/db.sqlite).
+        /// DB path (default: <Documents>/Gilb/db.sqlite).
         #[arg(long)]
         db: Option<PathBuf>,
         /// Window start (default: now - cadence).
@@ -52,7 +52,7 @@ enum Command {
     },
     /// Loop `find` on the server-controlled cadence (in-process daemon).
     Run {
-        /// DB path (default: <Documents>/gilb/db.sqlite).
+        /// DB path (default: <Documents>/Gilb/db.sqlite).
         #[arg(long)]
         db: Option<PathBuf>,
     },
@@ -61,7 +61,7 @@ enum Command {
     /// per chunk; empty chunks are skipped (no cost). By default starts from the
     /// earliest recorded action; `--days N` limits it to the last N days.
     Backfill {
-        /// DB path (default: <Documents>/gilb/db.sqlite).
+        /// DB path (default: <Documents>/Gilb/db.sqlite).
         #[arg(long)]
         db: Option<PathBuf>,
         /// Only the last N days (default: from the earliest recorded action).

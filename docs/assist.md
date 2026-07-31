@@ -160,7 +160,7 @@ Three things the ACP client does that a naive JSON-RPC client would not:
 The system prompt has no slot in ACP, so it rides in as the opening turn —
 once per session, not on every suggestion.
 
-The prompt itself lives in `~/Documents/gilb/prompts/realtime_assist.md`, shipped with a default
+The prompt itself lives in `~/Documents/Gilb/prompts/realtime_assist.md`, shipped with a default
 on first run and re-read whenever a session opens — once per meeting, since
 the engine starts a fresh session for each. Editing it therefore takes effect
 on the next meeting, with no restart, but not mid-call: the agent already has

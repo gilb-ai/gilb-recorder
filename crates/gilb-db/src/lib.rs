@@ -192,7 +192,7 @@ pub async fn write_batch(db: &Db, batch: &[WriterMessage]) -> Result<()> {
 /// Open `path` in **read-only mode** — for processes (like `gilb-mcp`) that
 /// must not modify the database. Does **not** create the file or run
 /// migrations; the caller is expected to point at an already-initialised DB
-/// (typically the same `~/.gilb/db.sqlite` that the Tauri app writes to).
+/// (typically the same `<Documents>/Gilb/db.sqlite` that the Tauri app writes to).
 ///
 /// Concurrent reads alongside the Tauri-app's writes are safe — `gilb-db.rs`
 /// already enables WAL journaling.

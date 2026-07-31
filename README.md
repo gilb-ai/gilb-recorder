@@ -52,7 +52,7 @@ that agent itself sends.
 It is off by default at three levels: a Cargo feature, a switch in the
 app, and a ~570 MB speech model downloaded only if you turn it on. The
 prompt is a plain file you can edit —
-`~/Documents/gilb/prompts/realtime_assist.md` — not a string baked into
+`~/Documents/Gilb/prompts/realtime_assist.md` — not a string baked into
 the binary. See [`docs/assist.md`](./docs/assist.md) for how the
 pipeline fits together.
 
@@ -73,7 +73,7 @@ cd apps/gilb-app-tauri
 npm install
 npm run tauri dev
 
-# Read-only MCP server over ~/Documents/gilb/db.sqlite (stdio transport).
+# Read-only MCP server over ~/Documents/Gilb/db.sqlite (stdio transport).
 # Point an MCP client (e.g. Claude Code) at this binary to query
 # recorded activity. See apps/gilb-mcp/help.md for the tool catalog.
 cargo run -p gilb-mcp
@@ -116,7 +116,7 @@ claude mcp list
 
 Inside a Claude Code session the `gilb_*` tools are now available (see
 [`apps/gilb-mcp/help.md`](./apps/gilb-mcp/help.md) for the full
-catalog). The server reads `~/Documents/gilb/db.sqlite` over stdio; `Gilb.app`
+catalog). The server reads `~/Documents/Gilb/db.sqlite` over stdio; `Gilb.app`
 itself does not need to be running. If you built Gilb from source, point
 the same command at the built binary instead (`cargo run -p gilb-mcp`,
 or `target/release/gilb-mcp`). See [`INSTALL.md`](./INSTALL.md) for the
@@ -145,7 +145,7 @@ permission prompts).
 ## Privacy
 
 Capture, storage and transcription are entirely local: the database is
-a file in `~/Documents/gilb/`, whisper.cpp runs on-device, and nothing is
+a file in `~/Documents/Gilb/`, whisper.cpp runs on-device, and nothing is
 uploaded. The capture pipeline drops events from a fixed block-list of
 password managers — 1Password, Bitwarden, KeePassXC, and macOS Keychain
 Access — at the source, so those apps never produce rows. For everything

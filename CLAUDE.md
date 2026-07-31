@@ -67,13 +67,13 @@ Capture defaults are controlled by env vars consumed by
 (defaults: `info,gilb=debug` in the Tauri shell, `info` in the CLI).
 
 Everything the app writes lives in one **visible** folder —
-`~/Documents/gilb` on macOS, `%USERPROFILE%\Documents\gilb` on Windows,
+`~/Documents/Gilb` on macOS, `%USERPROFILE%\Documents\Gilb` on Windows,
 resolved through the OS's Documents known-folder rather than assembled
 from `$HOME` (on Windows it may be redirected, e.g. into OneDrive). See
 `gilb_config::data_dir`:
 
 ```
-<Documents>/gilb/
+<Documents>/Gilb/
 ├── db.sqlite            actions, sessions, meetings, transcripts
 ├── meetings/<stamp>/    video.mp4 + audio.wav per recorded call
 ├── models/              the downloaded whisper model (~570 MB)
@@ -151,7 +151,7 @@ apps/gilb-app-tauri/src-tauri ─► gilb-engine, gilb-config, gilb-events,
                assist.rs is gilb's AssistHost — local prompt file + ACP agent)
 
 apps/gilb-mcp ─► gilb-config + gilb-db
-              (read-only MCP server over ~/Documents/gilb/db.sqlite, stdio
+              (read-only MCP server over ~/Documents/Gilb/db.sqlite, stdio
                transport; gilb_* tools for Claude Code.
                LLM-facing contract — apps/gilb-mcp/help.md)
 
@@ -213,7 +213,7 @@ migration means adding its hash; a failure there is never fixed by
 editing the `.sql`.
 
 **Second consumer of the schema — `apps/gilb-mcp`.** It reads the
-same `~/Documents/gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
+same `~/Documents/Gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
 with a stable user-facing contract in `apps/gilb-mcp/help.md`
 (column names and semantics for `actions`, `kind` values, password
 masking, `range` formats). Any migration that changes the shape of
