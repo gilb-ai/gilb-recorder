@@ -9,9 +9,10 @@ import { applyI18n, t } from "./i18n";
 // created from Rust; everything it shows arrives as events, everything it does
 // goes through commands — the webview knows nothing about providers or
 // prompts (contract in docs/assist.md):
-//   assist://update  { text }     ready-to-render markdown
-//   assist://state   { loading }  spinner on/off
-//   assist://error   { message }
+//   assist://update    { text }     ready-to-render markdown
+//   assist://state     { loading }  spinner on/off
+//   assist://error     { message }
+//   assist://listening { on }       is anything being recorded to listen to
 // Commands: assist_ask(question), assist_hide.
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
@@ -52,12 +53,28 @@ function show(idx: number) {
   renderNav();
 }
 
+/// The empty panel, telling the truth about whether anything can reach it.
+///
+/// Suggestions come from audio the recorder feeds; with nothing recording the
+/// panel hears nothing, and saying "suggestions will appear here" while that is
+/// true is how a working feature looks broken. Only touches the empty state —
+/// once a suggestion has arrived, it stays on screen.
+function setListening(on: boolean) {
+  const empty = $("assist-empty");
+  if (!empty || responses.length > 0) return;
+  empty.textContent = on ? t("assist.empty") : t("assist.idle");
+}
+
 window.addEventListener("DOMContentLoaded", async () => {
   applyI18n();
   const input = $<HTMLInputElement>("assist-input");
   if (input) input.placeholder = t("assist.askPlaceholder");
 
   renderNav();
+
+  await listen<{ on: boolean }>("assist://listening", (e) =>
+    setListening(e.payload.on),
+  );
 
   await listen<{ text: string }>("assist://update", (e) => {
     // Follow the newest one only while the newest is what's on screen;

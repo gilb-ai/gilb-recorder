@@ -15,9 +15,10 @@
 //! listens for:
 //!
 //! ```text
-//! assist://update  { text }      markdown, ready to render
-//! assist://state   { loading }
-//! assist://error   { message }
+//! assist://update    { text }      markdown, ready to render
+//! assist://state     { loading }
+//! assist://error     { message }
+//! assist://listening { on }        whether a recording is feeding it
 //! ```
 //!
 //! and the main window listens for `assist-status` ([`AssistStatus`]), which is
@@ -194,6 +195,20 @@ pub struct AssistState {
 /// failure here must never cost the user a suggestion — the panel is the
 /// product, the file is a record of it. Markdown because a meeting folder is
 /// something people open, and this sits next to `video.mp4` and `audio.wav`.
+/// Tell the overlay whether audio is actually reaching it.
+///
+/// The panel listens to a tap the recorder feeds, so with nothing recording it
+/// hears nothing — and said nothing about it, which makes an idle panel
+/// indistinguishable from a broken one. Someone who opens it and starts
+/// talking has every reason to expect otherwise.
+fn emit_listening(app: &AppHandle, on: bool) {
+    let _ = app.emit_to(
+        ASSIST_WINDOW,
+        "assist://listening",
+        serde_json::json!({ "on": on }),
+    );
+}
+
 fn open_journal(app: &AppHandle, meeting_id: i64) {
     let Some(state) = state(app) else { return };
     let path = state.host.journal_path(meeting_id);
@@ -478,6 +493,7 @@ fn wire(app: &AppHandle) {
     drop(wired);
 
     ensure_window(app);
+    emit_listening(app, false);
     if !state.shortcut_registered.swap(true, Ordering::SeqCst) {
         register_shortcut(app);
     }
@@ -492,13 +508,17 @@ fn wire(app: &AppHandle) {
                 match msg.payload {
                     gilb_events::RecordingEvent::Armed { meeting_id } => {
                         set_auto_show_suppressed(&app, false);
+                        emit_listening(&app, true);
                         // File this meeting's suggestions next to its video and
                         // audio. Opened here rather than on the first
                         // suggestion so the path is decided while we still know
                         // which meeting we are in.
                         open_journal(&app, meeting_id);
                     }
-                    gilb_events::RecordingEvent::Cancelled { .. } => close_journal(&app),
+                    gilb_events::RecordingEvent::Cancelled { .. } => {
+                        emit_listening(&app, false);
+                        close_journal(&app);
+                    }
                 }
             }
         });

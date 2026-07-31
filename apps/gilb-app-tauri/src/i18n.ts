@@ -61,7 +61,8 @@ const en = {
   "capture.stop": "Stop",
 
   "assist.title": "{brand} Assist",
-  "assist.empty": "Suggestions will appear here during the meeting.",
+  "assist.empty": "Listening — suggestions will appear here.",
+  "assist.idle": "Not recording — start one (⌘⇧R) and I'll listen.",
   "assist.thinking": "Thinking…",
   "assist.askPlaceholder": "Ask about the conversation… (Enter)",
   "assist.hide": "Hide",
@@ -154,7 +155,8 @@ const ru: typeof en = {
   "capture.stop": "Остановить",
 
   "assist.title": "{brand} — подсказки",
-  "assist.empty": "Подсказки появятся здесь во время встречи.",
+  "assist.empty": "Слушаю — подсказки появятся здесь.",
+  "assist.idle": "Запись не идёт — начните её (⌘⇧R), и я буду слушать.",
   "assist.thinking": "Думаю…",
   "assist.askPlaceholder": "Спросить о разговоре… (Enter)",
   "assist.hide": "Скрыть",
