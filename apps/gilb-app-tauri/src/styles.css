@@ -707,6 +707,31 @@ body.countdown-window {
   transition: width 0.2s ease;
 }
 
+/* Indeterminate: something is happening, and we genuinely cannot say how far
+   along it is. The whisper model is our own download with a content-length, so
+   that bar shows a real fraction; an ACP adapter is fetched by `npx`, which
+   reports nothing we could turn into a percentage. A sweeping bar says "still
+   working" without inventing a number — a fake percentage that jumps to 100%
+   and then waits is worse than no percentage at all. */
+.model-progress.indeterminate .model-progress-bar {
+  width: 35%;
+  transition: none;
+  animation: progress-sweep 1.1s ease-in-out infinite;
+}
+@keyframes progress-sweep {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+/* Respect a user who asked the OS for less motion: hold the bar still and let
+   the text carry the state. */
+@media (prefers-reduced-motion: reduce) {
+  .model-progress.indeterminate .model-progress-bar {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
 .model-lang {
   display: flex;
   align-items: center;

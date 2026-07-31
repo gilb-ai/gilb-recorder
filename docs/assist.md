@@ -212,6 +212,12 @@ make for them. An agent that is not installed stays in the list, disabled —
 knowing Codex is an option you do not have beats not knowing Codex is an
 option.
 
+The install shows an *indeterminate* bar, not a percentage. The whisper model
+is our own download with a content-length, so that one reports a real
+fraction; an adapter is fetched by `npx`, which tells us nothing we could turn
+into a number. A bar that sweeps says "still working" honestly, where a fake
+percentage jumping to 100% and then waiting is worse than none.
+
 "Install" is a handshake, not a download: `AssistHost::prepare` opens a real
 ACP session and throws the result away. A package that fetched but does not
 answer `initialize` is not installed in any sense the user cares about, and

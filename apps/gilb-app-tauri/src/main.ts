@@ -365,12 +365,15 @@ function renderAssist(s: AssistStatus | null) {
   if (s.preparing) {
     toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
     if (toggle) toggle.disabled = true;
-    progress?.setAttribute("hidden", "");
+    // Indeterminate: npx tells us nothing we could turn into a percentage.
+    progress?.classList.add("indeterminate");
+    progress?.removeAttribute("hidden");
     renderAssistBackend(null);
     renderAgentPicker(s, true);
     setText("assist-desc", t("assist.preparing"));
     return;
   }
+  progress?.classList.remove("indeterminate");
 
   // Switched on, nothing chosen yet: this is the question, not an error. The
   // picker is the answer to it — never a dead end telling them to go install
