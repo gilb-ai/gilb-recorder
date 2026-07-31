@@ -160,13 +160,25 @@ pub enum AssistEvent {
 #[derive(Debug, Clone)]
 pub struct EngineParams {
     /// Floor between two analyses; turns keep accumulating meanwhile.
+    ///
+    /// Measured from when a request is *sent*, not when its answer comes back
+    /// — so a backend slower than this never waits on it at all, and the
+    /// in-flight request is its own rate limit. What the floor actually does is
+    /// merge utterances that belong to one thought, which is why it is short:
+    /// segments close on a ~700 ms pause, so anything arriving inside a second
+    /// or so is the same sentence continuing.
     pub min_analysis_interval: Duration,
 }
 
 impl Default for EngineParams {
     fn default() -> Self {
         Self {
-            min_analysis_interval: Duration::from_secs(5),
+            // Five seconds was a guess made when analysis needed four turns
+            // to fire; with every turn going out it is the difference between
+            // answering and appearing not to. Long enough to glue "…и вот ещё
+            // что" onto the sentence before it, short enough that nobody times
+            // it.
+            min_analysis_interval: Duration::from_millis(1500),
         }
     }
 }
