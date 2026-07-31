@@ -1281,6 +1281,12 @@ fn spawn_mic_capture(
     );
 
     let (tx, rx) = mpsc::channel::<()>();
+    // The caller must not proceed until the stream is *playing*. Spawning the
+    // thread is not enough: creating the process tap while the stream is still
+    // being built silences it exactly as thoroughly as creating it before the
+    // thread existed — the same race, 14ms wide instead of guaranteed. The
+    // thread reports back once `play()` returned.
+    let (ready_tx, ready_rx) = mpsc::channel::<Result<()>>();
     let handle = std::thread::spawn(move || {
         let err_fn = |e| warn!(error = ?e, "mic stream error");
         // Counted so a stream that starts and delivers nothing — the shape a
@@ -1314,14 +1320,15 @@ fn spawn_mic_capture(
         ) {
             Ok(s) => s,
             Err(e) => {
-                warn!(error = ?e, "failed to build mic input stream");
+                let _ = ready_tx.send(Err(anyhow!("build mic input stream: {e}")));
                 return;
             }
         };
         if let Err(e) = stream.play() {
-            warn!(error = ?e, "failed to start mic stream");
+            let _ = ready_tx.send(Err(anyhow!("start mic stream: {e}")));
             return;
         }
+        let _ = ready_tx.send(Ok(()));
         // Keep the stream alive until stop is signalled (or the sender drops).
         let _ = rx.recv();
         drop(stream);
@@ -1333,7 +1340,21 @@ fn spawn_mic_capture(
         }
     });
 
-    Ok((tx, handle, sample_rate))
+    // Generous: device wake-up is tens of milliseconds; five seconds only
+    // trips when something is genuinely wedged, and then failing the recording
+    // start beats recording an hour of silence.
+    match ready_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(Ok(())) => Ok((tx, handle, sample_rate)),
+        Ok(Err(e)) => {
+            let _ = handle.join();
+            Err(e)
+        }
+        Err(_) => {
+            // Tell the thread to shut down if it ever gets there.
+            let _ = tx.send(());
+            Err(anyhow!("mic stream did not start within 5s"))
+        }
+    }
 }
 
 #[cfg(test)]

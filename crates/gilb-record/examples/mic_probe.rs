@@ -111,9 +111,12 @@ fn main() {
         // a channel. Reproduce that shape too — a stream is not `Send`, so
         // where it is created is where it lives.
         // Does the *order* decide it? Start the mic thread first, install the
-        // tap second — the reverse of what the recorder does.
-        if std::env::args().any(|a| a == "mic-first") {
-            println!("mic thread first, tap second");
+        // tap second — the reverse of what the recorder does. `mic-first-race`
+        // installs the tap immediately, without giving the spawned thread time
+        // to build its stream — which is what the recorder actually does.
+        if std::env::args().any(|a| a == "mic-first" || a == "mic-first-race") {
+            let race = std::env::args().any(|a| a == "mic-first-race");
+            println!("mic thread first, tap second (race={race})");
             let (s2, p2) = (samples.clone(), peak.clone());
             let (tx, rx) = std::sync::mpsc::channel::<()>();
             let cfg = config.clone();
@@ -134,7 +137,9 @@ fn main() {
                 let _ = rx.recv();
                 drop(stream);
             });
-            std::thread::sleep(std::time::Duration::from_millis(300));
+            if !race {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             let tap = gilb_record::macos_tap::SystemAudioTap::start(|_| {});
             println!(
                 "tap after mic: {}",
