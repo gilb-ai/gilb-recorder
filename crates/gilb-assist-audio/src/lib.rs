@@ -20,6 +20,11 @@ mod stt_worker;
 mod whisper;
 
 pub use gilb_record::{EchoCanceller, EchoCancellerConfig};
+/// Re-exported so a product can hand the *same* loaded model to both the
+/// realtime worker and its post-meeting transcription — the whole point of
+/// `SharedModel`, which cannot happen if each side builds its own.
+#[cfg(feature = "whisper")]
+pub use gilb_transcribe::{LocalTranscriber, SharedModel};
 pub use pipeline::{spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig};
 pub use resample::StreamResampler;
 pub use segment::{EnergyVad, FrameVad, Segment, Segmenter, SegmenterConfig};

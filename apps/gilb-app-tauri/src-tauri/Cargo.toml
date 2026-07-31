@@ -54,6 +54,10 @@ gilb-shell-tauri = { workspace = true, features = [
 # gilb's own halves of the assist stack: the prompt file and the local agent.
 gilb-assist = { workspace = true }
 gilb-assist-acp = { workspace = true }
+# For the shared whisper model handed to the realtime worker — the same one
+# post-meeting transcription uses, so a meeting ending mid-panel does not load
+# a second copy.
+gilb-assist-audio = { workspace = true, features = ["whisper"] }
 async-trait = "0.1"
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 

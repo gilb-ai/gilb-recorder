@@ -31,11 +31,13 @@
 use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::Arc;
 
 use anyhow::Result;
 use gilb_assist::{AssistBackend, AssistConfig, AssistEvent, AssistHandle, EngineParams};
 use gilb_assist_audio::{
-    spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig, WhisperTranscriber,
+    spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig, LocalTranscriber, SharedModel,
+    WhisperTranscriber,
 };
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tracing::{info, warn};
@@ -88,6 +90,17 @@ pub trait AssistHost: Send + Sync + 'static {
     ///
     /// `None` means "nothing to say" and shows nothing.
     fn backend_label(&self) -> Option<String> {
+        None
+    }
+
+    /// The process-wide whisper model, when the product already has one.
+    ///
+    /// Post-meeting transcription and realtime suggestions want the same ~570 MB
+    /// file, and a meeting ending while the panel is warm is exactly when both
+    /// are live. Returning the product's [`SharedModel`] makes that one load;
+    /// the default builds a private one, which is right for a product that
+    /// transcribes nowhere else.
+    fn shared_model(&self) -> Option<Arc<SharedModel<LocalTranscriber>>> {
         None
     }
 
@@ -450,7 +463,10 @@ fn wire(app: &AppHandle) {
     let bus_for_boundary = bus.clone();
     let pipeline = spawn_assist_pipeline(
         &tap.0,
-        WhisperTranscriber::new(model, state.host.language()),
+        match state.host.shared_model() {
+            Some(shared) => WhisperTranscriber::with_shared(model, state.host.language(), shared),
+            None => WhisperTranscriber::new(model, state.host.language()),
+        },
         assist.clone(),
         AssistPipelineConfig::default(),
         Some(bus),

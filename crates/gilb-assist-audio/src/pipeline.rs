@@ -120,6 +120,22 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
                 SttChannel::Mic => Speaker::Me,
                 SttChannel::System => Speaker::Them,
             };
+            // The one line that says the whole chain is alive: audio reached
+            // the tap, survived resampling and echo cancellation, closed a
+            // segment, and came back from whisper as words. Without it a silent
+            // panel is indistinguishable from a broken pipeline, and the two
+            // have very different fixes.
+            //
+            // Length, not text: this is a recording of someone's meeting, and
+            // it does not belong in a log file that gets pasted into bug
+            // reports. The words are in the transcript, where the user knows
+            // to look for them.
+            info!(
+                speaker = speaker.as_str(),
+                chars = u.text.chars().count(),
+                at_secs = u.start_secs,
+                "assist: utterance"
+            );
             assist.push_turn(Turn {
                 speaker,
                 text: u.text,

@@ -26,6 +26,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use gilb_assist::{AssistBackend, AssistConfig};
 use gilb_assist_acp::{agent_available, AcpBackend, AcpConfig};
+use gilb_assist_audio::{LocalTranscriber, SharedModel};
 use gilb_shell_tauri::assist::{AgentChoice, AssistHost, AssistStrings};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
@@ -203,6 +204,15 @@ impl AssistHost for GilbAssistHost {
     /// — it decides which vendor sees the conversation.
     fn backend_label(&self) -> Option<String> {
         agent().map(|a| a.label)
+    }
+
+    /// The same model the post-meeting transcription worker uses.
+    ///
+    /// Without this the two paths load ~570 MB each, and the moment they
+    /// overlap — a meeting ending while the panel is still warm — is not rare,
+    /// it is every meeting.
+    fn shared_model(&self) -> Option<std::sync::Arc<SharedModel<LocalTranscriber>>> {
+        Some(crate::transcribe_worker::shared_model())
     }
 
     /// Every agent gilb knows how to reach, and whether its CLI is here.

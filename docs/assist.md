@@ -106,6 +106,26 @@ still works, just noisier.
 Whichever detector runs, its decisions travel out with the segment so the
 transcription filters reuse them instead of detecting a second time.
 
+### Is it working?
+
+One line per recognized utterance, at info:
+
+```
+assist: utterance speaker=them chars=64 at_secs=12.4
+```
+
+That single line says the whole chain is alive — audio reached the tap,
+survived resampling and echo cancellation, closed a segment, and came back
+from whisper as words. Without it a silent panel is indistinguishable from a
+broken pipeline, and the two have very different fixes. Length rather than
+text: this is a recording of someone's meeting, and it does not belong in a log
+that gets pasted into bug reports. The words are in the meeting's transcript.
+
+`tests/realtime_whisper.rs` runs the same path with the real model and asserts
+words come back, skipping itself when no model is downloaded. The stub-based
+test next to it proves the plumbing; only this one proves that whisper, fed by
+*this* segmenter at *this* rate, returns speech rather than empty strings.
+
 ## Segmentation
 
 One segmenter per channel, pause-bounded: speech has to persist briefly before

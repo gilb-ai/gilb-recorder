@@ -39,3 +39,5 @@ silero = ["dep:voice_activity_detector"]
 tokio = { workspace = true, features = ["test-util"] }
 # Reads the real-speech fixture in the silero tests.
 hound = "3"
+# The realtime-whisper test resolves the model the app downloaded.
+gilb-config = { workspace = true }
