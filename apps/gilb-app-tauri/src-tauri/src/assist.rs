@@ -454,10 +454,19 @@ impl AssistConfig for FileAssistConfig {
         true
     }
 
-    /// A local agent is slower than a cloud model, so batch harder than a
-    /// hosted backend would: fewer, better-fed requests beat a queue that
-    /// never drains.
+    /// Every utterance goes to the agent.
+    ///
+    /// This used to be 4, reasoning that a local agent is slow so fewer,
+    /// better-fed requests would beat a queue that never drains. What it
+    /// actually bought was silence: someone asks one question out loud, three
+    /// turns never arrive, and the feature looks broken. A suggestion nobody
+    /// receives is not cheaper — it is worthless.
+    ///
+    /// Bursts are still coalesced, by `EngineParams::min_analysis_interval`
+    /// rather than by a count: turns that arrive while the throttle is cooling
+    /// down go in the next request together. That batches a fast talker
+    /// without making a slow one wait for company.
     async fn turns_before_analysis(&self) -> u32 {
-        4
+        1
     }
 }
