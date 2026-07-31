@@ -11,6 +11,7 @@ name: Shell (Tauri crates)
 on:
   pull_request:
     paths:
+      - "apps/gilb-app-tauri/**"
       - "crates/gilb-shell-tauri/**"
       - "crates/gilb-assist/**"
       - "crates/gilb-assist-acp/**"
@@ -49,3 +50,17 @@ jobs:
         run: |
           cargo test -p gilb-shell-tauri --features assist
           cargo test -p gilb-assist-acp
+
+      # The app crate was linted nowhere, and it collected exactly what you
+      # would expect: doc comments orphaned by a deleted const, a pointless
+      # conversion. It needs the sidecars staged or the bundler config fails
+      # before rustc runs.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Clippy (app)
+        run: |
+          bash apps/gilb-app-tauri/scripts/build-sidecars.sh
+          cargo clippy -p gilb-app-tauri --all-targets -- -D warnings

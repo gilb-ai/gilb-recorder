@@ -44,10 +44,15 @@ fully on-device with whisper.cpp into `meeting_transcripts`.
 ## Real-time suggestions (optional)
 
 While a call is running, Gilb can transcribe it live and show short
-suggestions in a small always-on-top panel — powered by a coding agent
-you already have installed (`claude`, `gemini`, or any [ACP](https://agentclientprotocol.com)
-adapter), talked to over stdio. Nothing leaves the machine except what
-that agent itself sends.
+suggestions in a small always-on-top panel — powered by an agent on your
+own machine, talked to over [ACP](https://agentclientprotocol.com).
+Nothing leaves the machine except what that agent itself sends.
+
+It works with the coding CLI you already have — Claude Code or Gemini
+CLI. Nothing else to install: the interactive CLIs do not speak ACP
+themselves, so Gilb runs the adapter for you, fetching it with `npx` the
+first time if it is not already there. Point `GILB_ASSIST_AGENT` at
+something else if you would rather use your own.
 
 It is off by default at three levels: a Cargo feature, a switch in the
 app, and a ~570 MB speech model downloaded only if you turn it on. The
@@ -156,7 +161,7 @@ Two optional parts do leave the machine, and only if you enable them:
 
 - **Real-time suggestions** send the transcribed conversation to the
   agent you configured. Where that goes is that agent's business — a
-  cloud model if it is `claude`, nowhere if it is a local one.
+  cloud model if it is Claude or Gemini, nowhere if it is a local one.
 - **`gilb-analyzer`** posts its findings to a server, and needs
   credentials you must supply. Without them it does nothing.
 

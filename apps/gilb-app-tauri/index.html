@@ -67,27 +67,6 @@
         <h1 class="settings-title" id="settings-title" data-i18n="settings.title">Settings</h1>
 
         <div class="settings-body">
-          <div class="settings-row">
-            <div class="settings-row-text">
-              <span class="settings-row-label" id="meeting-label" data-i18n="settings.meetingLabel">
-                Enable meeting detection
-              </span>
-              <span class="settings-row-desc" data-i18n="settings.meetingDesc">
-                We'll catch the start of every call and offer to record.
-              </span>
-            </div>
-            <button
-              id="toggle-meeting"
-              class="toggle"
-              type="button"
-              role="switch"
-              aria-checked="false"
-              aria-labelledby="meeting-label"
-            >
-              <span class="toggle-knob" aria-hidden="true"></span>
-            </button>
-          </div>
-
           <div class="settings-row settings-row-stacked" id="transcription-row">
             <div class="settings-row-text">
               <span class="settings-row-label" data-i18n="settings.transcription">Transcription</span>
@@ -127,35 +106,6 @@
               </select>
             </label>
           </div>
-
-          <!-- Real-time suggestions. Next to transcription because they share
-               the speech model and the meeting that feeds it — and *not* in
-               the workspace card: what the feature needs is the agent CLI on
-               this machine, not a signed-in account. Hidden until the backend
-               reports it can run (assist_status.available). -->
-          <div class="settings-row settings-row-stacked assist-row" id="assist-row" hidden>
-            <div class="assist-row-main">
-              <div class="settings-row-text">
-                <span class="settings-row-label" id="assist-label" data-i18n="assist.label">
-                  Live suggestions
-                </span>
-                <span class="settings-row-desc" id="assist-desc"></span>
-              </div>
-              <button
-                id="toggle-assist"
-                class="toggle"
-                type="button"
-                role="switch"
-                aria-checked="false"
-                aria-labelledby="assist-label"
-              >
-                <span class="toggle-knob" aria-hidden="true"></span>
-              </button>
-            </div>
-            <div id="assist-progress" class="model-progress" hidden>
-              <div id="assist-progress-bar" class="model-progress-bar"></div>
-            </div>
-          </div>
         </div>
 
         <div class="settings-actions">
@@ -192,14 +142,83 @@
           </span>
         </div>
 
-        <div class="track" id="track-row">
-          <span class="track-state">
-            <span class="track-dot" id="track-dot" aria-hidden="true"></span>
-            <span id="track-label" data-i18n="capture.trackingLabel">Activity tracking</span>
-          </span>
-          <button id="btn-track-toggle" class="track-btn" type="button" data-i18n="capture.pause">
-            Pause
-          </button>
+        <!-- Every capture subsystem as a switch: each one turns something on
+             or off with an effect the user sees immediately, which is why they
+             live here and not behind Save/Cancel in the gear
+             (docs/ui-design.md). -->
+        <div class="card-toggles">
+          <div class="settings-row" id="track-row">
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="track-label-row">
+                <span class="track-dot" id="track-dot" aria-hidden="true"></span>
+                <span data-i18n="capture.trackingLabel">Activity tracking</span>
+              </span>
+              <span class="settings-row-desc" data-i18n="capture.trackingDesc">
+                Windows you open, keys you type, clicks, scrolling and the clipboard —
+                recorded to this Mac.
+              </span>
+            </div>
+            <button
+              id="btn-track-toggle"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="track-label-row"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="meeting-label" data-i18n="settings.meetingLabel">
+                Meeting detection
+              </span>
+              <span class="settings-row-desc" data-i18n="settings.meetingDesc">
+                We'll notice when a call starts and offer to record it.
+              </span>
+            </div>
+            <button
+              id="toggle-meeting"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="meeting-label"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <!-- Hidden until the backend reports the feature can run at all
+               (assist_status.available) — in gilb, that the agent CLI is
+               installed. -->
+          <div class="settings-row settings-row-stacked assist-row" id="assist-row" hidden>
+            <div class="assist-row-main">
+              <div class="settings-row-text">
+                <span class="settings-row-label" id="assist-label" data-i18n="assist.label">
+                  Live suggestions
+                </span>
+                <span class="settings-row-desc" id="assist-desc" data-i18n="assist.desc">
+                  During a meeting, suggestions appear over the other windows.
+                </span>
+              </div>
+              <button
+                id="toggle-assist"
+                class="toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="assist-label"
+              >
+                <span class="toggle-knob" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="assist-progress" class="model-progress" hidden>
+              <div id="assist-progress-bar" class="model-progress-bar"></div>
+            </div>
+          </div>
         </div>
 
         <p id="message" class="message" role="status" aria-live="polite"></p>

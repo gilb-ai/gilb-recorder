@@ -2,8 +2,9 @@
 //!
 //! One of the two backend shapes the engine supports (`docs/assist.md`): the
 //! same engine and the same audio pipeline as a cloud provider would use, but
-//! the turns go to an agent already running on the user's machine — `claude`,
-//! `gemini --experimental-acp`, any ACP adapter.
+//! the turns go to an agent already installed on the user's machine — Claude
+//! Code through its `claude-code-acp` adapter, `gemini --experimental-acp`, or
+//! any other ACP-speaking command.
 //!
 //! ## Why ACP and not `claude -p`
 //!
@@ -77,7 +78,9 @@ pub struct AcpConfig {
 impl Default for AcpConfig {
     fn default() -> Self {
         Self {
-            bin: PathBuf::from("claude"),
+            // The ACP adapter, not the interactive `claude` CLI — that one
+            // never answers a JSON-RPC handshake. See KNOWN_AGENTS in the app.
+            bin: PathBuf::from("claude-code-acp"),
             args: Vec::new(),
             cwd: std::env::temp_dir(),
             turn_timeout: Duration::from_secs(20),
@@ -155,9 +158,20 @@ impl AcpSession {
                 .ok_or_else(|| anyhow!("session/new returned no sessionId"))
         };
 
+        // Name the binary. The overwhelmingly likely cause is that it does not
+        // speak ACP at all — an interactive coding CLI started instead of its
+        // ACP adapter reads every byte we send and answers nothing, which is
+        // indistinguishable from "slow" until you know which command ran.
         let session_id = tokio::time::timeout(config.startup_timeout, handshake)
             .await
-            .map_err(|_| anyhow!("agent did not complete the ACP handshake in time"))??;
+            .map_err(|_| {
+                anyhow!(
+                    "`{}` did not answer the ACP handshake within {:?} — does it speak ACP? \
+                     (an interactive CLI never will; Claude Code needs the claude-code-acp adapter)",
+                    config.bin.display(),
+                    config.startup_timeout
+                )
+            })??;
 
         Ok(Self {
             conn,

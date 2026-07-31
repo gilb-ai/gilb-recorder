@@ -16,17 +16,17 @@ already map to different tables (`sessions` vs `meetings`).
 The core Layer-1 capture: accessibility actions (keyboard/mouse/AX tree) streamed
 to the DB (`sessions`). Backed by `start_capture` / `stop_capture` on the engine.
 
-- **Word: "Activity tracking"** — never "recording". Status reads
-  "Activity tracking — on / Paused".
-- **Control: Pause / Resume.** The user can stop and restart the always-on
-  capture at any time (honest for a privacy tool). Pause maps to `stop_capture`,
-  Resume to `start_capture`.
+- **Word: "Activity tracking"** — never "recording".
+- **Control: a switch** on the main window, next to the other capture switches.
+  The user can stop and restart the always-on capture at any time (honest for a
+  privacy tool); on maps to `start_capture`, off to `stop_capture`.
 - **Persistence:** the paused state is persisted. On launch Gilb auto-resumes
   tracking **only if not paused** — a deliberate pause survives restarts; it is
   never silently re-enabled.
-- **Indicator: calm, non-pulsing** — a steady dot (green = on, gray = paused),
-  with the `actions_today` count as the "data is flowing" signal. No pulse — the
-  pulse is reserved for live meeting recording.
+- **Indicator: calm, non-pulsing** — a steady dot next to the label (green =
+  on, gray = paused). It reports what the engine is actually doing, which is
+  not the same claim as the switch, which reports what the user asked for. No
+  pulse — the pulse is reserved for live meeting recording.
 - **Consent:** first-run permission (it's the core), then persistent.
 
 ### B — Meeting recording (event-driven)
@@ -38,8 +38,8 @@ call app).
 - **Word: "Recording" / "Rec"** — reserved for meetings (they produce a
   reviewable artifact). The green **pulsing** pill + countdown popups are this
   subsystem only.
-- **Control: a master on/off** ("Enable meeting detection" in Settings) gates the
-  detector; per-meeting the countdown popup is the consent.
+- **Control: a master on/off** ("Enable meeting detection", a switch on the main
+  window) gates the detector; per-meeting the countdown popup is the consent.
 - **Indicator: green pulsing pill** (`.rec-indicator`) while a meeting records.
 
 ### The rule
@@ -80,6 +80,31 @@ Mirror `.settings-overlay` / `.splash` in `src/styles.css`:
 - **Esc cancels.** Focus moves into the dialog on open (e.g. the primary button).
 - Toggled via the `hidden` attribute (`[hidden] { display: none }`), not by
   building/destroying DOM.
+
+## Switches vs settings
+
+A control that turns a **subsystem** on or off lives on the main window and
+applies the moment it is flipped: Pause/Resume for activity tracking, and the
+switches for meeting detection and live suggestions (`.card-toggles` in the
+Capture card). The effect is immediate and observable, so a pending "unsaved"
+state would only be a way for the UI to be wrong about what the app is doing —
+and burying an on/off behind a gear icon and a Save button makes people hunt
+for it.
+
+Anything **edited** — a language, a key, a path — stays in the Settings overlay
+under Save/Cancel. Rule of thumb: if the honest label is a verb ("record
+meetings", "suggest during calls") it is a switch; if it is a value, it is a
+setting.
+
+A switch's description says **what the thing is**, and does not rewrite itself
+when the switch flips. The switch already shows which way it is set; a label
+that changes underneath it makes the control harder to read, and leaves the
+user comparing two things that say the same thing differently. Transient state
+— a download's progress — is fine to show, because it is not the switch's
+label arguing with itself.
+
+If a switch fails to apply, put it back where it was and say so. Never leave it
+showing a state the backend did not accept.
 
 ## Save / Cancel semantics
 

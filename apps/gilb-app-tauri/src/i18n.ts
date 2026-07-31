@@ -29,8 +29,9 @@ const en = {
   "splash.notGranted": "not granted",
 
   "settings.title": "Settings",
-  "settings.meetingLabel": "Enable meeting detection",
-  "settings.meetingDesc": "We'll catch the start of every call and offer to record.",
+  "settings.meetingLabel": "Meeting detection",
+  "settings.meetingDesc": "We'll notice when a call starts and offer to record it.",
+  "settings.meetingFailed": "Could not change meeting detection.",
   "settings.transcription": "Transcription",
   "settings.transcriptionDesc":
     "Runs on this Mac — audio never leaves your device. Transcription turns on automatically once the model is downloaded.",
@@ -68,17 +69,12 @@ const en = {
   // The switch in the signed-in workspace card. The first turn-on downloads
   // the speech model, so the off state says so up front.
   "assist.label": "Live suggestions",
-  "assist.descOn": "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
-  "assist.descOff": "Off — no suggestions during meetings.",
-  "assist.descNeedsModel": "First turn-on downloads the speech recognition model (~570 MB).",
+  "assist.desc":
+    "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them. The first turn-on downloads a speech model (~570 MB).",
   "assist.descDownloading": "Downloading the model… {pct}%",
   "capture.trackingLabel": "Activity tracking",
-  "capture.trackingOn": "Activity tracking — on",
-  "capture.trackingPaused": "Activity tracking — paused",
-  "capture.pause": "Pause",
-  "capture.resume": "Resume",
-  "capture.trackingPausedMsg": "Activity tracking paused",
-  "capture.trackingOnMsg": "Activity tracking on",
+  "capture.trackingDesc":
+    "Windows you open, keys you type, clicks, scrolling and the clipboard — recorded to this Mac.",
   "capture.cantResume": "Couldn't resume tracking: {error}",
   "capture.cantPause": "Couldn't pause tracking: {error}",
   "capture.stopError": "stop recording error: {error}",
@@ -121,8 +117,9 @@ const ru: typeof en = {
   "splash.notGranted": "запрещено",
 
   "settings.title": "Настройки",
-  "settings.meetingLabel": "Автодетекция встреч",
+  "settings.meetingLabel": "Детекция встреч",
   "settings.meetingDesc": "Заметим начало каждого звонка и предложим записать.",
+  "settings.meetingFailed": "Не удалось переключить автодетекцию встреч.",
   "settings.transcription": "Транскрипция",
   "settings.transcriptionDesc":
     "Работает на этом Mac — аудио не покидает устройство. Транскрипция включится автоматически после загрузки модели.",
@@ -158,17 +155,12 @@ const ru: typeof en = {
   "assist.error": "Ошибка подсказок: {error}",
 
   "assist.label": "Онлайн-подсказки",
-  "assist.descOn": "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
-  "assist.descOff": "Выключены — во время встречи подсказок не будет.",
-  "assist.descNeedsModel": "При первом включении скачается модель распознавания речи (~570 МБ).",
+  "assist.desc":
+    "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть. При первом включении скачается модель речи (~570 МБ).",
   "assist.descDownloading": "Загрузка модели… {pct}%",
   "capture.trackingLabel": "Отслеживание активности",
-  "capture.trackingOn": "Отслеживание активности — включено",
-  "capture.trackingPaused": "Отслеживание активности — на паузе",
-  "capture.pause": "Пауза",
-  "capture.resume": "Возобновить",
-  "capture.trackingPausedMsg": "Отслеживание активности на паузе",
-  "capture.trackingOnMsg": "Отслеживание активности включено",
+  "capture.trackingDesc":
+    "Открытые окна, нажатия клавиш, клики, прокрутка и буфер обмена — записываются на этот Mac.",
   "capture.cantResume": "Не удалось возобновить отслеживание: {error}",
   "capture.cantPause": "Не удалось приостановить отслеживание: {error}",
   "capture.stopError": "Ошибка остановки записи: {error}",

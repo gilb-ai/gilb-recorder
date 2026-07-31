@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. App-defined commands (start_capture, stop_capture, status, open_privacy_pane, start_login, auth_status, sign_out, and the transcription model commands get_transcription_status/set_transcription_language/download_model/cancel_model_download/delete_model) are auto-allowed for local origins because no app ACL manifest is declared (see tauri-2 webview/mod.rs gate). Frontend IPC needs are limited to listen/unlisten for the 'permission', 'health', 'auth' and 'model-download' events, the opener plugin (open_privacy_pane + start_login open URLs), the autostart plugin, and the deep-link plugin used to receive the gilb://auth/callback redirect.",
+  "description": "Capability for the main window. App-defined commands (start_capture, stop_capture, status, open_privacy_pane, start_login, auth_status, sign_out, the meeting-detection switch get_meeting_detection/set_meeting_detection, the suggestions switch assist_status/assist_set_enabled, and the transcription model commands get_transcription_status/set_transcription_language/download_model/cancel_model_download/delete_model) are auto-allowed for local origins because no app ACL manifest is declared (see tauri-2 webview/mod.rs gate). Frontend IPC needs are limited to listen/unlisten for the 'health', 'recording', 'auth', 'assist-status' and 'model-download' events, the opener plugin (open_privacy_pane + start_login open URLs), the autostart plugin, and the deep-link plugin used to receive the gilb://auth/callback redirect.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",

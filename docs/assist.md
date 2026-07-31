@@ -140,8 +140,7 @@ something.
 
 `AssistBackend` is what a product plugs in. Gilb ships `gilb-assist-acp`,
 which speaks the [Agent Client Protocol](https://agentclientprotocol.com) over
-stdio to a locally installed coding agent (`claude`, `gemini`, or any ACP
-adapter — `GILB_ASSIST_AGENT` overrides the binary). ACP gives a persistent
+stdio to an agent already on the user's machine. ACP gives a persistent
 session, so the conversation is the agent's to remember (D5), and streaming,
 so a suggestion appears as it is written.
 
@@ -159,6 +158,29 @@ Three things the ACP client does that a naive JSON-RPC client would not:
 
 The system prompt has no slot in ACP, so it rides in as the opening turn —
 once per session, not on every suggestion.
+
+### Finding an agent
+
+The CLI a user has is usually *not* the thing that speaks ACP. `claude` is an
+interactive REPL: pipe an `initialize` into it and nothing comes back, so the
+session dies at the handshake timeout — a failure that looks like a hang and
+says nothing about the cause. Claude Code reaches ACP through an adapter
+package; Gemini speaks it itself behind `--experimental-acp`.
+
+So gilb looks for the *harness* and works out what to run for it:
+
+1. `GILB_ASSIST_AGENT`, if set — a wrapper script, an in-house adapter.
+2. An adapter already installed (`claude-agent-acp`, or the older
+   `claude-code-acp`).
+3. The CLI itself, when it speaks ACP with a flag.
+4. Otherwise `npx -y @agentclientprotocol/claude-agent-acp`, which fetches the
+   adapter on first use and serves it from the npx cache afterwards.
+
+Nobody is asked to install a second thing. That fourth step is why: an error
+telling a user to run an npm command is a feature that does not work, and the
+tools that pioneered this (Zed, block/buzz) fetch the adapter the same way. The
+first cold start pays a download, so the handshake deadline is raised to three
+minutes when the npx path is taken and left at thirty seconds otherwise.
 
 The prompt itself lives in `~/Documents/Gilb/prompts/realtime_assist.md`, shipped with a default
 on first run and re-read whenever a session opens — once per meeting, since

@@ -12,10 +12,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::transcribe_worker::{TranscribeTx, TranscriptionJob};
 
-/// HuggingFace URL for the ggml large-v3-turbo (q5_0) model we ship.
-
-/// Emit a progress update at most every ~4 MB to avoid flooding the webview.
-
 /// Shared cancel flag for an in-flight download, managed by Tauri so
 /// [`cancel_model_download`] can signal [`download_model`].
 #[derive(Default)]

@@ -42,10 +42,10 @@ const SHOW_TRACKING_UI = FEATURE_TRACKING && FEATURE_TRACKING_UI;
 // permission prompt since the grant already exists.
 const FEATURE_TRACKING_AUTOSTART =
   import.meta.env.VITE_FEATURE_TRACKING_AUTOSTART !== "0";
-// Real-time meeting suggestions. The switch lives in the signed-in workspace
-// card — the feature runs on the workspace's prompt and provider — and the
-// backend decides whether to offer it at all (a shell without the assist
-// commands simply keeps the row hidden).
+// Real-time meeting suggestions. The switch sits on the main window next to
+// meeting detection — both are capture subsystems the user turns on and off —
+// and the backend decides whether to offer it at all (a shell without the
+// assist commands simply keeps the row hidden).
 const FEATURE_ASSIST = import.meta.env.VITE_FEATURE_ASSIST !== "0";
 
 // Set once per launch after the first successful `start_capture` (manual or
@@ -261,19 +261,19 @@ async function refresh() {
   }
   if (mySeq !== refreshSeq) return;
 
-  // Activity tracking (subsystem A): calm status + Pause/Resume. Never
+  // Activity tracking (subsystem A): a switch, with the state spelled out
+  // underneath and the calm dot next to the label — the switch says what the
+  // user asked for, the dot says what the engine is actually doing. Never
   // "recording". A meetings-only build hides the row and never auto-starts; a
   // headless-tracking build keeps the engine but hides the row (SHOW_TRACKING_UI).
   if (SHOW_TRACKING_UI) {
     tracking = s.recording;
-    setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
     const dot = $("track-dot");
     if (dot) {
       dot.classList.toggle("on", tracking);
       dot.classList.toggle("paused", !tracking);
     }
-    const toggleBtn = $<HTMLButtonElement>("btn-track-toggle");
-    if (toggleBtn) toggleBtn.textContent = tracking ? t("capture.pause") : t("capture.resume");
+    $("btn-track-toggle")?.setAttribute("aria-checked", tracking ? "true" : "false");
   }
 
   updateSplash(s.permissions, s.platform);
@@ -360,14 +360,10 @@ function renderAssist(s: AssistStatus | null) {
     return;
   }
   progress?.setAttribute("hidden", "");
-  // Three states, not two: on, off, and off-because-the-model-is-missing —
-  // the ~570 MB warning is only true before the first download.
-  const desc = s.enabled
-    ? "assist.descOn"
-    : s.model_ready
-      ? "assist.descOff"
-      : "assist.descNeedsModel";
-  setText("assist-desc", t(desc));
+  // Back to the static description. It does not change with the switch: a
+  // label that rewrites itself as you flip it makes the control harder to
+  // read, not easier — the switch already says which way it is.
+  setText("assist-desc", t("assist.desc"));
 }
 
 async function refreshAssist() {
@@ -417,29 +413,17 @@ async function signOut() {
   refreshAuth();
 }
 
-// Pre-open snapshot of the meeting toggle, so Cancel can revert it without
-// persisting (Save is the only path that persists + applies).
-let settingsToggleSnapshot = false;
-
 // Settings open as a modal overlay inside the main window — no second OS
 // window. Open loads the persisted state fresh; Save persists, Cancel discards.
+// What is left in here is transcription: a model to download and a language to
+// pick, which is editing, not switching.
 async function openSettings() {
   const overlay = $("settings-overlay");
-  const toggle = $<HTMLButtonElement>("toggle-meeting");
   if (!overlay) return;
-  if (toggle) {
-    try {
-      const on = await invoke<boolean>("get_meeting_detection");
-      toggle.setAttribute("aria-checked", on ? "true" : "false");
-    } catch (e) {
-      console.warn("get_meeting_detection failed", e);
-    }
-  }
-  settingsToggleSnapshot = toggle?.getAttribute("aria-checked") === "true";
+  // Only transcription is left in here, and only its language picker is part
+  // of Save/Cancel — both capture switches moved to the main window, where
+  // they apply on the spot.
   if (FEATURE_TRANSCRIPTION) await loadTranscription();
-  // The switch lives in this overlay, so its state has to be current when the
-  // overlay opens — the agent CLI may have been installed since app start.
-  if (FEATURE_ASSIST) await refreshAssist();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
@@ -474,15 +458,8 @@ function navigateTray(target: string) {
 
 async function closeSettings(save: boolean) {
   const overlay = $("settings-overlay");
-  const toggle = $<HTMLButtonElement>("toggle-meeting");
   const lang = $<HTMLSelectElement>("select-language");
   if (save) {
-    const enabled = toggle?.getAttribute("aria-checked") === "true";
-    try {
-      await invoke("set_meeting_detection", { enabled });
-    } catch (e) {
-      console.warn("set_meeting_detection failed", e);
-    }
     // The model download/delete are immediate; only the language is part of
     // Save/Cancel. Persist it only when it actually changed.
     if (lang && lang.value !== settingsLangSnapshot) {
@@ -492,12 +469,8 @@ async function closeSettings(save: boolean) {
         console.warn("set_transcription_language failed", e);
       }
     }
-  } else {
-    if (toggle) {
-      // Cancel: revert the toggle to its pre-open state (nothing persisted).
-      toggle.setAttribute("aria-checked", settingsToggleSnapshot ? "true" : "false");
-    }
-    if (lang) lang.value = settingsLangSnapshot; // revert the language picker
+  } else if (lang) {
+    lang.value = settingsLangSnapshot; // Cancel: revert the language picker
   }
   if (overlay) overlay.hidden = true;
 }
@@ -603,13 +576,41 @@ async function deleteModel() {
 }
 
 // Flips the toggle's visual state; the value is persisted/applied on Save.
+/// Meeting detection: a switch on the main window, applied the moment it is
+/// flipped. No Save step — the effect (the detector starting or stopping) is
+/// immediate and visible, so a pending "unsaved" state would only be a way to
+/// be wrong about what the app is doing. If the backend refuses, the switch
+/// goes back where it was rather than lying about what is on.
 function initMeetingToggle() {
   const toggle = $<HTMLButtonElement>("toggle-meeting");
   if (!toggle) return;
-  toggle.addEventListener("click", () => {
-    const on = toggle.getAttribute("aria-checked") === "true";
-    toggle.setAttribute("aria-checked", on ? "false" : "true");
+  void refreshMeetingToggle();
+  toggle.addEventListener("click", async () => {
+    const was = toggle.getAttribute("aria-checked") === "true";
+    const enabled = !was;
+    toggle.setAttribute("aria-checked", enabled ? "true" : "false");
+    toggle.disabled = true;
+    try {
+      await invoke("set_meeting_detection", { enabled });
+    } catch (e) {
+      console.warn("set_meeting_detection failed", e);
+      toggle.setAttribute("aria-checked", was ? "true" : "false");
+      setMessage(t("settings.meetingFailed"), "error");
+    } finally {
+      toggle.disabled = false;
+    }
   });
+}
+
+async function refreshMeetingToggle() {
+  const toggle = $<HTMLButtonElement>("toggle-meeting");
+  if (!toggle) return;
+  try {
+    const on = await invoke<boolean>("get_meeting_detection");
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+  } catch (e) {
+    console.warn("get_meeting_detection failed", e);
+  }
 }
 
 async function openPrivacyPane(pane: PrivacyPane) {
@@ -651,21 +652,26 @@ async function persistPaused(paused: boolean) {
   }
 }
 
-// User Pause/Resume. Persists the choice so it survives restarts.
+// The activity-tracking switch. Persists the choice so it survives restarts —
+// a deliberate pause is never silently undone by the next launch. The switch
+// moves optimistically and `refresh()` has the final word: if the engine
+// refused to start or stop, the next status snapshot puts it back.
 async function toggleTracking() {
   const btn = $<HTMLButtonElement>("btn-track-toggle");
-  if (btn) btn.disabled = true;
-  if (tracking) {
-    if (await applyStop()) {
-      await persistPaused(true);
-      setMessage(t("capture.trackingPausedMsg"));
-    }
-  } else {
-    if (await applyStart()) {
-      await persistPaused(false);
-      setMessage(t("capture.trackingOnMsg"));
-    }
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-checked", tracking ? "false" : "true");
   }
+  // No "…paused" / "…on" message: the switch and the line under it already
+  // say the state, and a status line that stays on screen for the rest of the
+  // session reads as a problem long after it stopped being news. Errors still
+  // speak up — those the user has not already seen.
+  if (tracking) {
+    if (await applyStop()) await persistPaused(true);
+  } else {
+    if (await applyStart()) await persistPaused(false);
+  }
+  setMessage("");
   if (btn) btn.disabled = false;
   refresh();
 }

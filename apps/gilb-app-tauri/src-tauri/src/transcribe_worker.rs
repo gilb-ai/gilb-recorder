@@ -69,7 +69,7 @@ async fn load_model() -> Option<Arc<LocalTranscriber>> {
     }
     let language = load_preferences().transcription_language;
     match shared_model()
-        .get(move || LocalTranscriber::new(&path, language).map_err(Into::into))
+        .get(move || LocalTranscriber::new(&path, language))
         .await
     {
         Ok(model) => Some(model),

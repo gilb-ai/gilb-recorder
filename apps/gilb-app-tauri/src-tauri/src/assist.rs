@@ -31,11 +31,71 @@ use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
-/// Override the agent binary; also how a test or a power user points gilb at
-/// `gemini`, a wrapper script, or a Hermes ACP adapter.
+/// Override the agent command; also how a power user points gilb at a wrapper
+/// script or an in-house ACP adapter.
 const AGENT_BIN_ENV: &str = "GILB_ASSIST_AGENT";
-/// Extra arguments, space-separated (e.g. `--experimental-acp`).
+/// Extra arguments, space-separated. Replaces the defaults for a known agent.
 const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
+
+/// Coding agents we know how to reach over ACP, in preference order.
+///
+/// The CLI a user has installed is usually **not** the thing that speaks ACP.
+/// `claude` is an interactive REPL: pipe an ACP `initialize` into it and
+/// nothing comes back, and the session dies at the handshake timeout. Claude
+/// Code reaches ACP through an adapter package; Gemini speaks it itself behind
+/// a flag.
+///
+/// So: find the CLI, then work out what to run *for* it. Nothing here asks the
+/// user to install a second thing — if the adapter is not on disk it is
+/// fetched by `npx` on first use, which is how the editors that pioneered this
+/// (Zed, block/buzz) do it too.
+const HARNESSES: &[Harness] = &[
+    Harness {
+        cli: "claude",
+        // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
+        // `@agentclientprotocol/claude-agent-acp`, and a machine may have
+        // either installed. We *fetch* the current one.
+        adapter_bin: Some(&["claude-agent-acp", "claude-code-acp"]),
+        npx_package: Some("@agentclientprotocol/claude-agent-acp"),
+        cli_acp_args: &[],
+    },
+    Harness {
+        cli: "gemini",
+        adapter_bin: None,
+        npx_package: None,
+        cli_acp_args: &["--experimental-acp"],
+    },
+];
+
+impl Harness {
+    /// An adapter for this harness that is already installed, if any.
+    fn installed_adapter(&self) -> Option<PathBuf> {
+        self.adapter_bin?
+            .iter()
+            .map(|name| resolve(name))
+            .find(|bin| agent_available(bin))
+    }
+}
+
+struct Harness {
+    /// The coding CLI the user installed. Its presence is what makes this
+    /// harness a candidate — the adapter is our problem, not theirs.
+    cli: &'static str,
+    /// Adapter executables to look for before fetching one, newest name first.
+    adapter_bin: Option<&'static [&'static str]>,
+    /// npm package providing that adapter, run through `npx` when the binary
+    /// is not installed. First run downloads it; later runs come from the npx
+    /// cache.
+    npx_package: Option<&'static str>,
+    /// Arguments that put the CLI *itself* into ACP mode, for agents that need
+    /// no adapter. Empty means "this CLI cannot speak ACP on its own".
+    cli_acp_args: &'static [&'static str],
+}
+
+/// The first ACP turn after a cold `npx` start includes downloading the
+/// adapter, which is a different order of magnitude from starting a binary
+/// that is already on disk.
+const NPX_STARTUP_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// The bundled copy of the prompt, inside the app's resources — a file the
 /// packager ships, not a string compiled into the binary. Seeded into the
@@ -75,19 +135,26 @@ impl AssistHost for GilbAssistHost {
     /// No agent, no feature. Same shape as the whisper-model gate: the UI shows
     /// what is missing instead of failing once per suggestion.
     fn available(&self) -> bool {
-        agent_available(&agent_bin())
+        agent().is_some()
     }
 
     fn engine(&self) -> Result<(Box<dyn AssistConfig>, Box<dyn AssistBackend>)> {
         let config = FileAssistConfig::load(self.bundled.as_deref())?;
+        let agent = agent().ok_or_else(|| {
+            anyhow!(
+                "no coding agent found — install Claude Code or Gemini CLI, \
+                 or point {AGENT_BIN_ENV} at an ACP-speaking command"
+            )
+        })?;
+        info!(bin = %agent.bin.display(), args = ?agent.args, "assist backend");
         let acp = AcpConfig {
-            bin: agent_bin(),
-            args: agent_args(),
+            bin: agent.bin,
+            args: agent.args,
+            startup_timeout: agent.startup_timeout,
             // The agent gets a scratch directory, not the user's project: a
             // meeting prompter has no business reading the working tree.
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
-            ..AcpConfig::default()
         };
         Ok((Box::new(config), Box::new(AcpBackend::new(acp))))
     }
@@ -98,23 +165,85 @@ impl AssistHost for GilbAssistHost {
             app_name: "gilb".into(),
             model_downloaded: "Speech model ready — suggestions start at the next meeting.".into(),
             model_failed: "Could not download the speech model. Try again from the app.".into(),
-            unavailable: "install the agent CLI first".into(),
+            unavailable: "needs Claude Code or Gemini CLI installed".into(),
         }
     }
 }
 
-/// Same resolution the analyzer uses for `claude -p`: the override wins, then
-/// the known install dirs, then PATH. A bundled `.app` starts with a minimal
-/// PATH, so probing is not optional.
-fn agent_bin() -> PathBuf {
-    PathBuf::from(gilb_config::resolve_agent_bin("claude", AGENT_BIN_ENV))
+/// What to spawn for an ACP session.
+struct Agent {
+    bin: PathBuf,
+    args: Vec<String>,
+    /// Longer when the first run has to fetch the adapter.
+    startup_timeout: Duration,
 }
 
-fn agent_args() -> Vec<String> {
-    std::env::var(AGENT_ARGS_ENV)
-        .ok()
-        .map(|args| args.split_whitespace().map(str::to_string).collect())
-        .unwrap_or_default()
+/// The ACP agent to run, resolved from what the user already has installed.
+///
+/// The override wins outright. Otherwise the first [`HARNESSES`] entry whose
+/// CLI is present wins, and we work out what to run for it: an installed
+/// adapter binary, else the CLI itself if it speaks ACP, else `npx` fetching
+/// the adapter. Probing goes through the known install dirs as well as PATH —
+/// a bundled `.app` starts with a minimal PATH.
+///
+/// `None` when the user has no coding agent at all. That is a real state, not
+/// an error: the UI hides the feature rather than offering a switch that ends
+/// in a handshake timeout every meeting.
+fn agent() -> Option<Agent> {
+    let env_args = std::env::var(AGENT_ARGS_ENV).ok().map(|args| {
+        args.split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    });
+
+    if let Ok(bin) = std::env::var(AGENT_BIN_ENV) {
+        if !bin.trim().is_empty() {
+            return Some(Agent {
+                bin: PathBuf::from(bin),
+                args: env_args.unwrap_or_default(),
+                startup_timeout: AcpConfig::default().startup_timeout,
+            });
+        }
+    }
+
+    HARNESSES.iter().find_map(|h| {
+        // An adapter already on disk beats fetching one.
+        if let Some(bin) = h.installed_adapter() {
+            return Some(Agent {
+                bin,
+                args: env_args.clone().unwrap_or_default(),
+                startup_timeout: AcpConfig::default().startup_timeout,
+            });
+        }
+        // The harness itself has to be installed for either remaining path:
+        // the adapter drives that CLI, and npx-fetching one for a CLI the user
+        // does not have would fail slowly instead of quickly.
+        if !agent_available(&resolve(h.cli)) {
+            return None;
+        }
+        if !h.cli_acp_args.is_empty() {
+            return Some(Agent {
+                bin: resolve(h.cli),
+                args: env_args
+                    .clone()
+                    .unwrap_or_else(|| h.cli_acp_args.iter().map(|a| a.to_string()).collect()),
+                startup_timeout: AcpConfig::default().startup_timeout,
+            });
+        }
+        let package = h.npx_package?;
+        let npx = resolve("npx");
+        agent_available(&npx).then(|| Agent {
+            bin: npx,
+            // `-y` so a first run installs without waiting on a prompt nobody
+            // is there to answer.
+            args: vec!["-y".into(), package.into()],
+            startup_timeout: NPX_STARTUP_TIMEOUT,
+        })
+    })
+}
+
+fn resolve(name: &str) -> PathBuf {
+    PathBuf::from(gilb_config::resolve_agent_bin(name, AGENT_BIN_ENV))
 }
 
 /// The prompt, from `<data dir>/prompts/realtime_assist.md`. Read when a
