@@ -115,6 +115,10 @@ pub struct SessionChoice {
 pub struct SessionOption {
     pub id: String,
     pub name: String,
+    /// ACP category (`"model"`, `"thought_level"`, `"mode"`…). More stable
+    /// across agents than the id: Claude Code calls its effort knob `effort`,
+    /// Codex calls it `reasoning_effort`, both file it under `thought_level`.
+    pub category: String,
     /// The agent's own current value — its default when nothing was applied.
     pub current: String,
     pub choices: Vec<SessionChoice>,
@@ -168,6 +172,11 @@ pub async fn probe_session_options(config: &AcpConfig) -> Result<Vec<SessionOpti
                     Some(SessionOption {
                         id: o.get("id")?.as_str()?.to_string(),
                         name: o.get("name")?.as_str()?.to_string(),
+                        category: o
+                            .get("category")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_string(),
                         current: o
                             .get("currentValue")
                             .and_then(Value::as_str)

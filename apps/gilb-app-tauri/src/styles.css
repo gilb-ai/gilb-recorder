@@ -958,3 +958,17 @@ body.assist-window {
   .agent-option:hover:not(:disabled) { background: #2c2f3a; }
   .agent-option.chosen { border-color: #60a5fa; color: #93c5fd; }
 }
+
+/* Settings row waiting on the agent: the placeholder text carries the message,
+   the pulse says it is alive. Not the sweep bar — nothing is downloading, we
+   are waiting on one process to answer a handshake. */
+.settings-row[aria-busy="true"] select {
+  animation: busy-pulse 1.2s ease-in-out infinite;
+}
+@keyframes busy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-row[aria-busy="true"] select { animation: none; opacity: 0.6; }
+}

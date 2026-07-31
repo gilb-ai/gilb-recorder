@@ -73,6 +73,7 @@ const HARNESSES: &[Harness] = &[
         name: "Claude Code",
         preferred_model: Some("haiku"),
         preferred_effort: Some("low"),
+        effort_config_id: "effort",
         cli: &["claude"],
         // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
         // `@agentclientprotocol/claude-agent-acp`, and a machine may have
@@ -84,8 +85,12 @@ const HARNESSES: &[Harness] = &[
     Harness {
         id: "codex",
         name: "Codex",
-        preferred_model: None,
-        preferred_effort: None,
+        // "Fast and affordable" in Codex's own words. If a future adapter
+        // drops the value, seeding skips it and the agent default stands —
+        // preferences are matched against what is advertised, never assumed.
+        preferred_model: Some("gpt-5.6-luna"),
+        preferred_effort: Some("low"),
+        effort_config_id: "reasoning_effort",
         cli: &["codex"],
         adapter_bin: Some(&["codex-acp"]),
         npx_package: Some("@agentclientprotocol/codex-acp"),
@@ -96,6 +101,7 @@ const HARNESSES: &[Harness] = &[
         name: "Cursor",
         preferred_model: None,
         preferred_effort: None,
+        effort_config_id: "effort",
         // Cursor renamed its CLI from `cursor-agent` to `agent`. The specific
         // name goes first: `agent` is generic enough to belong to something
         // else entirely on a given machine.
@@ -137,6 +143,10 @@ struct Harness {
     preferred_model: Option<&'static str>,
     /// Same for reasoning effort.
     preferred_effort: Option<&'static str>,
+    /// What this agent calls the effort knob in its `configOptions`. gilb's
+    /// canonical id is `effort` (prefs, UI); the wire uses the agent's own —
+    /// Claude Code says `effort`, Codex says `reasoning_effort`.
+    effort_config_id: &'static str,
     /// What to call it in the UI — the product's name, not our binary.
     name: &'static str,
     /// Names the coding CLI may go by, most specific first. Its presence is
@@ -218,7 +228,7 @@ impl AssistHost for GilbAssistHost {
         let mut config_options = Vec::new();
         for (env, config_id, saved) in [
             (MODEL_ENV, "model", prefs.assist_model),
-            (EFFORT_ENV, "effort", prefs.assist_effort),
+            (EFFORT_ENV, agent.effort_config_id, prefs.assist_effort),
         ] {
             let value = std::env::var(env).ok().filter(|v| !v.trim().is_empty());
             if let Some(value) = value.or(saved) {
@@ -260,21 +270,32 @@ impl AssistHost for GilbAssistHost {
             ..AcpConfig::default()
         };
         let options = tauri::async_runtime::block_on(gilb_assist_acp::probe_session_options(&acp))?;
+        // Select by *category*, not id: Claude Code calls its effort knob
+        // `effort`, Codex calls it `reasoning_effort`, and both file it under
+        // `thought_level`. The UI and prefs speak gilb's canonical ids
+        // (`model`/`effort`); the wire id is the harness's business
+        // ([`Harness::effort_config_id`]).
         Ok(options
             .into_iter()
-            .filter(|o| o.id == "model" || o.id == "effort")
-            .map(|o| SessionOptionInfo {
-                id: o.id,
-                name: o.name,
-                agent_default: o.current,
-                choices: o
-                    .choices
-                    .into_iter()
-                    .map(|c| SessionChoiceInfo {
-                        value: c.value,
-                        label: c.label,
-                    })
-                    .collect(),
+            .filter_map(|o| {
+                let id = match o.category.as_str() {
+                    "model" => "model",
+                    "thought_level" => "effort",
+                    _ => return None,
+                };
+                Some(SessionOptionInfo {
+                    id: id.to_string(),
+                    name: o.name,
+                    agent_default: o.current,
+                    choices: o
+                        .choices
+                        .into_iter()
+                        .map(|c| SessionChoiceInfo {
+                            value: c.value,
+                            label: c.label,
+                        })
+                        .collect(),
+                })
             })
             .collect())
     }
@@ -335,20 +356,7 @@ impl AssistHost for GilbAssistHost {
         let options = tauri::async_runtime::block_on(gilb_assist_acp::probe_session_options(&acp))
             .with_context(|| format!("{} could not start", harness.name))?;
 
-        let advertised = |id: &str, wanted: &str| {
-            options
-                .iter()
-                .find(|o| o.id == id)
-                .is_some_and(|o| o.choices.iter().any(|c| c.value == wanted))
-        };
-        let model = harness
-            .preferred_model
-            .filter(|m| advertised("model", m))
-            .map(str::to_string);
-        let effort = harness
-            .preferred_effort
-            .filter(|e| advertised("effort", e))
-            .map(str::to_string);
+        let (model, effort) = seed_choices(harness, &options);
         if model.is_some() || effort.is_some() {
             info!(?model, ?effort, "assist session defaults for this agent");
             gilb_config::update_preferences(|p| {
@@ -408,6 +416,8 @@ struct Agent {
     startup_timeout: Duration,
     /// For the UI: which agent this is, and how we are reaching it.
     label: String,
+    /// [`Harness::effort_config_id`] of the harness this came from.
+    effort_config_id: &'static str,
 }
 
 /// The ACP agent to run, resolved from what the user already has installed.
@@ -456,6 +466,7 @@ fn agent() -> Option<Agent> {
                 args: env_args.unwrap_or_default(),
                 startup_timeout: AcpConfig::default().startup_timeout,
                 label: format!("{label} (set by {AGENT_BIN_ENV})"),
+                effort_config_id: "effort",
             });
         }
     }
@@ -477,6 +488,7 @@ fn agent() -> Option<Agent> {
                 args: env_args.clone().unwrap_or_default(),
                 startup_timeout: AcpConfig::default().startup_timeout,
                 label: h.name.to_string(),
+                effort_config_id: h.effort_config_id,
             });
         }
         // The harness itself has to be installed for either remaining path:
@@ -491,6 +503,7 @@ fn agent() -> Option<Agent> {
                     .unwrap_or_else(|| h.cli_acp_args.iter().map(|a| a.to_string()).collect()),
                 startup_timeout: AcpConfig::default().startup_timeout,
                 label: h.name.to_string(),
+                effort_config_id: h.effort_config_id,
             });
         }
         let package = h.npx_package?;
@@ -502,12 +515,42 @@ fn agent() -> Option<Agent> {
             args: vec!["-y".into(), package.into()],
             startup_timeout: NPX_STARTUP_TIMEOUT,
             label: h.name.to_string(),
+            effort_config_id: h.effort_config_id,
         })
     })
 }
 
 fn resolve(name: &str) -> PathBuf {
     PathBuf::from(gilb_config::resolve_agent_bin(name, AGENT_BIN_ENV))
+}
+
+/// The session defaults to seed for a freshly set-up agent: the harness's
+/// preferred fast tier, but **only** the parts this agent actually advertises.
+///
+/// `None` means "leave the agent's own default" — which is the whole fallback
+/// story: a preference that stopped existing (an adapter renamed its tiers, a
+/// model was retired) is silently skipped, never sent, and can never fail the
+/// setup. Categories, not ids, identify the knobs: Codex spells effort
+/// `reasoning_effort`, Claude Code spells it `effort`.
+fn seed_choices(
+    harness: &Harness,
+    options: &[gilb_assist_acp::SessionOption],
+) -> (Option<String>, Option<String>) {
+    let advertised = |category: &str, wanted: &str| {
+        options
+            .iter()
+            .find(|o| o.category == category)
+            .is_some_and(|o| o.choices.iter().any(|c| c.value == wanted))
+    };
+    let model = harness
+        .preferred_model
+        .filter(|m| advertised("model", m))
+        .map(str::to_string);
+    let effort = harness
+        .preferred_effort
+        .filter(|e| advertised("thought_level", e))
+        .map(str::to_string);
+    (model, effort)
 }
 
 /// The prompt, from `<data dir>/prompts/realtime_assist.md`. Read when a
@@ -569,5 +612,88 @@ impl AssistConfig for FileAssistConfig {
     /// without making a slow one wait for company.
     async fn turns_before_analysis(&self) -> u32 {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gilb_assist_acp::{SessionChoice, SessionOption};
+
+    fn opt(category: &str, id: &str, values: &[&str]) -> SessionOption {
+        SessionOption {
+            id: id.into(),
+            name: id.into(),
+            category: category.into(),
+            current: values.first().unwrap_or(&"").to_string(),
+            choices: values
+                .iter()
+                .map(|v| SessionChoice {
+                    value: v.to_string(),
+                    label: v.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    fn claude() -> &'static Harness {
+        HARNESSES.iter().find(|h| h.id == "claude").unwrap()
+    }
+    fn codex() -> &'static Harness {
+        HARNESSES.iter().find(|h| h.id == "codex").unwrap()
+    }
+
+    #[test]
+    fn preferred_tier_is_seeded_when_the_agent_advertises_it() {
+        let options = [
+            opt("model", "model", &["default", "sonnet", "haiku"]),
+            opt("thought_level", "effort", &["default", "low"]),
+        ];
+        assert_eq!(
+            seed_choices(claude(), &options),
+            (Some("haiku".into()), Some("low".into()))
+        );
+    }
+
+    /// The contract this module was asked to keep: a preference the agent does
+    /// not advertise is skipped — the agent's own default stands, and setup
+    /// never fails over a model that stopped existing.
+    #[test]
+    fn a_vanished_preference_falls_back_to_the_agent_default() {
+        let options = [
+            // An adapter update renamed every tier; "haiku" is gone.
+            opt("model", "model", &["fast-2", "deep-2"]),
+            // And the effort knob disappeared entirely.
+        ];
+        assert_eq!(seed_choices(claude(), &options), (None, None));
+    }
+
+    /// Codex spells the effort knob `reasoning_effort`; the category is what
+    /// identifies it. An id-based match would silently skip the seed.
+    #[test]
+    fn codex_effort_is_found_by_category_not_id() {
+        let options = [
+            opt(
+                "model",
+                "model",
+                &["gpt-5.5", "gpt-5.6-luna", "gpt-5.4-mini"],
+            ),
+            opt(
+                "thought_level",
+                "reasoning_effort",
+                &["low", "medium", "high"],
+            ),
+        ];
+        assert_eq!(
+            seed_choices(codex(), &options),
+            (Some("gpt-5.6-luna".into()), Some("low".into()))
+        );
+    }
+
+    /// No options at all — an adapter that advertises nothing. Nothing seeded,
+    /// nothing sent, nothing failed.
+    #[test]
+    fn an_agent_with_no_knobs_seeds_nothing() {
+        assert_eq!(seed_choices(claude(), &[]), (None, None));
     }
 }

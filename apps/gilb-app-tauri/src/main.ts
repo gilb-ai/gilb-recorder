@@ -660,6 +660,24 @@ type SessionOptionsPayload = {
 async function loadAssistOptions() {
   const row = $("assist-model-row");
   if (!row) return;
+  // The first ask starts the agent — seconds, not milliseconds. An empty
+  // select for that long reads as broken, so say what is happening: the row
+  // shows immediately with a disabled "Asking the agent…" placeholder, and
+  // the real choices replace it when they land.
+  const placeholder = (selectId: string) => {
+    const select = $<HTMLSelectElement>(selectId);
+    if (!select) return;
+    select.textContent = "";
+    const el = document.createElement("option");
+    el.value = "";
+    el.textContent = t("assist.optionsLoading");
+    select.appendChild(el);
+    select.disabled = true;
+  };
+  placeholder("select-assist-model");
+  $("assist-effort-wrap")?.setAttribute("hidden", "");
+  row.setAttribute("aria-busy", "true");
+  row.hidden = false;
   let payload: SessionOptionsPayload;
   try {
     payload = await invoke<SessionOptionsPayload>("assist_session_options");
@@ -667,8 +685,10 @@ async function loadAssistOptions() {
     // No agent set up (or it failed to answer): nothing to configure.
     console.warn("assist_session_options failed", e);
     row.hidden = true;
+    row.removeAttribute("aria-busy");
     return;
   }
+  row.removeAttribute("aria-busy");
   const fill = (
     selectId: string,
     optionId: string,
@@ -689,6 +709,7 @@ async function loadAssistOptions() {
       select.appendChild(el);
     }
     select.value = chosen ?? "";
+    select.disabled = false;
     return true;
   };
   const hasModel = fill("select-assist-model", "model", payload.model);
