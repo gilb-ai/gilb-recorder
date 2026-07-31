@@ -640,7 +640,23 @@ pub fn agent_bin_dirs() -> Vec<String> {
         // have none.
         format!("{home}/.volta/bin"),
         format!("{home}/.bun/bin"),
+        // Where opencode's install script puts its binary. It picks the first
+        // of `$OPENCODE_INSTALL_DIR`, `$XDG_BIN_DIR`, `~/bin`, `~/.opencode/bin`
+        // that it can use, so all four are worth looking in — a user who ran
+        // the documented one-liner and a gilb launched from Finder would
+        // otherwise disagree about whether they have an agent.
+        format!("{home}/bin"),
+        format!("{home}/.opencode/bin"),
     ];
+    // Two of those four are the user's own choice, so they are read rather
+    // than guessed.
+    for var in ["OPENCODE_INSTALL_DIR", "XDG_BIN_DIR"] {
+        if let Ok(dir) = std::env::var(var) {
+            if !dir.trim().is_empty() {
+                dirs.push(dir);
+            }
+        }
+    }
     dirs.extend(node_version_dirs(&home));
     dirs
 }
@@ -714,6 +730,41 @@ pub fn agent_path_env() -> String {
 
 #[cfg(test)]
 mod tests {
+
+    /// The install locations an agent can legitimately land in, which a GUI
+    /// app will never learn from PATH: it is handed the launchd environment,
+    /// not a login shell's. Every one of these has cost a user their agent at
+    /// some point — the list is a record of that, not a guess.
+    #[test]
+    fn agent_search_covers_the_documented_install_locations() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dirs = agent_bin_dirs();
+        for expected in [
+            format!("{home}/.local/bin"),    // npm --prefix, pipx
+            format!("{home}/bin"),           // opencode, third choice
+            format!("{home}/.opencode/bin"), // opencode, default fallback
+            format!("{home}/.bun/bin"),      // bun install -g
+            "/opt/homebrew/bin".to_string(), // brew on Apple silicon
+        ] {
+            assert!(
+                dirs.contains(&expected),
+                "{expected} is not searched; installed agents there stay invisible"
+            );
+        }
+    }
+
+    /// `$OPENCODE_INSTALL_DIR` and `$XDG_BIN_DIR` are the user's own answer to
+    /// where binaries go, so they are read rather than assumed.
+    #[test]
+    fn a_configured_install_dir_is_searched() {
+        // SAFETY: single-threaded test process; the variable is read back
+        // immediately and removed after.
+        unsafe { std::env::set_var("OPENCODE_INSTALL_DIR", "/tmp/gilb-test-agent-dir") };
+        let dirs = agent_bin_dirs();
+        unsafe { std::env::remove_var("OPENCODE_INSTALL_DIR") };
+        assert!(dirs.iter().any(|d| d == "/tmp/gilb-test-agent-dir"));
+    }
+
     use super::*;
 
     #[test]
