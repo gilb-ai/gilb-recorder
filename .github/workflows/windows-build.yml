@@ -3,12 +3,12 @@ name: Windows build
 # Builds the Tauri desktop app on a hosted Windows runner and uploads the
 # NSIS installer as an artifact. Useful for validating the Windows capture
 # backend end-to-end without a local Windows toolchain. This is a smoke
-# build — signed/updater release builds live in windows-release.yml.
+# build — signed, updater-enabled release builds are cut by release.yml.
 
 on:
   workflow_dispatch:
   push:
-    branches: [main, windows-capture-backend]
+    branches: [main]
 
 jobs:
   build:

@@ -9,7 +9,6 @@ description = "Assist backend over the Agent Client Protocol: suggestions from a
 [dependencies]
 anyhow = { workspace = true }
 async-trait = "0.1"
-serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

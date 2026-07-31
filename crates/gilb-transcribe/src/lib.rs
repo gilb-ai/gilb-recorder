@@ -497,8 +497,8 @@ mod local {
                 // Pin "auto" to a concrete language before the real pass, so the
                 // decoder can't switch languages — or start translating —
                 // partway through. Costs a probe pass, and only when the caller
-                // asked for auto-detection: Rodnik passes a fixed language and
-                // pays nothing.
+                // asked for auto-detection — a caller that passes a fixed
+                // language pays nothing.
                 let language = if language.eq_ignore_ascii_case("auto") {
                     pin_language(&ctx, &samples, &probe_mask).unwrap_or_else(|| "auto".to_string())
                 } else {

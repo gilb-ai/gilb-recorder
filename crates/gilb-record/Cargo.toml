@@ -8,15 +8,14 @@ publish.workspace = true
 [dependencies]
 gilb-events = { workspace = true }
 gilb-db = { workspace = true }
-gilb-config = { workspace = true }
 
 tokio = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 chrono = { workspace = true }
 hound = "3"
-# speexdsp echo canceller for the offline mic-cleanup pass at stop() (D11 in
-# Rodnik's REALTIME_ASSIST doc). Builds the bundled C sources via cmake, which
+# speexdsp echo canceller for the offline mic-cleanup pass at stop() (decision
+# D11 in docs/assist.md). Builds the bundled C sources via cmake, which
 # the workspace already requires for whisper.cpp.
 aec-rs = "1"
 

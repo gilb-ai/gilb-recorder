@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use chrono::Duration;
 use rmcp::{
-    handler::server::{router::tool::ToolRouter, wrapper::Parameters},
+    handler::server::wrapper::Parameters,
     model::{
         CallToolResult, Content, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo,
     },
@@ -22,8 +22,6 @@ const HELP_MD: &str = include_str!("../help.md");
 #[derive(Clone)]
 pub struct GilbService {
     db: Arc<SqlitePool>,
-    #[allow(dead_code)]
-    tool_router: ToolRouter<GilbService>,
 }
 
 // ---------- tool argument structs --------------------------------------
@@ -66,7 +64,7 @@ pub struct RecentActionsArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct SearchActionsArgs {
     /// Substring to search for in text_content / element_name / element_value /
-    /// window_title. LIKE-based; FTS5 lands in a later phase.
+    /// window_title. LIKE-based — no ranking, no stemming, no index.
     pub q: String,
     /// Optional app filter (matches `app_name` or `app_bundle_id`).
     #[serde(default)]
@@ -151,10 +149,7 @@ fn db_err(err: anyhow::Error) -> McpError {
 #[tool_router]
 impl GilbService {
     pub fn new(db: SqlitePool) -> Self {
-        Self {
-            db: Arc::new(db),
-            tool_router: Self::tool_router(),
-        }
+        Self { db: Arc::new(db) }
     }
 
     #[tool(description = "\
@@ -314,9 +309,11 @@ impl GilbService {
     }
 
     #[tool(description = "\
-        List `health_events` rows for diagnostics: dropped events, sleep/wake, \
-        AX query timeouts, capture start/stop. Useful when the user asks \
-        \"why is something missing from my log\".")]
+        List `health_events` rows for diagnostics: dropped events, capture \
+        start/stop. NOTE: nothing writes this table yet — the capture pipeline \
+        broadcasts these to the app UI live and does not persist them, so the \
+        result is always empty. An empty list means 'not recorded', not 'no \
+        problems occurred'.")]
     async fn gilb_list_health_events(
         &self,
         Parameters(args): Parameters<ListHealthEventsArgs>,

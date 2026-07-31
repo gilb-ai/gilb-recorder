@@ -1,4 +1,4 @@
-//! Pause-bounded segmentation (§6.2 of REALTIME_ASSIST.md): accumulate speech,
+//! Pause-bounded segmentation (`docs/assist.md`): accumulate speech,
 //! close the segment when a pause exceeds the threshold, force-close with
 //! overlap when someone talks without pausing. One instance per channel.
 //!

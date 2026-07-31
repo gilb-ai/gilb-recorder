@@ -1,5 +1,4 @@
-//! Realtime audio front-end for the assist feature ([RDK] real-time подсказки,
-//! `docs/REALTIME_ASSIST.md`).
+//! Realtime audio front-end for the assist feature (`docs/assist.md`).
 //!
 //! The recording pipeline captures two mono channels: *mic* (Me) and *system*
 //! (Them). They are separate sources, but when the user is on speakers the mic

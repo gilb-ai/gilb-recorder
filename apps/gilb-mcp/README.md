@@ -26,7 +26,7 @@ Or hand-edit `~/.claude.json` / project-level `.mcp.json`:
 {
   "mcpServers": {
     "gilb": {
-      "command": "/Users/leonid/src/gilb/target/release/gilb-mcp",
+      "command": "/path/to/gilb-recorder/target/release/gilb-mcp",
       "args": [],
       "env": {}
     }
@@ -77,7 +77,7 @@ For interactive exploration: `npx @modelcontextprotocol/inspector
 | `gilb_activity_summary` | Aggregated overview for a range |
 | `gilb_list_tree_snapshots` | a11y tree snapshot metadata (id, app, browser_url, simhash, json_bytes) |
 | `gilb_get_tree_snapshot` | Full AX tree (parsed JSON) for one snapshot id |
-| `gilb_list_health_events` | Capture diagnostics |
+| `gilb_list_health_events` | Capture diagnostics (not yet persisted — always empty) |
 
 See `help.md` for query examples and the `range` parameter format.
 

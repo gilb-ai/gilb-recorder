@@ -5,15 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this is
 
 **Gilb (Gilbreth)** — a desktop app that records the user's actions
-via accessibility APIs (macOS today; Windows backend is a stub).
-Cargo workspace + Tauri 2.
+via accessibility APIs. Cargo workspace + Tauri 2. Both macOS
+(CGEventTap + AX) and Windows (UI Automation + event hooks) have real
+capture backends; Linux is out of scope.
 
-The product is structured in three layers, of which only the first is
-implemented:
-
-1. **Raw a11y capture** — current focus.
-2. Pattern mining (therbligs) — deferred.
-3. Agent skill — deferred.
+Beyond raw capture the app records meetings (detected from mic
+activity), transcribes them on-device with whisper.cpp, and can show
+real-time suggestions during a live call (`docs/assist.md`). Pattern
+mining over the captured stream — the therbligs the name refers to —
+is the next layer and is not implemented; `apps/gilb-analyzer` is the
+first step toward it.
 
 ## Conventions
 
@@ -57,7 +58,7 @@ cargo run -p gilb-mcp
 cd apps/gilb-app-tauri
 npm install                                # once
 npm run tauri dev                          # dev shell with hot-reload
-npm run tauri build                        # release .dmg/.msi signed per tauri.conf.json
+npm run tauri build                        # release .dmg/.exe; signing per RELEASING.md
 ```
 
 Capture defaults are controlled by env vars consumed by
@@ -88,8 +89,27 @@ gilb-engine ─► all crates above
               (Engine — long-lived process-wide object; owns the DB pool,
                EventBus, current CaptureSession; spawns the writer task)
 
-gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum
-               + in-memory MockDetector; native detectors land later)
+gilb-meeting ► (standalone: MeetingDetector trait + MeetingEvent enum;
+               macOS unified-log and Windows WASAPI detectors, plus an
+               in-memory MockDetector)
+
+gilb-record ─► gilb-events, gilb-db
+              (screen + audio capture: ScreenCaptureKit/AVAssetWriter on
+               macOS, Windows.Graphics.Capture/Media Foundation on Windows;
+               AudioTap hands a copy of both channels to the assist path;
+               offline echo cancellation at stop())
+
+gilb-transcribe ► (whisper.cpp on-device transcription of finished
+               meetings; SharedModel — one loaded model per process,
+               shared with the realtime path)
+
+gilb-assist ──► (product-independent suggestions engine: turn buffer,
+               throttling, [NO_RESP], Ask. Traits AssistConfig /
+               AssistBackend / AssistSession — see docs/assist.md)
+gilb-assist-audio ► gilb-record, gilb-assist, gilb-transcribe
+              (realtime front-end: resample → AEC → segment → STT)
+gilb-assist-acp ► gilb-assist
+              (backend talking ACP to a locally installed coding agent)
 
 gilb-pipeline ► gilb-db, gilb-events, gilb-meeting, gilb-record
               (app-agnostic meeting bridge: detector → recorder → meetings
@@ -97,22 +117,35 @@ gilb-pipeline ► gilb-db, gilb-events, gilb-meeting, gilb-record
                returns PipelineHandles for the stop-countdown / detection
                toggle channels)
 
-apps/gilb-app-tauri/src-tauri ─► gilb-engine + gilb-config + gilb-events
-              + gilb-pipeline
+gilb-shell-tauri ► gilb-assist*, gilb-engine, gilb-pipeline
+              (Tauri-side pieces shared by any shell: the suggestions
+               overlay window with its commands and hotkey, the whisper
+               model gate + download, prefs. Products plug in an AssistHost)
+
+apps/gilb-app-tauri/src-tauri ─► gilb-engine, gilb-config, gilb-events,
+              gilb-db, gilb-shell-tauri, gilb-assist(-acp), gilb-transcribe
               (Tauri commands: start_capture/stop_capture/status/
                open_privacy_pane; AppState holds an Arc<Engine>;
-               meeting.rs is the Tauri MeetingUi adapter over gilb-pipeline)
+               meeting.rs is the Tauri MeetingUi adapter over gilb-pipeline;
+               assist.rs is gilb's AssistHost — local prompt file + ACP agent)
 
-apps/gilb-mcp ─► gilb-core + gilb-config + gilb-db
+apps/gilb-mcp ─► gilb-config + gilb-db
               (read-only MCP server over ~/.gilb/db.sqlite, stdio
                transport; gilb_* tools for Claude Code.
                LLM-facing contract — apps/gilb-mcp/help.md)
+
+apps/gilb-analyzer ► gilb-db, gilb-config
+              ("Shannon": runs prompt-jobs as `claude -p` over gilb-mcp and
+               pushes findings to a server. Inert without enterprise
+               credentials — local capture does not depend on it)
 ```
 
 Platform split: `crates/gilb-a11y/src/platform/{macos,windows,unsupported}`
 is selected via `cfg(target_os = ...)`. `macos/` is broken into sub-modules
 (`event_tap`, `ax_worker`, `focus`, `keyboard`, `pasteboard`,
-`normalizer`, `permissions`, `ffi`, `platform`). `windows.rs` is a stub.
+`normalizer`, `permissions`, `ffi`, `platform`); `windows/` into
+(`hooks`, `uia`, `focus`, `keyboard`, `platform`). `unsupported.rs` is the
+no-op fallback that keeps the workspace compiling on Linux — CI uses it.
 
 ### Capture → DB data flow
 
@@ -161,12 +194,15 @@ masking, `range` formats). Any migration that changes the shape of
 
 ## Repo layout
 
-- `Cargo.toml` — workspace root (members =
-  `apps/gilb-app-tauri/src-tauri` + `apps/gilb-mcp` + `crates/*`).
+- `Cargo.toml` — workspace root (members = `apps/*` + `crates/*`).
   Shared dependency versions live in `[workspace.dependencies]`;
-  each crate references them via `workspace = true`.
-- `apps/` — runnable binaries (Tauri shell, MCP server).
+  each crate references them via `workspace = true`. Keep it that way:
+  a crate pinning its own version of a shared dep is how two copies of
+  the same library end up in one binary.
+- `apps/` — runnable binaries (Tauri shell, MCP server, analyzer).
 - `crates/` — library crates.
+- `docs/` — `ui-design.md` (UI rules, read before touching the
+  frontend) and `assist.md` (the real-time suggestions stack).
 - `reference/` — third-party projects we study for ideas. **Not our
   code**, **not committed** (see `.gitignore`). Each subdir is
   typically its own git repo (an upstream clone).
@@ -181,9 +217,9 @@ masking, `range` formats). Any migration that changes the shape of
 
 ## macOS specifics
 
-- Bundle ID: `app.farol.gilb`. Apple Developer Team ID: `83856566PM`.
-  The signing identity is set in
-  `apps/gilb-app-tauri/src-tauri/tauri.conf.json`.
+- Bundle ID: `app.farol.gilb`. The signing identity is **not** in
+  `tauri.conf.json` — it comes from `APPLE_SIGNING_IDENTITY` (a repo
+  secret in CI, an exported env var locally). See `RELEASING.md`.
 - `Info.plist`: `LSUIElement=1` (no Dock icon),
   `NSAccessibilityUsageDescription` +
   `NSInputMonitoringUsageDescription` +

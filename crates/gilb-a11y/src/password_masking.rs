@@ -1,7 +1,8 @@
 //! Heuristics for redacting secrets before they reach the DB.
 //!
-//! Phase 0 ships the static lookup tables and unit tests; AX-based
-//! `AXSecureTextField` detection is hooked in Phase 1.
+//! Two layers, deliberately independent: the static tables here (excluded
+//! apps, secure element roles, PII patterns) and the live focus state the
+//! normalizer feeds from AX. Either one alone still redacts.
 
 use once_cell::sync::Lazy;
 use regex::Regex;

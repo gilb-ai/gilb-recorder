@@ -50,7 +50,7 @@ pub async fn get_tracking_paused() -> bool {
 /// `start_capture` (resume) so the choice survives restarts.
 #[tauri::command]
 pub async fn set_tracking_paused(paused: bool) -> Result<(), String> {
-    let mut prefs = gilb_config::load_preferences();
-    prefs.tracking_paused = paused;
-    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())
+    gilb_config::update_preferences(|p| p.tracking_paused = paused)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }

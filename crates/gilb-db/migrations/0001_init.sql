@@ -1,5 +1,4 @@
 -- gilb v0 schema — minimal, multimodal tables added in later migrations.
--- See spec.md §4 for column rationale.
 
 CREATE TABLE sessions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,

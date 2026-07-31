@@ -1,7 +1,6 @@
 //! Bridge `gilb-events::EventBus` → Tauri `emit`. Each `BusMessage` from the
 //! bus is forwarded to the webview under the matching event name:
 //!
-//! - `permission` — `BusMessage<PermissionEvent>`
 //! - `health`     — `BusMessage<HealthEvent>`
 //! - `recording`  — `BusMessage<RecordingEvent>`
 //!
@@ -16,32 +15,15 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::broadcast::error::RecvError;
 use tracing::warn;
 
-const PERMISSION_EVENT: &str = "permission";
 const HEALTH_EVENT: &str = "health";
 const RECORDING_EVENT: &str = "recording";
 
-/// Subscribe to permission + health + recording channels on the engine's event
-/// bus and forward each message to the webview. Spawned tasks own the receivers.
+/// Subscribe to the health + recording channels on the engine's event bus and
+/// forward each message to the webview. Spawned tasks own the receivers.
 pub fn spawn_proxies(app: AppHandle, engine: Arc<Engine>) {
     let bus = engine.event_bus().clone();
-    spawn_proxy_permission(app.clone(), &bus);
     spawn_proxy_health(app.clone(), &bus);
     spawn_proxy_recording(app, &bus);
-}
-
-fn spawn_proxy_permission(app: AppHandle, bus: &EventBus) {
-    let mut rx = bus.subscribe_permission();
-    tauri::async_runtime::spawn(async move {
-        loop {
-            match rx.recv().await {
-                Ok(msg) => emit(&app, PERMISSION_EVENT, &msg),
-                Err(RecvError::Lagged(n)) => {
-                    warn!(skipped = n, "permission proxy lagged");
-                }
-                Err(RecvError::Closed) => break,
-            }
-        }
-    });
 }
 
 fn spawn_proxy_health(app: AppHandle, bus: &EventBus) {

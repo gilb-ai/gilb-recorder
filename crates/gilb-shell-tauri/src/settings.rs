@@ -23,9 +23,8 @@ pub async fn set_meeting_detection(
     ctl: tauri::State<'_, MeetingControlTx>,
     enabled: bool,
 ) -> Result<(), String> {
-    let mut prefs = gilb_config::load_preferences();
-    prefs.meeting_detection_enabled = enabled;
-    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())?;
+    gilb_config::update_preferences(|p| p.meeting_detection_enabled = enabled)
+        .map_err(|e| e.to_string())?;
     let _ = ctl.0.send(enabled).await;
     Ok(())
 }

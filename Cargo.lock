@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-a11y"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -2006,7 +2006,6 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2016,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-analyzer"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2038,26 +2037,20 @@ dependencies = [
 
 [[package]]
 name = "gilb-app-tauri"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
- "base64 0.22.1",
- "directories",
- "gilb-a11y",
  "gilb-assist",
  "gilb-assist-acp",
  "gilb-config",
- "gilb-core",
  "gilb-db",
  "gilb-engine",
  "gilb-events",
- "gilb-pipeline",
  "gilb-shell-tauri",
  "gilb-transcribe",
  "libc",
  "parking_lot",
- "reqwest 0.12.28",
  "serde",
  "serde_json",
  "tauri",
@@ -2079,7 +2072,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2089,12 +2082,11 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist-acp"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
  "gilb-assist",
- "serde",
  "serde_json",
  "tempfile",
  "tokio",
@@ -2103,7 +2095,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist-audio"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2120,7 +2112,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-config"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "directories",
@@ -2130,26 +2122,22 @@ dependencies = [
 
 [[package]]
 name = "gilb-core"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "chrono",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
 name = "gilb-db"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "chrono",
- "gilb-config",
  "gilb-core",
- "serde",
  "serde_json",
  "sqlx",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
  "uuid",
@@ -2157,10 +2145,9 @@ dependencies = [
 
 [[package]]
 name = "gilb-engine"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
- "chrono",
  "gilb-a11y",
  "gilb-config",
  "gilb-core",
@@ -2168,17 +2155,15 @@ dependencies = [
  "gilb-events",
  "parking_lot",
  "serde",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "gilb-events"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "chrono",
- "parking_lot",
  "serde",
  "serde_json",
  "tokio",
@@ -2186,19 +2171,17 @@ dependencies = [
 
 [[package]]
 name = "gilb-mcp"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "chrono",
  "gilb-config",
- "gilb-core",
  "gilb-db",
  "rmcp",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "sqlx",
- "thiserror 1.0.69",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2206,7 +2189,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-meeting"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2214,14 +2197,13 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
- "tracing",
  "windows 0.58.0",
  "windows-core 0.58.0",
 ]
 
 [[package]]
 name = "gilb-pipeline"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2236,7 +2218,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-record"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "aec-rs",
  "anyhow",
@@ -2246,7 +2228,6 @@ dependencies = [
  "core-media-rs",
  "cpal",
  "dispatch2",
- "gilb-config",
  "gilb-db",
  "gilb-events",
  "gilb-meeting",
@@ -2270,7 +2251,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-shell-tauri"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "gilb-a11y",
@@ -2296,7 +2277,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-transcribe"
-version = "1.0.0"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",

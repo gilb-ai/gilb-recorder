@@ -7,16 +7,16 @@
 //!
 //! * **availability** — the agent binary exists. Nothing to run without it, and
 //!   the UI says so instead of failing per suggestion;
-//! * **the prompt** — a file in `~/.gilb/`. Deliberately local: gilb has no
-//!   server-side prompt store (REALTIME_ASSIST §12.1 — "prompts are private,
-//!   deliberately not persisted"), and the file is the user's to edit;
+//! * **the prompt** — a file in `~/.gilb/`. Deliberately local and never
+//!   uploaded: a prompter's prompt holds prices and objection handling, which
+//!   is the user's business, and the file is theirs to edit;
 //! * **the backend** — an ACP session against that agent.
 //!
-//! Everything about the trust boundary that Rodnik gets from its server
-//! (fencing recorded speech, keeping the operator's question outside the fence)
-//! is *not* here yet: a local agent is a single-user tool talking to its owner.
-//! When gilb grows tool access for this role, revisit — the `AssistSession::ask`
-//! split already carries the two halves separately.
+//! The trust boundary a server-backed product needs (fencing recorded speech,
+//! keeping the operator's question outside the fence) is *not* enforced here:
+//! a local agent is a single-user tool talking to its owner, with no tools and
+//! nobody else's data to reach. When this role grows tool access, revisit —
+//! `AssistSession::ask` already carries the two halves separately.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -48,9 +48,10 @@ pub fn init(app: &AppHandle) {
     gilb_shell_tauri::assist::init(app, GilbAssistHost);
 }
 
-// `gilb_shell_tauri::assist::refresh` re-evaluates availability; gilb has no
-// event that changes it yet (the agent binary appears while the app is not
-// looking), so nothing calls it here. Rodnik does, on sign-in.
+// `gilb_shell_tauri::assist::refresh` re-evaluates availability. Nothing calls
+// it here: the agent binary appears while the app is not looking, so there is
+// no event to hang it on. A product whose availability follows a sign-in calls
+// it there.
 
 struct GilbAssistHost;
 
@@ -135,9 +136,9 @@ impl AssistConfig for FileAssistConfig {
         true
     }
 
-    /// A local agent is slower than a cloud model, so batch a little harder
-    /// than Rodnik does: fewer, better-fed requests beat a queue that never
-    /// drains.
+    /// A local agent is slower than a cloud model, so batch harder than a
+    /// hosted backend would: fewer, better-fed requests beat a queue that
+    /// never drains.
     async fn turns_before_analysis(&self) -> u32 {
         4
     }

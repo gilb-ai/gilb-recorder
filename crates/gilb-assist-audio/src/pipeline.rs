@@ -1,4 +1,4 @@
-//! The assembled realtime front-end (§4.3 of REALTIME_ASSIST.md):
+//! The assembled realtime front-end (`docs/assist.md`):
 //!
 //! ```text
 //! AudioTap (gilb-record) ─ mic ──► resample 16k ─► AEC (near) ─► Segmenter ─┐

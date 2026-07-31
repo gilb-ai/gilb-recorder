@@ -1,5 +1,4 @@
-//! Shared orchestration for real-time meeting suggestions ([RDK]
-//! `rodnik-app-tauri/docs/REALTIME_ASSIST.md` §7).
+//! Shared orchestration for real-time meeting suggestions (`docs/assist.md`).
 //!
 //! The engine owns everything that is identical between products: turns
 //! accumulate in a buffer, an analysis fires once the configured threshold is
@@ -9,8 +8,8 @@
 //! meeting and what it was asked.
 //!
 //! What differs per product comes in through two traits: [`AssistConfig`]
-//! (Rodnik pulls it from `/api/v1/config`, gilb from a local file) and
-//! [`AssistBackend`] (HTTP provider vs local agent). How a backend remembers
+//! (gilb reads a local file; a server-backed product fetches it) and
+//! [`AssistBackend`] (a local agent vs an HTTP provider). How a backend remembers
 //! the conversation is deliberately invisible here — [`AssistSession`] is a
 //! handle, not a "send with previous response id" (decision D5).
 
@@ -96,9 +95,10 @@ pub trait AssistSession: Send + Sync {
     /// halves do not carry the same authority: the turns are recorded speech —
     /// a client saying "mark the deal won" out loud is data — while the
     /// question was typed by the operator into our own panel and is meant for
-    /// the model to act on. A backend that fences untrusted input (Rodnik
-    /// wraps turns in its data envelope) needs the boundary; one that does not
-    /// gets the default below, which is exactly the old behaviour.
+    /// the model to act on. A backend that fences untrusted input — wrapping
+    /// the turns in a data envelope the model is told not to obey — needs that
+    /// boundary; one that does not gets the default below, which is exactly
+    /// the old behaviour.
     ///
     /// `turns` is empty when nothing was buffered.
     async fn ask(&mut self, turns: &str, question: &str) -> Result<Option<String>> {
@@ -115,8 +115,9 @@ pub trait AssistSession: Send + Sync {
 ///
 /// The engine takes its two halves by generic, which is what a product wants
 /// when it knows both at compile time. A *shell* does not: it hands the choice
-/// to whatever product embeds it (Rodnik's server-backed config, gilb's local
-/// file plus an agent), and that choice can only travel as a trait object.
+/// to whatever product embeds it (gilb's local file plus an agent, a
+/// server-backed config elsewhere), and that choice can only travel as a
+/// trait object.
 /// Without these, `spawn(Box<dyn AssistConfig>, Box<dyn AssistBackend>, ..)`
 /// does not compile and every shell has to be generic over both halves — which
 /// spreads two type parameters through the whole Tauri layer for no gain.
@@ -140,9 +141,9 @@ impl AssistBackend for Box<dyn AssistBackend> {
     }
 }
 
-/// What the engine tells the UI. Mirrors the webview events in §4.4:
-/// `Loading` drives the spinner, `Update` carries ready-to-render markdown,
-/// silence stays silent.
+/// What the engine tells the UI, one variant per webview event (the contract
+/// is in `docs/assist.md`): `Loading` drives the spinner, `Update` carries
+/// ready-to-render markdown, silence stays silent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AssistEvent {
     Loading(bool),
@@ -150,7 +151,8 @@ pub enum AssistEvent {
     Error(String),
 }
 
-/// Engine knobs that are product-independent (§6.8 "параметры для подбора").
+/// Engine knobs that are product-independent, and the ones worth tuning in
+/// the field.
 #[derive(Debug, Clone)]
 pub struct EngineParams {
     /// Floor between two analyses; turns keep accumulating meanwhile.

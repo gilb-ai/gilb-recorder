@@ -2,7 +2,6 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 /// Identifier for a recording session (one row in `sessions`).
 pub type SessionId = i64;
@@ -25,7 +24,6 @@ pub enum ActionKind {
     Scroll,
     Clipboard,
     FocusChange,
-    Debug,
 }
 
 impl ActionKind {
@@ -37,15 +35,13 @@ impl ActionKind {
             ActionKind::Scroll => "scroll",
             ActionKind::Clipboard => "clipboard",
             ActionKind::FocusChange => "focus_change",
-            ActionKind::Debug => "debug",
         }
     }
 }
 
 /// Periodic AX-tree snapshot of a single focused window.
 ///
-/// Emitted on focus transitions (Phase 2 may also trigger on clipboard
-/// and opaque-element clicks). Persisted to `tree_snapshots`; correlated
+/// Emitted on focus transitions. Persisted to `tree_snapshots`; correlated
 /// to nearby `actions` rows by `(session_id, captured_at)` within a
 /// short time window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -117,9 +113,8 @@ pub struct Action {
 
 /// Anything the capture pipeline can hand to the engine writer.
 ///
-/// Phase 2: the channel between [`crate::Action`] producers and the DB
-/// writer fans in [`crate::TreeSnapshot`]s too. Keep this enum small —
-/// we route on the variant in the writer's hot loop.
+/// One channel carries both actions and tree snapshots to the writer. Keep
+/// this enum small — we route on the variant in the writer's hot loop.
 #[derive(Debug, Clone)]
 pub enum WriterMessage {
     Action(Action),
@@ -136,27 +131,6 @@ impl From<TreeSnapshot> for WriterMessage {
     fn from(s: TreeSnapshot) -> Self {
         WriterMessage::TreeSnapshot(s)
     }
-}
-
-impl Action {
-    pub fn new_debug(session_id: SessionId, message: impl Into<String>) -> Self {
-        Self {
-            session_id,
-            captured_at: Utc::now(),
-            kind: ActionKind::Debug,
-            app: AppInfo::default(),
-            element: ElementContext::default(),
-            text_content: Some(message.into()),
-            password_flag: false,
-            tree_snapshot_id: None,
-            extra_json: None,
-        }
-    }
-}
-
-/// A unique correlation id we expose to logs / health events.
-pub fn new_correlation_id() -> String {
-    Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]

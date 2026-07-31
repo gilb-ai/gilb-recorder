@@ -56,8 +56,7 @@
     "macOS": {
       "minimumSystemVersion": "13.0",
       "hardenedRuntime": true,
-      "entitlements": "entitlements.plist",
-      "signingIdentity": "Developer ID Application: Leonid Dinershtein (83856566PM)"
+      "entitlements": "entitlements.plist"
     }
   }
 }

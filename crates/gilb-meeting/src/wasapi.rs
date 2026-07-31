@@ -9,9 +9,9 @@
 //! the mic, and feeds that snapshot into `Tracker`, which owns the
 //! `Started`/`AppsChanged`/`Ended` count logic shared with macOS.
 //!
-//! The mapping and the active/inactive/expired set semantics are ported
-//! from the owner's rodnik app (`meetingDetection/micMonitorProcess.js`
-//! and the `mic-activity-tracker` native module). `SessionTracker` and
+//! The mapping and the active/inactive/expired set semantics come from an
+//! earlier Electron implementation and its native mic tracker, which had
+//! already been shaken out against real calls. `SessionTracker` and
 //! the process map are pure and unit-tested without COM; the live COM
 //! chain ([`WindowsDetector`]) is `cfg(target_os = "windows")` and
 //! smoke-tested by hand on a Windows host.
@@ -25,7 +25,7 @@ use crate::{allowlist, MeetingApp, MeetingEvent, Tracker};
 /// One WASAPI capture-session transition, as surfaced by the COM layer.
 ///
 /// Mirrors the `IAudioSessionEvents`/`IAudioSessionNotification` signals
-/// rodnik's native tracker emits: a session is created (`New`), starts
+/// the OS emits: a session is created (`New`), starts
 /// using the mic (`Active`), stops (`Inactive`), or goes away
 /// (`Expired`); `DefaultDeviceChanged` fires when the default capture
 /// endpoint changes. Only `Active`/`Inactive`/`Expired` move the active
@@ -43,8 +43,8 @@ pub enum SessionEvent {
 ///
 /// Keeps the set of bundle IDs whose sessions are currently `Active`
 /// (add on `Active`, remove on `Inactive`/`Expired`; `New` and
-/// `DefaultDeviceChanged` leave it untouched — matching rodnik's
-/// `micMonitorProcess.js`). After each relevant transition it feeds the
+/// `DefaultDeviceChanged` leave it untouched). After each relevant
+/// transition it feeds the
 /// full snapshot into the shared [`Tracker`], reusing the exact
 /// count-transition logic the macOS detector uses. Sessions whose
 /// process is not a known meeting app are ignored.
@@ -81,8 +81,8 @@ impl SessionTracker {
                 self.active.remove(bundle_id);
             }
             // A session opening, and default-device changes, never move
-            // the active set on their own (rodnik counts only active /
-            // inactive / expired). Nothing changed, so nothing to emit.
+            // the active set on their own — only active / inactive /
+            // expired count. Nothing changed, so nothing to emit.
             SessionEvent::New | SessionEvent::DefaultDeviceChanged => return None,
         }
 

@@ -11,8 +11,6 @@ use sqlx::{Row, SqlitePool};
 
 use crate::range::ResolvedRange;
 
-const MASKED: &str = "[masked]";
-
 // ---------- sessions ----------------------------------------------------
 
 #[derive(Debug, Clone, Serialize)]
@@ -566,23 +564,6 @@ pub async fn list_health_events(
         })
         .collect())
 }
-
-// Re-export the masked constant so callers can reference it in tests / docs.
-#[allow(dead_code)]
-pub const MASKED_PLACEHOLDER: &str = MASKED;
-
-// Just here to silence "unused" if MASKED_PLACEHOLDER above is not referenced
-// anywhere. The string itself is enforced server-side via SQL.
-#[allow(dead_code)]
-fn _enforce_masked_constant_used() {
-    let _ = MASKED_PLACEHOLDER;
-}
-
-// Keep the `Utc`/`DateTime` aliases visible to dependents — the public
-// surface re-exports `SerializeDateTime` here so callers don't import chrono
-// directly when binding parameters.
-#[allow(dead_code)]
-pub type Ts = DateTime<Utc>;
 
 // ---------- meetings & transcripts --------------------------------------
 

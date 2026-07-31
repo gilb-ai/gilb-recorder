@@ -7,7 +7,9 @@
 //! - [`write_batch`] — commit a batch of [`WriterMessage`]s in one transaction
 //!   (the engine writer's hot path).
 //!
-//! FTS5 search (Phase 5) lives in a separate module added by a later phase.
+//! Reads live in `gilb-mcp`, not here: this crate is the capture side's write
+//! path, and keeping query surface out of it is what stops a slow analytics
+//! query from being written into the hot loop by accident.
 
 pub mod actions;
 pub mod meetings;
@@ -30,9 +32,9 @@ pub type Db = SqlitePool;
 
 /// Open `path` and apply embedded migrations.
 ///
-/// PRAGMA values are chosen for steady-state low-latency capture; rationale in
-/// `spec.md §4` and `research/06-layer1-capture-quality.md §2.5`. Each pragma
-/// below has an inline citation to the research note that justifies it.
+/// PRAGMA values are chosen for steady-state low-latency capture — a write
+/// arrives on every click and keystroke, and none of them may block the
+/// capture thread. Each one is justified inline below.
 pub async fn open_db(path: impl AsRef<Path>) -> Result<Db> {
     let path = path.as_ref();
     if let Some(parent) = path.parent() {
@@ -43,28 +45,27 @@ pub async fn open_db(path: impl AsRef<Path>) -> Result<Db> {
     let url = format!("sqlite://{}", path.display());
     let connect_opts = SqliteConnectOptions::from_str(&url)?
         .create_if_missing(true)
-        // WAL: concurrent reads alongside one writer without blocking (§2.5).
+        // WAL: concurrent reads alongside one writer without blocking.
         .journal_mode(SqliteJournalMode::Wal)
         // NORMAL: fsync only at checkpoint, not per commit — required for the
-        // batched write queue's throughput target (§2.5, §2.6).
+        // batched write queue's throughput target.
         .synchronous(SqliteSynchronous::Normal)
         .foreign_keys(true)
         // 5s busy_timeout — survives transient WAL lock contention without
-        // surfacing SQLITE_BUSY to callers (§3.5).
+        // surfacing SQLITE_BUSY to callers.
         .busy_timeout(Duration::from_secs(5))
         // 64 MB page cache (negative = KiB). Sized to hold the hot tail of
-        // recent actions for read queries from gilb-mcp / UI (§2.5).
+        // recent actions for read queries from gilb-mcp / UI.
         .pragma("cache_size", "-65536")
         // 256 MB mmap window — reads skip the user-space copy and go straight
         // through the page cache, keeping read latency low while the writer is
-        // appending (§2.5).
+        // appending.
         .pragma("mmap_size", "268435456")
         // Spill temp tables / sorters to RAM rather than disk — avoids fsync
-        // pressure during ad-hoc analytics queries (§2.5).
+        // pressure during ad-hoc analytics queries.
         .pragma("temp_store", "MEMORY")
         // Auto-checkpoint at ~16 MB of WAL (4000 pages × 4 KiB). Keeps WAL
-        // bounded so it doesn't grow into tens of GB on long-running sessions
-        // (§4.5).
+        // bounded so it doesn't grow into tens of GB on long-running sessions.
         .pragma("wal_autocheckpoint", "4000");
 
     let pool = SqlitePoolOptions::new()

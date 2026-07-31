@@ -1,9 +1,9 @@
 //! Suggestions from a **local agent** over the Agent Client Protocol.
 //!
-//! This is gilb's half of the assist stack (stage 2 in Rodnik's
-//! REALTIME_ASSIST.md §12): the same engine and the same audio pipeline, but
-//! instead of a cloud provider the turns go to an agent already running on the
-//! user's machine — `claude`, `gemini --experimental-acp`, a Hermes adapter.
+//! One of the two backend shapes the engine supports (`docs/assist.md`): the
+//! same engine and the same audio pipeline as a cloud provider would use, but
+//! the turns go to an agent already running on the user's machine — `claude`,
+//! `gemini --experimental-acp`, any ACP adapter.
 //!
 //! ## Why ACP and not `claude -p`
 //!
@@ -12,7 +12,7 @@
 //! start every time, and the conversation has to be re-sent because nothing
 //! holds it. An ACP session is a live process that keeps its own context, which
 //! is exactly the shape [`AssistSession`] was designed around — the engine
-//! never learns how a backend remembers (decision D5).
+//! never learns how a backend remembers (decision D5 in `docs/assist.md`).
 //!
 //! ## The three things a live meeting demands
 //!

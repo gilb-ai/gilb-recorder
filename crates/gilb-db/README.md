@@ -1,16 +1,16 @@
 # gilb-db
 
 SQLite-backed storage for gilb (sessions, actions, tree snapshots, app
-budgets, health events). PRAGMA tuning rationale is inline in
-`src/lib.rs::open_db` with citations to
-`research/06-layer1-capture-quality.md §2.5 / §4.5`.
+budgets, health events). Every PRAGMA is justified inline in
+`src/lib.rs::open_db` — they are tuned for steady-state low-latency capture,
+which is not the same set you would pick for a read-heavy database.
 
 ## Throughput benchmark
 
 `tests/throughput_bench.rs` measures the synthetic insert rate of the
 single-row, unbatched `actions::insert_action` path. It establishes a
-baseline so the future batched write queue (Phase 3 per `tauri-plan.md`) has
-something concrete to defend its improvements against.
+baseline so a future batched write queue has something concrete to defend
+its improvements against.
 
 ```sh
 cargo test -p gilb-db throughput_bench -- --nocapture

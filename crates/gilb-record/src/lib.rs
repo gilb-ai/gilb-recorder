@@ -291,7 +291,7 @@ pub fn scale_bgra(src: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: u
 /// Offline acoustic echo cancellation (speexdsp): clean the mic track against
 /// the system track, both mono `f32` at `sample_rate`. Without headphones the
 /// mic picks up the remote side from the speakers; uncancelled, the mic track
-/// double-attributes their speech (D11 in Rodnik's REALTIME_ASSIST doc). Runs
+/// double-attributes their speech (decision D11 in `docs/assist.md`). Runs
 /// as a batch at finalization — the live capture path is untouched. The tail
 /// past the last full 20 ms frame is passed through unprocessed.
 pub fn cancel_echo(mic: &[f32], system: &[f32], sample_rate: u32) -> Vec<f32> {

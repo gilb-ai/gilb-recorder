@@ -1,4 +1,4 @@
-//! Realtime STT worker (§6.5 of REALTIME_ASSIST.md): one long-lived task, one
+//! Realtime STT worker (`docs/assist.md`): one long-lived task, one
 //! model, both channels interleaved in a single queue.
 //!
 //! The queue drops the *oldest* segments when a backlog builds — the

@@ -244,7 +244,7 @@ function updateSplash(perms: Permissions, platform: string) {
 }
 
 // Sequence counter — refresh() calls can race in parallel (poll, explicit
-// call after start/stop, listen("permission"/"health")). Apply to the DOM
+// call after start/stop, listen("health")). Apply to the DOM
 // only the result of the most recently started call — out-of-order
 // responses are discarded.
 let refreshSeq = 0;
@@ -319,8 +319,9 @@ async function refreshAuth() {
 // ----- real-time suggestions (workspace card) -----------------------------
 
 type AssistStatus = {
-  /// Product-level availability, decided by the host (gilb_shell_tauri::assist):
-  /// Rodnik answers "signed in", gilb will answer "the agent is installed".
+  /// Product-level availability, decided by the host (gilb_shell_tauri::assist).
+  /// Gilb answers "the agent CLI is installed"; a hosted product would answer
+  /// "signed in".
   available: boolean;
   model_ready: boolean;
   downloading: boolean;
@@ -436,8 +437,8 @@ async function openSettings() {
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
 
-// Surface a specific screen when the tray asks (rodnik hide-UI emits
-// `tray-navigate`, RDK-25). The shell has already shown the window; we only pick
+// Surface a specific screen when the tray asks (`tray-navigate`, emitted by
+// shells whose UI lives in the tray). The shell has already shown the window; we only pick
 // the view. Any open settings overlay is closed first so it can't hide the
 // requested screen. Unknown targets are ignored.
 function navigateTray(target: string) {
@@ -759,11 +760,10 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Backend proxies EventBus events here — permission/health messages
-  // trigger refresh() immediately. Permissions, recording state and
-  // session_id update via events; the slow 5-second poll is only a fallback
-  // for a missed broadcast.
-  listen("permission", () => refresh());
+  // Backend proxies EventBus events here — a health message refreshes the UI
+  // immediately instead of waiting for the poll. Permission grants have no
+  // event: they change in System Settings, outside our process, so the
+  // 5-second poll is what notices them.
   listen("health", () => refresh());
   // Local model download progress + terminal state (driven by download_model).
   listen<ModelProgress>("model-download", (e) => {
@@ -799,7 +799,7 @@ window.addEventListener("DOMContentLoaded", () => {
     setMessage(e.payload?.signed_in ? "" : t("auth.signInFailed"), "error");
     refreshAuth();
   });
-  // Tray items (rodnik hide-UI, RDK-25) ask to surface a specific screen.
+  // Tray items ask to surface a specific screen.
   listen<string>("tray-navigate", (e) => navigateTray(e.payload));
 
   // Register Gilb as a LaunchAgent on first run so it starts at login.

@@ -60,9 +60,8 @@ pub async fn set_transcription_language(
         "auto" | "ru" | "en" => {}
         other => return Err(format!("unsupported language: {other}")),
     }
-    let mut prefs = gilb_config::load_preferences();
-    prefs.transcription_language = language;
-    gilb_config::save_preferences(&prefs).map_err(|e| e.to_string())?;
+    gilb_config::update_preferences(|p| p.transcription_language = language)
+        .map_err(|e| e.to_string())?;
     let _ = tx.0.send(TranscriptionJob::ReloadModel);
     Ok(())
 }

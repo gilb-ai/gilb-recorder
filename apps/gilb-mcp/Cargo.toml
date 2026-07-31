@@ -22,8 +22,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 
-gilb-core = { workspace = true }
 gilb-config = { workspace = true }
 gilb-db = { workspace = true }

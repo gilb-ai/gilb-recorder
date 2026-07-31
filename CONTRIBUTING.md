@@ -12,17 +12,30 @@ intentionally light.
 - Don't add a runtime dependency unless you've thought about (and
   written down) why the standard library or an existing workspace
   crate isn't enough. We try to keep the dependency graph small.
-- macOS is the only supported platform today. Windows / Linux code is
-  welcome but must be cleanly behind `cfg(target_os = ...)`.
+- macOS and Windows both have real capture backends; Linux has a no-op
+  one that only keeps the workspace compiling. Platform code must sit
+  cleanly behind `cfg(target_os = ...)` — the shared crates must build
+  everywhere, because CI builds them on Linux.
 
 ## Before opening a PR
 
-Run, from the repo root, and make sure each command exits clean:
+Run, from the repo root, and make sure each command exits clean. This is
+what CI runs, so a green run here is a green run there:
 
 ```sh
 cargo fmt --all
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri \
+    --all-targets -- -D warnings
+cargo test --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri
+```
+
+The two Tauri crates are excluded because they need GTK/WebKit to build
+on Linux. On macOS, check them too — the shell has real logic in it:
+
+```sh
+cargo clippy -p gilb-shell-tauri --features assist --all-targets -- -D warnings
+bash apps/gilb-app-tauri/scripts/build-sidecars.sh   # or cargo check fails on
+cargo check -p gilb-app-tauri                        # the missing sidecars
 ```
 
 If your change touches the Tauri frontend:

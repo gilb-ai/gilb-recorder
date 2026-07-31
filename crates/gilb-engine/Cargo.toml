@@ -15,7 +15,5 @@ gilb-db = { workspace = true }
 tokio = { workspace = true }
 parking_lot = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 tracing = { workspace = true }
-chrono = { workspace = true }
 serde = { workspace = true }

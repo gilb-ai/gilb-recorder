@@ -8,7 +8,7 @@ import { applyI18n, t } from "./i18n";
 // Real-time assist overlay. A borderless, transparent, always-on-top window
 // created from Rust; everything it shows arrives as events, everything it does
 // goes through commands — the webview knows nothing about providers or
-// prompts (REALTIME_ASSIST.md §4.4):
+// prompts (contract in docs/assist.md):
 //   assist://update  { text }     ready-to-render markdown
 //   assist://state   { loading }  spinner on/off
 //   assist://error   { message }

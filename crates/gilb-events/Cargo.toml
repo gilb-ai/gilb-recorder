@@ -9,7 +9,6 @@ publish.workspace = true
 serde = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
-parking_lot = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

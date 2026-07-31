@@ -23,7 +23,6 @@ regex = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
-thiserror = { workspace = true }
 async-trait = "0.1"
 
 # CLI bin only

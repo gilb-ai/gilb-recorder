@@ -1,7 +1,9 @@
 //! Recording configuration shared between the Tauri app and the standalone CLI.
 //!
-//! v0 is intentionally tiny: paths + a few capture toggles. Per-app exclusion
-//! lists land in Phase 4.
+//! Intentionally tiny: paths, a few capture toggles, and the persisted user
+//! preferences. Anything that needs to be true before the app has a window
+//! belongs here; anything the user edits through the UI belongs in
+//! `Preferences` below.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};

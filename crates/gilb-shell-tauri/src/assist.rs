@@ -3,10 +3,11 @@
 //! download, and the wiring of the audio pipeline into webview events.
 //!
 //! Everything here is the same for any product that ships the feature, which is
-//! why it stopped living in Rodnik. What differs is small and arrives through
-//! [`AssistHost`]: whether the feature is available at all (Rodnik needs a
-//! signed-in workspace, gilb will need the agent binary), which
-//! [`AssistConfig`]/[`AssistBackend`] pair to run, and the strings a user sees.
+//! why it lives in the shell rather than in an app. What differs is small and
+//! arrives through [`AssistHost`]: whether the feature is available at all
+//! (gilb needs the agent binary; a hosted product needs a signed-in
+//! workspace), which [`AssistConfig`]/[`AssistBackend`] pair to run, and the
+//! strings a user sees.
 //!
 //! ## Contract with the webview
 //!
@@ -41,8 +42,8 @@ use crate::AudioTapHandle;
 
 pub const ASSIST_WINDOW: &str = "assist";
 
-/// Show/hide the overlay. Deliberately not the record hotkey's neighbour: on
-/// macOS `Cmd+M` is already manual recording in Rodnik's shell.
+/// Show/hide the overlay. Deliberately not the record hotkey's neighbour:
+/// `Cmd+M` is already manual recording in shells that bind it.
 const ASSIST_SHORTCUT: &str = "CmdOrCtrl+Backslash";
 
 /// The whisper build both products ship, from gilb-config so transcription and
@@ -52,9 +53,9 @@ pub const DEFAULT_MODEL_URL: &str = gilb_config::TRANSCRIBE_MODEL_URL;
 
 /// What the product brings to the shared machinery.
 pub trait AssistHost: Send + Sync + 'static {
-    /// Can the feature run at all right now? Rodnik answers "signed in" — the
-    /// prompt and the model endpoint come from its server; gilb will answer
-    /// "the agent binary is installed". A `false` here hides the feature in the
+    /// Can the feature run at all right now? Gilb answers "the agent binary is
+    /// installed"; a product whose prompt and model endpoint come from a
+    /// server answers "signed in". A `false` here hides the feature in the
     /// UI and refuses to wire it, without touching the user's preference.
     fn available(&self) -> bool {
         true
@@ -207,8 +208,8 @@ pub fn init(app: &AppHandle, host: impl AssistHost) {
     emit_status(app);
 }
 
-/// Product-level availability changed (Rodnik: sign-in or sign-out). Wires or
-/// tears down without touching the user's preference.
+/// Product-level availability changed — a sign-in, an agent CLI appearing.
+/// Wires or tears down without touching the user's preference.
 pub fn refresh(app: &AppHandle) {
     let available = state(app).is_some_and(|s| s.host.available());
     if available && is_enabled() {
@@ -224,9 +225,7 @@ pub fn refresh(app: &AppHandle) {
 /// without the model starts its download and wiring follows when it lands, so
 /// the UI needs no separate "download" button.
 fn set_enabled(app: &AppHandle, on: bool) {
-    let mut prefs = gilb_config::load_preferences();
-    prefs.assist_enabled = on;
-    if let Err(err) = gilb_config::save_preferences(&prefs) {
+    if let Err(err) = gilb_config::update_preferences(|p| p.assist_enabled = on) {
         warn!(error = %err, "failed to persist assist toggle");
     }
     if on {
