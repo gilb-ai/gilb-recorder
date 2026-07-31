@@ -240,9 +240,14 @@ pub struct AssistStatus {
     pub downloading: bool,
     /// Download progress; meaningless unless `downloading`.
     pub percent: u8,
-    /// Effective state of the switch: on only when everything it needs is in
-    /// place, so a stale "on" preference never renders as a working feature.
+    /// Effective state: on only when everything it needs is in place, so a
+    /// stale "on" preference never renders as a working feature.
     pub enabled: bool,
+    /// What the user asked for, whatever the feature can currently do. The
+    /// switch renders from this while something is still missing — flipping it
+    /// on and watching it spring back to off, because an agent is not chosen
+    /// yet, reads as the app refusing rather than as a step remaining.
+    pub wanted: bool,
     /// What it will run on ([`AssistHost::backend_label`]), or `None`.
     pub backend: Option<String>,
     /// Agents the user can pick from ([`AssistHost::agents`]). Empty when the
@@ -285,6 +290,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             downloading: false,
             percent: 0,
             enabled: false,
+            wanted: false,
             backend: None,
             agents: Vec::new(),
             agent: None,
@@ -304,6 +310,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             0
         },
         enabled: available && model_ready() && is_enabled(),
+        wanted: is_enabled(),
         backend: state.host.backend_label(),
         agents: state.host.agents(),
         agent: gilb_config::load_preferences().assist_agent,
@@ -677,10 +684,19 @@ pub fn assist_status(app: AppHandle) -> AssistStatus {
 /// effect.
 #[tauri::command]
 pub fn assist_set_enabled(app: AppHandle, on: bool) -> Result<(), String> {
-    if on && !state(&app).is_some_and(|s| s.host.available()) {
-        return Err(state(&app)
-            .map(|s| s.host.strings().unavailable)
-            .unwrap_or_else(|| "assist unavailable".into()));
+    let Some(state) = state(&app) else {
+        return Err("assist is not set up".into());
+    };
+    // Turning it on while something is still missing is not an error when the
+    // user can finish the job from here: with agents to choose from, "on" is
+    // intent, and the picker is the next step. Refusing it — as this did —
+    // makes the switch spring back with a message, which is the app arguing
+    // with someone who is trying to set it up.
+    //
+    // Refuse only when there is nothing they could do about it: a product
+    // whose availability turns on something else entirely, like a sign-in.
+    if on && !state.host.available() && state.host.agents().is_empty() {
+        return Err(state.host.strings().unavailable);
     }
     set_enabled(&app, on);
     Ok(())

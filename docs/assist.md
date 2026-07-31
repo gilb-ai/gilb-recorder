@@ -187,6 +187,18 @@ machine has; picking one saves the choice and installs its adapter (a first
 where the user is told to go and run an npm command: that is a feature that
 stays off forever.
 
+While nothing is chosen the feature is simply off: no pipeline, no
+transcription, no overlay — and the switch still shows *on* if that is what the
+user asked for, because a switch that springs back to off reads as the app
+refusing rather than as a step remaining. Turning it on with nothing chosen is
+not an error; it is how someone says "set this up". The only genuine refusal is
+when there is nothing they could do from here — a product gated on something
+else, like a sign-in.
+
+With no agent installed at all, the row says which ones to install rather than
+"choose an agent": there is nothing to choose from, and asking anyway is how a
+setup screen becomes a riddle.
+
 The picker stays after the choice is made, with the current agent marked. A
 first-run wizard that disappears leaves the user with a decision they cannot
 revisit — and this one is "whose model hears my meetings", which is exactly the

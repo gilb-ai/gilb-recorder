@@ -331,6 +331,8 @@ type AssistStatus = {
   downloading: boolean;
   percent: number;
   enabled: boolean;
+  /// What the user asked for, whether or not it can run yet.
+  wanted: boolean;
   /// Which agent the suggestions will run on, named by the backend. Shown as
   /// a chip: with several coding CLIs installed, *which* one gets the
   /// conversation is not a detail to leave implicit.
@@ -361,7 +363,7 @@ function renderAssist(s: AssistStatus | null) {
   // Installing the agent the user just picked. The switch reads as on — they
   // asked for this — and stays put until it lands.
   if (s.preparing) {
-    toggle?.setAttribute("aria-checked", "true");
+    toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
     if (toggle) toggle.disabled = true;
     progress?.setAttribute("hidden", "");
     renderAssistBackend(null);
@@ -375,12 +377,20 @@ function renderAssist(s: AssistStatus | null) {
   // something themselves.
   const needsChoice = !s.available && s.agents.length > 0;
   if (needsChoice) {
-    toggle?.setAttribute("aria-checked", s.enabled ? "true" : "false");
+    // From `wanted`, not `enabled`: the switch shows what they asked for while
+    // the setup step is outstanding.
+    toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
     if (toggle) toggle.disabled = false;
     progress?.setAttribute("hidden", "");
     renderAssistBackend(null);
     renderAgentPicker(s, false);
-    setText("assist-desc", t("assist.pickAgent"));
+    // "Choose an agent" is the wrong thing to say when there is nothing to
+    // choose from — then the answer is which one to install.
+    const anyInstalled = s.agents.some((a) => a.installed);
+    setText(
+      "assist-desc",
+      anyInstalled ? t("assist.pickAgent") : (s.unavailable ?? t("assist.desc")),
+    );
     return;
   }
 
