@@ -127,6 +127,35 @@
               </select>
             </label>
           </div>
+
+          <!-- Real-time suggestions. Next to transcription because they share
+               the speech model and the meeting that feeds it — and *not* in
+               the workspace card: what the feature needs is the agent CLI on
+               this machine, not a signed-in account. Hidden until the backend
+               reports it can run (assist_status.available). -->
+          <div class="settings-row settings-row-stacked assist-row" id="assist-row" hidden>
+            <div class="assist-row-main">
+              <div class="settings-row-text">
+                <span class="settings-row-label" id="assist-label" data-i18n="assist.label">
+                  Live suggestions
+                </span>
+                <span class="settings-row-desc" id="assist-desc"></span>
+              </div>
+              <button
+                id="toggle-assist"
+                class="toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="assist-label"
+              >
+                <span class="toggle-knob" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="assist-progress" class="model-progress" hidden>
+              <div id="assist-progress-bar" class="model-progress-bar"></div>
+            </div>
+          </div>
         </div>
 
         <div class="settings-actions">
@@ -195,33 +224,6 @@
           <p class="auth-url-display">
             <span id="auth-employee"></span> · <span id="auth-ws-url"></span>
           </p>
-          <!-- Real-time suggestions. The switch lives in this card because the
-               feature depends on the workspace session: the system prompt, the
-               feature flag and the model provider all come from it. Hidden
-               unless the backend reports the feature (assist_status). -->
-          <div class="settings-row settings-row-stacked assist-row" id="assist-row" hidden>
-            <div class="assist-row-main">
-              <div class="settings-row-text">
-                <span class="settings-row-label" id="assist-label" data-i18n="assist.label">
-                  Live suggestions
-                </span>
-                <span class="settings-row-desc" id="assist-desc"></span>
-              </div>
-              <button
-                id="toggle-assist"
-                class="toggle"
-                type="button"
-                role="switch"
-                aria-checked="false"
-                aria-labelledby="assist-label"
-              >
-                <span class="toggle-knob" aria-hidden="true"></span>
-              </button>
-            </div>
-            <div id="assist-progress" class="model-progress" hidden>
-              <div id="assist-progress-bar" class="model-progress-bar"></div>
-            </div>
-          </div>
           <button id="btn-signout" type="button" data-i18n="auth.signOut">Sign out</button>
         </div>
       </section>

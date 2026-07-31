@@ -313,10 +313,14 @@ async function refreshAuth() {
     setText("auth-employee", s.employee ?? t("auth.thisDevice"));
     setText("auth-ws-url", s.gilb_web_url ?? "");
   }
+  // Availability can follow the session in a product whose prompt and model
+  // come from a server; in gilb it follows the agent CLI and this is a no-op
+  // refresh. Cheap either way, and it keeps the switch honest right after a
+  // sign-in or sign-out.
   if (FEATURE_ASSIST) refreshAssist();
 }
 
-// ----- real-time suggestions (workspace card) -----------------------------
+// ----- real-time suggestions (settings) -----------------------------------
 
 type AssistStatus = {
   /// Product-level availability, decided by the host (gilb_shell_tauri::assist).
@@ -433,6 +437,9 @@ async function openSettings() {
   }
   settingsToggleSnapshot = toggle?.getAttribute("aria-checked") === "true";
   if (FEATURE_TRANSCRIPTION) await loadTranscription();
+  // The switch lives in this overlay, so its state has to be current when the
+  // overlay opens — the agent CLI may have been installed since app start.
+  if (FEATURE_ASSIST) await refreshAssist();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
