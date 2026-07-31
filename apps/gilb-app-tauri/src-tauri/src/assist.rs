@@ -101,9 +101,11 @@ fn agent_args() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Prompt and knobs from `~/.gilb/`. Read per analysis (the trait is queried
-/// every time), so editing the file takes effect on the next suggestion — no
-/// restart, which is what makes prompt tuning bearable.
+/// Prompt and knobs from `~/.gilb/`. The file is read when a session opens —
+/// once per meeting, since the engine resets the session at each new one — so
+/// an edit applies to the next meeting without restarting the app. It does
+/// *not* apply mid-meeting: the agent was already given the old prompt as its
+/// opening turn, and re-sending a new one would contradict it.
 struct FileAssistConfig {
     path: PathBuf,
 }

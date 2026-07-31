@@ -161,10 +161,12 @@ The system prompt has no slot in ACP, so it rides in as the opening turn —
 once per session, not on every suggestion.
 
 The prompt itself lives in `~/.gilb/assist-prompt.md`, shipped with a default
-on first run and re-read per analysis: editing it takes effect on the next
-suggestion, which is what makes prompt tuning bearable. It is deliberately a
-local file — the prompt usually contains prices, objection handling and other
-things that are the user's business, not ours.
+on first run and re-read whenever a session opens — once per meeting, since
+the engine starts a fresh session for each. Editing it therefore takes effect
+on the next meeting, with no restart, but not mid-call: the agent already has
+the old prompt as its opening turn. It is deliberately a local file — the
+prompt usually contains prices, objection handling and other things that are
+the user's business, not ours.
 
 ## Open
 
