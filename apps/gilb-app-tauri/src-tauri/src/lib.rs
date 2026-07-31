@@ -101,6 +101,10 @@ pub fn run() {
                         Err(err) => error!(?err, "data_dir failed; meeting pipeline not started"),
                     }
 
+                    // Anything the last run left running, before this one
+                    // starts agents of its own — a crash never got to.
+                    assist::reap_orphaned_agents();
+
                     // Real-time suggestions. Started after the meeting pipeline:
                     // it subscribes to the audio tap the pipeline installs and
                     // to the recording bus for meeting boundaries. Silently

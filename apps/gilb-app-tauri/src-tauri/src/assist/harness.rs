@@ -268,6 +268,9 @@ impl Agent {
             startup_timeout: self.startup_timeout,
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
+            // Written down so the next launch can finish the job if this one
+            // ends without running any destructors.
+            registry: super::agent_registry(),
             config_options,
         }
     }

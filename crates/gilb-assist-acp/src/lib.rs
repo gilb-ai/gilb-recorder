@@ -39,6 +39,10 @@
 //! ```
 
 use std::collections::HashMap;
+mod orphans;
+
+pub use orphans::reap as reap_orphaned_agents;
+
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -73,6 +77,13 @@ pub struct AcpConfig {
     /// from the turn deadline: a cold agent may be slow once, and failing the
     /// handshake disables the feature rather than losing one suggestion.
     pub startup_timeout: Duration,
+    /// Where to write down the agent process groups this app starts, so a
+    /// launch after a crash can clean up what no destructor got to.
+    ///
+    /// `None` — the default — skips the bookkeeping: the process groups still
+    /// go away on an ordinary exit, only a crashed run leaves them behind.
+    /// Products that have a data directory should name a file in it.
+    pub registry: Option<PathBuf>,
     /// Session config to apply right after the handshake, as `(configId,
     /// value)` — the knobs `session/new` advertises in `configOptions`, e.g.
     /// `("model", "haiku")` or `("effort", "low")` on the Claude Code adapter.
@@ -95,6 +106,7 @@ impl Default for AcpConfig {
             cwd: std::env::temp_dir(),
             turn_timeout: Duration::from_secs(20),
             startup_timeout: Duration::from_secs(30),
+            registry: None,
             config_options: Vec::new(),
         }
     }
@@ -206,18 +218,43 @@ struct Bootstrap {
 }
 
 async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
-    let mut child = Command::new(&config.bin)
+    let mut command = Command::new(&config.bin);
+    command
         .args(&config.args)
         .current_dir(&config.cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    // Its own process group, so the whole npx → node → agent chain can be
+    // signalled at once. Without this only the wrapper dies (see ChildGuard).
+    #[cfg(unix)]
+    command.process_group(0);
+    let mut child = command
         .spawn()
         .with_context(|| format!("spawn agent {}", config.bin.display()))?;
 
+    // The child leads the group it was just put in, so its pid is the group's.
+    #[cfg(unix)]
+    let pgid = child.id().map(|id| id as i32);
+    #[cfg(not(unix))]
+    let pgid: Option<i32> = None;
+    if let (Some(path), Some(pgid)) = (&config.registry, pgid) {
+        orphans::register(path, pgid, &config.bin.to_string_lossy());
+    }
+
+    // Guarded from here on, not at the end. Everything below can fail — the
+    // handshake times out when the binary does not speak ACP, which is the
+    // common case on a machine being set up — and each of those returns has to
+    // take the whole process group with it. Building the guard last is how the
+    // options probe came to leave an agent running every time it failed.
     let stdin = child.stdin.take().context("agent stdin")?;
     let stdout = child.stdout.take().context("agent stdout")?;
+    let child = ChildGuard {
+        child,
+        pgid,
+        registry: config.registry.clone(),
+    };
     let conn = Connection::spawn(stdin, stdout);
 
     let handshake = async {
@@ -259,7 +296,7 @@ async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
 
     Ok(Bootstrap {
         conn,
-        child: ChildGuard(child),
+        child,
         session,
         session_id,
     })
@@ -364,12 +401,34 @@ impl AssistSession for AcpSession {
 
 /// Kills the agent when the session is dropped. `kill_on_drop` covers a normal
 /// drop; this makes the intent explicit and gives the process a name in logs.
-struct ChildGuard(Child);
+/// A spawned agent, and the whole wrapper chain behind it.
+///
+/// What we spawn is `npx`, which execs `node`, which starts the agent — so
+/// killing the process we hold leaves the agent running, reparented to init,
+/// holding its memory until the machine is rebooted. The child is put in its
+/// own process group at spawn so that dropping it signals all three.
+struct ChildGuard {
+    child: Child,
+    /// The child's process group (its own pid — it leads the group). `None`
+    /// where process groups do not apply.
+    pgid: Option<i32>,
+    /// Where the group was written down, to strike it out again.
+    registry: Option<PathBuf>,
+}
 
 impl Drop for ChildGuard {
     fn drop(&mut self) {
         debug!("stopping ACP agent");
-        let _ = self.0.start_kill();
+        match self.pgid {
+            Some(pgid) => orphans::kill_group(pgid),
+            // No group to signal: at least take the process we hold.
+            None => {
+                let _ = self.child.start_kill();
+            }
+        }
+        if let (Some(path), Some(pgid)) = (&self.registry, self.pgid) {
+            orphans::unregister(path, pgid);
+        }
     }
 }
 

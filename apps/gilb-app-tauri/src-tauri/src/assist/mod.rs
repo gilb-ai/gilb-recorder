@@ -48,6 +48,29 @@ const BUNDLED_PROMPT: &str = "resources/prompts/realtime_assist.md";
 /// enough for a local model's first token, short enough to stay a suggestion.
 const TURN_TIMEOUT: Duration = Duration::from_secs(15);
 
+/// Where the ACP agent process groups are written down, so a launch after a
+/// crash can clean up what no destructor got to.
+fn agent_registry() -> Option<PathBuf> {
+    gilb_config::data_dir()
+        .inspect_err(|err| warn!(error = %err, "assist: no data dir for the agent registry"))
+        .ok()
+        .map(|dir| dir.join("acp-agents.json"))
+}
+
+/// Kill agents a previous run left behind, before starting any of our own.
+///
+/// An adapter is reached through `npx`, so what dies with the app is the
+/// wrapper — the agent itself is reparented and keeps its ~200 MB. Ordinary
+/// exits are handled at the source (each agent gets its own process group);
+/// this is for the exits that run no code at all.
+pub fn reap_orphaned_agents() {
+    let Some(path) = agent_registry() else { return };
+    let killed = gilb_assist_acp::reap_orphaned_agents(&path);
+    if killed > 0 {
+        info!(killed, "assist: cleaned up agents left by a previous run");
+    }
+}
+
 pub fn init(app: &AppHandle, db: std::sync::Arc<gilb_db::Db>) {
     // Resolve the bundled prompt once, at init: `AssistHost::engine` is called
     // from the pipeline with no `AppHandle` in reach, and resource paths differ

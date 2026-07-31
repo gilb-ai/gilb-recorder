@@ -196,3 +196,68 @@ fn agent_availability_follows_the_binary() {
     assert!(agent_available(&bin));
     assert!(!agent_available(&dir.path().join("nope")));
 }
+
+/// The leak that produced the orphans, pinned end to end.
+///
+/// An adapter is reached through `npx`, so the process we spawn goes on to
+/// start the agent itself. Killing our own child leaves that grandchild
+/// running — reparented to init, holding its memory. Here a shell stands in
+/// for `npx` and a `sleep` for the agent: neither speaks ACP, so the
+/// handshake times out, which is exactly the path that used to leak (the
+/// options probe against a binary that is not an adapter).
+///
+/// Passing means the grandchild is gone and the registry is clean, without
+/// anyone calling the reaper — the failure path took the whole group.
+#[tokio::test]
+async fn a_failed_handshake_takes_the_whole_process_group() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let registry = dir.path().join("agents.json");
+    let marker = dir.path().join("grandchild.pid");
+
+    let config = AcpConfig {
+        bin: PathBuf::from("/bin/sh"),
+        // Start a "child agent", write down its pid, then sit there saying
+        // nothing — the shape of a binary that does not speak the protocol.
+        args: vec![
+            "-c".into(),
+            format!(
+                "sleep 60 & echo $! > {}; sleep 60",
+                marker.to_string_lossy()
+            ),
+        ],
+        startup_timeout: Duration::from_millis(600),
+        registry: Some(registry.clone()),
+        ..AcpConfig::default()
+    };
+
+    let err = match bootstrap(&config).await {
+        Err(err) => err,
+        // Not `expect_err`: the success value owns a live agent, and printing
+        // it is neither possible nor the point.
+        Ok(_) => panic!("a shell that says nothing cannot pass an ACP handshake"),
+    };
+    assert!(
+        err.to_string().contains("did not answer the ACP handshake"),
+        "unexpected failure: {err}"
+    );
+
+    let pid: i32 = std::fs::read_to_string(&marker)
+        .expect("the stand-in agent recorded its pid")
+        .trim()
+        .parse()
+        .expect("a pid");
+
+    // The signal travels the group; give the kernel a moment to deliver it.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let alive = unsafe { libc::kill(pid, 0) } == 0;
+    assert!(
+        !alive,
+        "the grandchild outlived the failed handshake — this is the leak"
+    );
+
+    let left = std::fs::read_to_string(&registry).unwrap_or_default();
+    assert!(
+        !left.contains("/bin/sh"),
+        "a group that was cleaned up must not stay on the reaper's list: {left}"
+    );
+}
