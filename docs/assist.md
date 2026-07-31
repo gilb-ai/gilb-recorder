@@ -153,8 +153,14 @@ assist://error   { message }
 and the main window listens for `assist-status`, pushed on every transition so
 a settings card follows availability, download progress and teardown without
 polling. The window is created hidden at wiring time — so the listeners exist
-before the first suggestion — and surfaces only when the model actually says
-something.
+before the first suggestion — and surfaces when a recording arms.
+
+It used to wait for the model to say something, on the reasoning that an empty
+panel over a live call is noise. What that missed is that the panel is not
+empty at that moment: it says it is listening, which is the one thing someone
+who just started a call wants to know, and the alternative is a prompter you
+have to remember a hotkey for. It still never takes focus, and an explicit
+hide is remembered until the next meeting.
 
 ## Backends
 

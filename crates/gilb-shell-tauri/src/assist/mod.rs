@@ -26,8 +26,10 @@
 //! progress and teardown without polling.
 //!
 //! The window is created hidden at wiring time so those listeners are
-//! registered before the first suggestion, and only surfaces when the model
-//! actually says something — silence never opens it.
+//! registered before the first suggestion, and surfaces when a recording
+//! arms: someone who just started a call should see that something is
+//! listening, not have to remember a hotkey. Between meetings it stays out
+//! of the way, and an explicit hide is remembered until the next one.
 
 mod download;
 mod journal;
@@ -488,6 +490,13 @@ fn wire(app: &AppHandle) {
                     gilb_events::RecordingEvent::Armed { meeting_id } => {
                         set_auto_show_suppressed(&app, false);
                         emit_listening(&app, true);
+                        // Up before the first suggestion, not after it. A
+                        // prompter you have to summon is one you forget you
+                        // have — and the empty panel is not empty here, it
+                        // says it is listening, which is the one thing
+                        // someone starting a call wants to know. It still
+                        // never steals focus, and ⌘\ still puts it away.
+                        show_window(&app);
                         // File this meeting's suggestions next to its video
                         // and audio. The id is what arming gives us; the
                         // folder is looked up on the first entry.

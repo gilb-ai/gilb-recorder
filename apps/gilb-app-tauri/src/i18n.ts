@@ -59,7 +59,7 @@ const en = {
   "capture.thisMeeting": "this meeting",
   "capture.stop": "Stop",
 
-  "assist.title": "{brand} Realtime Assistant",
+  "assist.title": "Realtime Assistant",
   "assist.empty": "Listening — suggestions will appear here.",
   "assist.idle": "Not recording — start one (⌘⇧R) and I'll listen.",
   "assist.thinking": "Thinking…",
@@ -161,7 +161,7 @@ const ru: typeof en = {
   "capture.thisMeeting": "эта встреча",
   "capture.stop": "Остановить",
 
-  "assist.title": "{brand} — ассистент реального времени",
+  "assist.title": "Ассистент реального времени",
   "assist.empty": "Слушаю — подсказки появятся здесь.",
   "assist.idle": "Запись не идёт — начните её (⌘⇧R), и я буду слушать.",
   "assist.thinking": "Думаю…",
