@@ -215,10 +215,13 @@ impl AssistHost for GilbAssistHost {
     /// assistant said during it belongs there, not in a separate archive they
     /// have to know about.
     ///
-    /// The recorder decides that folder (it stamps it with the start time), so
-    /// it is read back off the meeting row rather than derived a second time —
-    /// two places computing the same path is how they end up disagreeing.
-    fn journal_path(&self, meeting_id: i64) -> Option<PathBuf> {
+    /// This meeting's own folder — where the recorder put `video.mp4` and
+    /// `audio.wav`, and so where `assist.json`/`assist.txt` belong.
+    ///
+    /// Read from the meetings row rather than rebuilt from a timestamp: the
+    /// recorder owns the naming, and a journal that guessed would drift the
+    /// first time that changed.
+    fn journal_dir(&self, meeting_id: i64) -> Option<PathBuf> {
         let db = self.db.clone();
         let meeting = tauri::async_runtime::block_on(async move {
             gilb_db::meetings::get_meeting(&db, meeting_id).await
@@ -227,12 +230,11 @@ impl AssistHost for GilbAssistHost {
             .inspect_err(|err| warn!(error = %err, meeting_id, "assist journal: meeting lookup"))
             .ok()??;
         // Audio is written for every recording; video may be absent.
-        let dir = meeting
+        meeting
             .audio_path
             .as_deref()
             .or(meeting.video_path.as_deref())
-            .and_then(|p| Path::new(p).parent().map(Path::to_path_buf))?;
-        Some(dir.join("assist.md"))
+            .and_then(|p| Path::new(p).parent().map(Path::to_path_buf))
     }
 
     fn strings(&self) -> AssistStrings {
@@ -307,5 +309,67 @@ impl AssistConfig for FileAssistConfig {
     /// without making a slow one wait for company.
     async fn turns_before_analysis(&self) -> u32 {
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The journal's folder cannot be resolved when a recording arms, and can
+    /// be once the recorder has written its paths.
+    ///
+    /// This is the bug that made the feature look implemented and write
+    /// nothing for every meeting: `Armed` carries the meeting id, the recorder
+    /// fills in the paths from its own subscriber to that same event, and
+    /// whoever asks first gets a row with no folder in it. Hence the lazy
+    /// lookup on the first entry — pinned here, on both sides of the write.
+    ///
+    /// Not a `#[tokio::test]`, deliberately: `journal_dir` blocks on the
+    /// database, and blocking inside an async context panics. Being callable
+    /// only from a blocking thread is part of the contract, so the test holds
+    /// itself to it — the shell calls this from the blocking pool.
+    #[test]
+    fn journal_dir_needs_the_paths_the_recorder_writes_after_arming() {
+        let setup = tokio::runtime::Runtime::new().expect("runtime");
+        let file =
+            std::env::temp_dir().join(format!("gilb-journal-{}.sqlite", uuid::Uuid::new_v4()));
+        let dir = std::env::temp_dir().join("gilb-journal-meeting");
+
+        let (db, meeting_id) = setup.block_on(async {
+            let db = std::sync::Arc::new(gilb_db::open_db(&file).await.expect("open db"));
+            let id = gilb_db::meetings::insert_meeting(&db, 0, "test.app")
+                .await
+                .expect("insert meeting");
+            (db, id)
+        });
+        let host = GilbAssistHost {
+            bundled: None,
+            db: db.clone(),
+        };
+
+        // As it is the instant a recording arms: a meeting, no folder yet.
+        assert!(
+            host.journal_dir(meeting_id).is_none(),
+            "no folder is knowable before the recorder records one"
+        );
+
+        setup.block_on(async {
+            gilb_db::meetings::set_recording_paths(
+                &db,
+                meeting_id,
+                &dir.join("video.mp4").to_string_lossy(),
+                &dir.join("audio.wav").to_string_lossy(),
+            )
+            .await
+            .expect("set paths");
+        });
+
+        assert_eq!(
+            host.journal_dir(meeting_id),
+            Some(dir),
+            "once the paths are in, the folder is the recording's own"
+        );
+        let _ = std::fs::remove_file(&file);
     }
 }

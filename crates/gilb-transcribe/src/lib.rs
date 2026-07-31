@@ -46,6 +46,23 @@ pub const SEG_VOICED_MIN: f32 = 0.2;
 
 /// Per-frame voiced mask via RMS energy with an adaptive threshold. An all-false
 /// mask means the channel is (near) silent.
+///
+/// Two different questions, deliberately answered from two different
+/// statistics:
+///
+/// * *Is there any speech in here at all?* — asked of the *loudest* frame.
+///   Asking a percentile silences sparse recordings: someone who says one
+///   sentence into a two-minute recording leaves 99% of frames silent, so the
+///   95th percentile is silence too, and the whole file gets thrown away
+///   before Whisper sees it. That is a real recording lost, not a hallucination
+///   avoided — and it happened (a 2-minute meeting whose 1.1 s of speech was
+///   0.89% of the frames transcribed to nothing).
+/// * *Which frames are speech?* — asked of the percentile spread, which is
+///   what makes the threshold adapt to the room rather than to a door slam.
+///
+/// A lone impulse in an otherwise silent file therefore gets past the first
+/// question and is caught by the second: it clears the threshold for a frame
+/// or two, and [`MIN_VOICED_SECS`] then declines the channel anyway.
 pub fn voiced_mask(samples: &[f32]) -> Vec<bool> {
     let rms: Vec<f32> = samples
         .chunks(VAD_FRAME)
@@ -56,12 +73,13 @@ pub fn voiced_mask(samples: &[f32]) -> Vec<bool> {
     }
     let mut sorted = rms.clone();
     sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let floor = sorted[sorted.len() * 10 / 100];
-    let peak = sorted[sorted.len() * 95 / 100];
-    if peak < ABS_SILENCE {
+    let loudest = *sorted.last().expect("rms is non-empty");
+    if loudest < ABS_SILENCE {
         return vec![false; rms.len()];
     }
-    let thresh = (floor + 0.15 * (peak - floor)).max(0.006);
+    let floor = sorted[sorted.len() * 10 / 100];
+    let spread = sorted[sorted.len() * 95 / 100];
+    let thresh = (floor + 0.15 * (spread - floor)).max(0.006);
     rms.iter().map(|&e| e > thresh).collect()
 }
 

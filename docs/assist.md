@@ -189,14 +189,25 @@ answer to a direct question, and says so plainly if that is all there was.
 
 ### Where it is written down
 
-Each meeting's folder gets an `assist.md` next to `video.mp4` and `audio.wav`:
-the questions asked and the suggestions given, stamped with wall-clock time. A
-meeting is a thing people open as a folder, so what the assistant said during
-it belongs there rather than in a separate archive they have to learn about.
-The path comes off the meeting row rather than being derived a second time —
-two places computing the same path is how they end up disagreeing. Writing is
-best-effort: the panel is the product, the file is a record of it, and a failed
-write must never cost a suggestion.
+Each meeting's folder gets an `assist.json` and an `assist.txt` next to
+`video.mp4` and `transcript.json`: the questions asked and the suggestions
+given, stamped with wall-clock time — the JSON for anything that reads it back,
+the text for a person opening the folder. Deliberately not the database. A
+meeting is a folder people open, copy and mail, and its record should survive
+all three.
+
+The folder comes off the meeting row rather than being derived a second time —
+two places computing the same path is how they end up disagreeing — but it is
+looked up **on the first entry, not when the recording arms**. At arming the
+meeting id exists and its folder does not: the recorder writes the paths from
+its own subscriber to the same `Armed` event, so resolving on arrival raced it
+and lost every time, silently filing every meeting's suggestions into `None`.
+The id is what arming actually gives us; the folder is what the first
+suggestion can afford to wait a lookup for.
+
+Writing is best-effort and happens on the blocking pool: the panel is the
+product, the file is a record of it, and neither a database lookup nor a disk
+write belongs on the path a suggestion travels.
 
 ### Choosing an agent
 
@@ -315,11 +326,14 @@ Whichever agent won is **named in the UI** — a chip under the switch, "Runs on
 Claude Code". With more than one CLI installed the choice is ours to make but
 not ours to hide: it decides which vendor sees the conversation, and a user
 who did not know which one was picked cannot object to it. `AssistHost::
-backend_label` is where a product answers.
+agents` is where a product lists them, and the picker is where the user
+answers — the choice is shown as a control rather than a label, because
+someone who can see which agent is selected can also change it.
 
 The prompt itself lives in `~/Documents/Gilb/prompts/realtime_assist.md`, shipped with a default
-on first run and re-read whenever a session opens — once per meeting, since
-the engine starts a fresh session for each. Editing it therefore takes effect
+on first run and re-read from disk whenever a session opens — once per meeting,
+since the engine starts a fresh session for each (`AssistConfig::system_prompt`
+is called when a conversation begins, never cached at startup). Editing it therefore takes effect
 on the next meeting, with no restart, but not mid-call: the agent already has
 the old prompt as its opening turn. It is deliberately a local file — the
 prompt usually contains prices, objection handling and other things that are

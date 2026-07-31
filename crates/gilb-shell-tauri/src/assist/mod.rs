@@ -38,7 +38,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use download::{start_model_download, ModelDownload};
-use journal::{close_journal, journal, open_journal};
+use journal::{close_journal, journal, open_journal, Journal, Kind};
 use window::{
     auto_show_suppressed, emit_listening, ensure_window, register_shortcut,
     set_auto_show_suppressed, show_window,
@@ -127,11 +127,13 @@ pub trait AssistHost: Send + Sync + 'static {
         Ok(Vec::new())
     }
 
-    /// Where to write a transcript of the suggestions and questions for the
-    /// meeting now recording, if the product keeps one.
+    /// The folder to file this meeting's questions and suggestions in — its
+    /// own folder, alongside the recording. `None` — the default — keeps no
+    /// record.
     ///
-    /// Called when a recording arms. `None` — the default — writes nothing.
-    fn journal_path(&self, _meeting_id: i64) -> Option<PathBuf> {
+    /// Called on the first entry, not when the recording arms: at arming the
+    /// meeting exists but its folder may not be recorded yet.
+    fn journal_dir(&self, _meeting_id: i64) -> Option<PathBuf> {
         None
     }
 
@@ -205,15 +207,25 @@ pub struct AssistState {
     /// Cached [`AssistHost::session_options`] — probing costs an agent start.
     /// Cleared when the agent changes; the knobs belong to the agent.
     session_options: parking_lot::Mutex<Option<Vec<SessionOptionInfo>>>,
-    /// Where this meeting's suggestions are being written, if anywhere. Set
-    /// when a recording arms and cleared when it ends, so a suggestion that
-    /// arrives between meetings is not filed under the previous one.
-    journal: parking_lot::Mutex<Option<PathBuf>>,
+    /// This meeting's record of questions and suggestions. Armed with the
+    /// meeting when a recording starts, emptied when it ends.
+    journal: parking_lot::Mutex<Journal>,
 }
 
 struct Wired {
     handle: AssistHandle,
     _pipeline: AssistPipeline,
+    /// The meeting-boundary listener. Held so it dies with the stack it
+    /// belongs to: it loops on a broadcast receiver that never closes, so a
+    /// rewire would otherwise leave the previous one running and every
+    /// meeting would be opened, announced and journalled twice over.
+    boundary: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for Wired {
+    fn drop(&mut self) {
+        self.boundary.abort();
+    }
 }
 
 /// What a settings card renders: whether the feature is available at all, what
@@ -320,7 +332,7 @@ pub fn init(app: &AppHandle, host: impl AssistHost) {
             download: ModelDownload::default(),
             preparing: AtomicBool::new(false),
             session_options: parking_lot::Mutex::new(None),
-            journal: parking_lot::Mutex::new(None),
+            journal: parking_lot::Mutex::new(Journal::default()),
         });
     }
     if is_enabled() {
@@ -342,6 +354,18 @@ pub fn refresh(app: &AppHandle) {
         teardown(app);
     }
     emit_status(app);
+}
+
+/// The choice the stack was built from just changed — a different agent, a
+/// different model. Drop it and build a new one.
+///
+/// [`refresh`] alone cannot do this: it calls [`wire`], which returns early
+/// when a stack is already running, so a new agent or model was only picked up
+/// after a restart. The change lands on the next session; a meeting in
+/// progress simply starts a fresh conversation on the new settings.
+fn rewire(app: &AppHandle) {
+    teardown(app);
+    refresh(app);
 }
 
 /// Flip the user-level switch: persist it, then wire or tear down. Switching on
@@ -442,11 +466,6 @@ fn wire(app: &AppHandle) {
         AssistPipelineConfig::default(),
         Some(bus),
     );
-    *wired = Some(Wired {
-        handle: assist,
-        _pipeline: pipeline,
-    });
-    drop(wired);
 
     ensure_window(app);
     emit_listening(app, false);
@@ -456,7 +475,7 @@ fn wire(app: &AppHandle) {
 
     // A new meeting is a fresh start for the panel too: a hide from the
     // previous call should not silence this one.
-    {
+    let boundary = {
         let app = app.clone();
         let mut rx = bus_for_boundary.subscribe_recording();
         tauri::async_runtime::spawn(async move {
@@ -465,10 +484,9 @@ fn wire(app: &AppHandle) {
                     gilb_events::RecordingEvent::Armed { meeting_id } => {
                         set_auto_show_suppressed(&app, false);
                         emit_listening(&app, true);
-                        // File this meeting's suggestions next to its video and
-                        // audio. Opened here rather than on the first
-                        // suggestion so the path is decided while we still know
-                        // which meeting we are in.
+                        // File this meeting's suggestions next to its video
+                        // and audio. The id is what arming gives us; the
+                        // folder is looked up on the first entry.
                         open_journal(&app, meeting_id);
                     }
                     gilb_events::RecordingEvent::Cancelled { .. } => {
@@ -477,8 +495,15 @@ fn wire(app: &AppHandle) {
                     }
                 }
             }
-        });
-    }
+        })
+    };
+
+    *wired = Some(Wired {
+        handle: assist,
+        _pipeline: pipeline,
+        boundary,
+    });
+    drop(wired);
 
     // Engine events → overlay webview. A suggestion surfaces the window;
     // loading/error only update it.
@@ -494,7 +519,7 @@ fn wire(app: &AppHandle) {
                     );
                 }
                 AssistEvent::Update(text) => {
-                    journal(&app, "Suggestion", &text);
+                    journal(&app, Kind::Suggestion, &text);
                     // Always delivered, so a reopened panel has the full
                     // history; only the pop-up respects an explicit hide.
                     if !auto_show_suppressed(&app) {
@@ -558,7 +583,7 @@ pub fn assist_ask(app: AppHandle, question: String) -> Result<(), String> {
         Some(handle) => {
             // Recorded before sending: the question is the user's own words,
             // and it belongs in the record whatever the model answers.
-            journal(&app, "Question", &question);
+            journal(&app, Kind::Question, &question);
             handle.ask(question);
             Ok(())
         }
@@ -625,9 +650,10 @@ pub fn assist_choose_agent(app: AppHandle, agent: String) -> Result<(), String> 
         match prepared {
             Ok(Ok(())) => {
                 info!(%agent, "assist agent ready");
-                // Availability just changed: wire it up (or tear down, if the
-                // user turned the switch off while we were installing).
-                refresh(&app_bg);
+                // The agent changed, so anything already wired was built on
+                // the old one — rebuild rather than leave the meeting running
+                // on the agent the user just replaced.
+                rewire(&app_bg);
             }
             Ok(Err(err)) => {
                 warn!(error = %err, %agent, "assist agent install failed");
@@ -702,9 +728,9 @@ pub fn assist_set_session_option(
         other => return Err(format!("unknown session option `{other}`")),
     };
     applied.map_err(|e| e.to_string())?;
-    // Rewire: the engine reads the knobs when it builds the backend, and a
-    // running meeting keeps its session — the change lands on the next one.
-    refresh(&app);
+    // The knobs are read when the backend is built, so the stack has to be
+    // rebuilt for a new one to take effect.
+    rewire(&app);
     Ok(())
 }
 
