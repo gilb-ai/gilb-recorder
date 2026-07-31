@@ -12,12 +12,29 @@ mod transcribe_worker;
 mod tray;
 
 use tauri::Manager;
-use tracing::error;
+use tracing::{error, info};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Before anything touches the data directory — including the logger, which
+    // creates `logs/` inside it and would make the destination "already exist".
+    // Nothing can be logged yet, so the outcome is reported once tracing is up.
+    let migrated = gilb_config::migrate_legacy_data_dir();
+
     // Held until run() returns; dropping flushes the non-blocking writer.
     let _log_guard = logging::init_tracing();
+
+    match migrated {
+        Ok(Some(from)) => info!(
+            from = %from.display(),
+            "moved gilb's data to the visible folder in Documents"
+        ),
+        Ok(None) => {}
+        // Not fatal: the old directory is untouched and the app starts fresh in
+        // the new one. Loud, because the user's history is not where they will
+        // look for it.
+        Err(err) => error!(?err, "could not move the old data directory"),
+    }
 
     #[allow(unused_mut)]
     let mut builder = tauri::Builder::default();
@@ -40,10 +57,14 @@ pub fn run() {
         ))
         .plugin(tauri_plugin_process::init());
 
-    // Updater is desktop-only (matches the Cargo cfg gate).
+    // Updater and the assist hotkey are desktop-only (matching the Cargo cfg
+    // gate). Without the shortcut plugin the suggestions overlay has no
+    // keyboard toggle — the shell warns and carries on rather than failing.
     #[cfg(desktop)]
     {
-        builder = builder.plugin(tauri_plugin_updater::Builder::new().build());
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_global_shortcut::Builder::new().build());
     }
 
     let result = builder

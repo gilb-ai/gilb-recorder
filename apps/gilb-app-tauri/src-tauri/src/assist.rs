@@ -7,9 +7,10 @@
 //!
 //! * **availability** — the agent binary exists. Nothing to run without it, and
 //!   the UI says so instead of failing per suggestion;
-//! * **the prompt** — a file in `~/.gilb/`. Deliberately local and never
-//!   uploaded: a prompter's prompt holds prices and objection handling, which
-//!   is the user's business, and the file is theirs to edit;
+//! * **the prompt** — `prompts/realtime_assist.md` in the visible data folder.
+//!   Deliberately local and never uploaded: a prompter's prompt holds prices
+//!   and objection handling, which is the user's business, and the file is
+//!   theirs to edit;
 //! * **the backend** — an ACP session against that agent.
 //!
 //! The trust boundary a server-backed product needs (fencing recorded speech,
@@ -18,15 +19,17 @@
 //! nobody else's data to reach. When this role grows tool access, revisit —
 //! `AssistSession::ask` already carries the two halves separately.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use gilb_assist::{AssistBackend, AssistConfig};
 use gilb_assist_acp::{agent_available, AcpBackend, AcpConfig};
 use gilb_shell_tauri::assist::{AssistHost, AssistStrings};
-use tauri::AppHandle;
+use tauri::path::BaseDirectory;
+use tauri::{AppHandle, Manager};
+use tracing::{info, warn};
 
 /// Override the agent binary; also how a test or a power user points gilb at
 /// `gemini`, a wrapper script, or a Hermes ACP adapter.
@@ -34,18 +37,26 @@ const AGENT_BIN_ENV: &str = "GILB_ASSIST_AGENT";
 /// Extra arguments, space-separated (e.g. `--experimental-acp`).
 const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 
-/// The prompt that makes the agent a meeting prompter rather than a coding
-/// assistant. Shipped on first run so there is something to edit.
-const PROMPT_FILE: &str = "assist-prompt.md";
-
-const DEFAULT_PROMPT: &str = include_str!("../assets/assist-prompt.md");
+/// The bundled copy of the prompt, inside the app's resources — a file the
+/// packager ships, not a string compiled into the binary. Seeded into the
+/// user's prompts directory on first run; after that the user's copy wins and
+/// this one is never read again.
+const BUNDLED_PROMPT: &str = "resources/prompts/realtime_assist.md";
 
 /// A suggestion is worthless once the conversation has moved on. Generous
 /// enough for a local model's first token, short enough to stay a suggestion.
 const TURN_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub fn init(app: &AppHandle) {
-    gilb_shell_tauri::assist::init(app, GilbAssistHost);
+    // Resolve the bundled prompt once, at init: `AssistHost::engine` is called
+    // from the pipeline with no `AppHandle` in reach, and resource paths differ
+    // between a dev run and an installed bundle.
+    let bundled = app
+        .path()
+        .resolve(BUNDLED_PROMPT, BaseDirectory::Resource)
+        .inspect_err(|err| warn!(error = %err, "bundled assist prompt not found"))
+        .ok();
+    gilb_shell_tauri::assist::init(app, GilbAssistHost { bundled });
 }
 
 // `gilb_shell_tauri::assist::refresh` re-evaluates availability. Nothing calls
@@ -53,7 +64,12 @@ pub fn init(app: &AppHandle) {
 // no event to hang it on. A product whose availability follows a sign-in calls
 // it there.
 
-struct GilbAssistHost;
+struct GilbAssistHost {
+    /// Absolute path to the shipped prompt, or `None` if the resource is
+    /// missing from this build — in which case the feature refuses to start
+    /// rather than inventing a prompt of its own.
+    bundled: Option<PathBuf>,
+}
 
 impl AssistHost for GilbAssistHost {
     /// No agent, no feature. Same shape as the whisper-model gate: the UI shows
@@ -63,7 +79,7 @@ impl AssistHost for GilbAssistHost {
     }
 
     fn engine(&self) -> Result<(Box<dyn AssistConfig>, Box<dyn AssistBackend>)> {
-        let config = FileAssistConfig::load()?;
+        let config = FileAssistConfig::load(self.bundled.as_deref())?;
         let acp = AcpConfig {
             bin: agent_bin(),
             args: agent_args(),
@@ -101,23 +117,31 @@ fn agent_args() -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Prompt and knobs from `~/.gilb/`. The file is read when a session opens —
-/// once per meeting, since the engine resets the session at each new one — so
-/// an edit applies to the next meeting without restarting the app. It does
-/// *not* apply mid-meeting: the agent was already given the old prompt as its
-/// opening turn, and re-sending a new one would contradict it.
+/// The prompt, from `<data dir>/prompts/realtime_assist.md`. Read when a
+/// session opens — once per meeting, since the engine resets the session at
+/// each new one — so an edit applies to the next meeting without restarting
+/// the app. It does *not* apply mid-meeting: the agent was already given the
+/// old prompt as its opening turn, and re-sending a new one would contradict
+/// it.
 struct FileAssistConfig {
     path: PathBuf,
 }
 
 impl FileAssistConfig {
-    fn load() -> Result<Self> {
-        let path = gilb_config::data_dir()
-            .context("resolve gilb data dir")?
-            .join(PROMPT_FILE);
+    /// Seeds the user's copy from `bundled` on first run. A missing bundled
+    /// prompt is an error rather than a silent fallback: a prompter without
+    /// its `[NO_RESP]` discipline would talk over every meeting, which is
+    /// worse than not starting.
+    fn load(bundled: Option<&Path>) -> Result<Self> {
+        let path = gilb_config::assist_prompt_path().context("resolve the prompt path")?;
         if !path.exists() {
-            std::fs::write(&path, DEFAULT_PROMPT)
-                .with_context(|| format!("write default prompt to {}", path.display()))?;
+            let bundled = bundled.ok_or_else(|| {
+                anyhow!("this build ships no {}", gilb_config::ASSIST_PROMPT_FILE)
+            })?;
+            gilb_config::ensure_prompts_dir()?;
+            std::fs::copy(bundled, &path)
+                .with_context(|| format!("seed {} from {}", path.display(), bundled.display()))?;
+            info!(path = %path.display(), "assist prompt created — edit it to tune suggestions");
         }
         Ok(Self { path })
     }

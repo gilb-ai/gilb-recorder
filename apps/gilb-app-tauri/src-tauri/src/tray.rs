@@ -42,7 +42,7 @@ impl TrayController for GilbTrayController {
     fn account_line(&self, _app: &AppHandle) -> Option<String> {
         // The signed-in user's email, shown at the top of the menu. gilb-web
         // sends it as the `employee` label in the auth callback (see
-        // commands::auth), persisted in ~/.gilb/credentials.json. `None` while
+        // commands::auth), persisted in <Documents>/gilb/credentials.json. `None` while
         // signed out, so the shared renderer hides the line.
         gilb_config::load_credentials()
             .ok()

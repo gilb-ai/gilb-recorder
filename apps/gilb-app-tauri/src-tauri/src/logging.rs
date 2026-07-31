@@ -1,6 +1,6 @@
 //! Tracing setup for the Tauri shell.
 //!
-//! Both dev and release builds write a daily-rotated file to `~/.gilb/logs/`;
+//! Both dev and release builds write a daily-rotated file to the data folder's `logs/`;
 //! dev additionally logs to stdout and at a chattier level.
 //!
 //! Release builds used to install no subscriber at all, which meant that when a
@@ -33,7 +33,8 @@ const DEFAULT_FILTER: &str = "info";
 
 /// Initialise `tracing` for the Tauri shell.
 ///
-/// Writes a daily-rotated file in `$HOME/.gilb/logs/`, plus stdout in dev builds.
+/// Writes a daily-rotated file in the data directory's `logs/`, plus stdout in
+/// dev builds.
 /// The returned [`WorkerGuard`] **must be held** for the lifetime of the process
 /// — dropping it flushes the file writer. Returns `None` if the logs directory
 /// cannot be created (dev then falls back to stdout-only; release has nowhere
@@ -58,7 +59,7 @@ pub fn init_tracing() -> Option<WorkerGuard> {
 }
 
 /// [`init_tracing`] with the log directory supplied, so it can be exercised
-/// against a temporary directory instead of the user's real `~/.gilb/logs`.
+/// against a temporary directory instead of the user's real logs folder.
 fn init_with_logs_dir(dir: &std::path::Path) -> Option<WorkerGuard> {
     let env_filter =
         EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER));

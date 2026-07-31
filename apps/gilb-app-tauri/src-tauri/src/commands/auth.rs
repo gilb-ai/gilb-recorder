@@ -5,7 +5,7 @@
 //! the employee signs in and confirms, gilb-web 302s back to
 //! `gilb://auth/callback?token=…&url=…&employee=…&state=…`; the OS hands that
 //! deep link to [`handle_callback`], which verifies `state`, writes
-//! `~/.gilb/credentials.json`, and emits `auth` so the UI refreshes.
+//! `<Documents>/gilb/credentials.json`, and emits `auth` so the UI refreshes.
 //!
 //! The token arrives in the deep-link URL, so no HTTP client is needed here.
 
@@ -63,7 +63,7 @@ pub async fn start_login(
         .map_err(|e| format!("failed to open browser: {e}"))
 }
 
-/// Current credentials state (read from `~/.gilb/credentials.json`).
+/// Current credentials state (read from `<Documents>/gilb/credentials.json`).
 #[tauri::command]
 pub async fn auth_status() -> Result<AuthStatus, String> {
     match load_credentials().map_err(|e| e.to_string())? {

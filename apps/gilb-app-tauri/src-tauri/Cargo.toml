@@ -26,6 +26,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-process = "2"
 tauri-plugin-deep-link = "2"
+# The suggestions overlay's show/hide hotkey. gilb-shell-tauri calls into it,
+# but a plugin can only be registered by the app that owns the builder.
+tauri-plugin-global-shortcut = "2"
 uuid = { workspace = true }
 url = "2"
 serde = { workspace = true }

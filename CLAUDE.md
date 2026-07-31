@@ -66,7 +66,27 @@ Capture defaults are controlled by env vars consumed by
 `CAPTURE_CLIPBOARD`, `CAPTURE_TREE_SNAPSHOTS`. Logging: `RUST_LOG=...`
 (defaults: `info,gilb=debug` in the Tauri shell, `info` in the CLI).
 
-The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`).
+Everything the app writes lives in one **visible** folder —
+`~/Documents/gilb` on macOS, `%USERPROFILE%\Documents\gilb` on Windows,
+resolved through the OS's Documents known-folder rather than assembled
+from `$HOME` (on Windows it may be redirected, e.g. into OneDrive). See
+`gilb_config::data_dir`:
+
+```
+<Documents>/gilb/
+├── db.sqlite            actions, sessions, meetings, transcripts
+├── meetings/<stamp>/    video.mp4 + audio.wav per recorded call
+├── models/              the downloaded whisper model (~570 MB)
+├── prompts/             realtime_assist.md — the suggestions prompt
+├── logs/                daily-rotated app log
+├── prefs.json           UI preferences
+└── credentials.json     analyzer credentials, when configured
+```
+
+Installs from before the move keep their data in `~/.gilb`;
+`gilb_config::migrate_legacy_data_dir` renames it into place at startup,
+before the logger touches the new directory. A product embedding these
+crates calls `set_data_dir` first and is never migrated.
 
 ## Architecture
 
@@ -74,15 +94,16 @@ The DB lives at `~/.gilb/db.sqlite` (see `gilb_config::db_path`).
 
 ```
 gilb-core ──► (types: Action, ActionKind, AppInfo, ElementContext, SessionId)
-gilb-config ─► (RecordingSettings, data_dir / db_path)
-gilb-events ─► (EventBus: broadcast PermissionEvent + HealthEvent)
+gilb-config ─► (RecordingSettings, Preferences, data_dir / db_path /
+               prompts_dir)
+gilb-events ─► (EventBus: broadcast HealthEvent + RecordingEvent)
 
 gilb-db ─────► gilb-core, gilb-config
               (SqlitePool + migrations under migrations/, sessions / actions modules)
 
 gilb-a11y ───► gilb-core, gilb-config, gilb-events, gilb-db
               (trait CapturePlatform; cfg-gated implementations;
-               text_buffer, activity_feed, budget, tree/, password_masking;
+               text_buffer, tree/, password_masking;
                bin gilb-a11y-cli)
 
 gilb-engine ─► all crates above
@@ -130,7 +151,7 @@ apps/gilb-app-tauri/src-tauri ─► gilb-engine, gilb-config, gilb-events,
                assist.rs is gilb's AssistHost — local prompt file + ACP agent)
 
 apps/gilb-mcp ─► gilb-config + gilb-db
-              (read-only MCP server over ~/.gilb/db.sqlite, stdio
+              (read-only MCP server over ~/Documents/gilb/db.sqlite, stdio
                transport; gilb_* tools for Claude Code.
                LLM-facing contract — apps/gilb-mcp/help.md)
 
@@ -180,12 +201,19 @@ pre-created.
 **Never edit a migration that has shipped or been applied anywhere** —
 not even a comment. sqlx checksums the whole file; changing it makes
 every DB that already ran it refuse to start ("migration N was
-previously applied but has been modified"). Any change is a **new**
-migration (`000N+1`); fix stale docs in code/`help.md`, never in the
-applied `.sql`.
+previously applied but has been modified") and sends the app down the
+archive-and-start-fresh path — the user's history renamed aside, the app
+opening empty. Any change is a **new** migration (`000N+1`); fix stale
+docs in code/`help.md`, never in the applied `.sql`. Even a dangling
+reference in a comment stays: it is not worth a whole install's data.
+
+`crates/gilb-db/tests/migrations_frozen.rs` enforces this with a hash per
+shipped file — it has caught the mistake once already. Adding a
+migration means adding its hash; a failure there is never fixed by
+editing the `.sql`.
 
 **Second consumer of the schema — `apps/gilb-mcp`.** It reads the
-same `~/.gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
+same `~/Documents/gilb/db.sqlite` and exposes `gilb_*` tools to Claude Code
 with a stable user-facing contract in `apps/gilb-mcp/help.md`
 (column names and semantics for `actions`, `kind` values, password
 masking, `range` formats). Any migration that changes the shape of

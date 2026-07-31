@@ -2058,6 +2058,7 @@ dependencies = [
  "tauri-plugin-autostart",
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
+ "tauri-plugin-global-shortcut",
  "tauri-plugin-opener",
  "tauri-plugin-process",
  "tauri-plugin-single-instance",
@@ -2118,6 +2119,7 @@ dependencies = [
  "directories",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

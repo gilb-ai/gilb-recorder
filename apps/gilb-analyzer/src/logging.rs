@@ -1,7 +1,7 @@
 //! Tracing setup for the analyzer.
 //!
 //! Logs go to **both** stderr (handy when an operator runs `find`/`backfill`
-//! by hand) and a daily-rotated file in `$HOME/.gilb/logs/` so the long-lived
+//! by hand) and a daily-rotated file in the data folder's `logs/` so the long-lived
 //! `run` daemon leaves an auditable trail on disk. The file mirrors the Tauri
 //! shell's appender (`gilb_config::ensure_logs_dir`), but under its own
 //! `analyzer.log` prefix.
@@ -12,7 +12,7 @@ use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, Env
 use gilb_config::ensure_logs_dir;
 
 /// Initialise `tracing`: stderr plus a daily-rotated `analyzer.log` in
-/// `$HOME/.gilb/logs/`. The returned [`WorkerGuard`] **must be held** for the
+/// the data folder's `logs/`. The returned [`WorkerGuard`] **must be held** for the
 /// lifetime of the process — dropping it flushes the file writer. If the logs
 /// directory cannot be created we fall back to stderr-only and return `None`.
 pub fn init_tracing() -> Option<WorkerGuard> {

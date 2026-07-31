@@ -1,6 +1,6 @@
 //! On-device transcription model management for the settings UI.
 //!
-//! The local Whisper model lives in `~/.gilb/models/` and its presence is the
+//! The local Whisper model lives in `<Documents>/gilb/models/` and its presence is the
 //! gate that enables meeting transcription (see `gilb_transcribe` and
 //! `meeting::maybe_spawn_transcription`). These commands let the user download
 //! it (with progress), delete it, and pick the transcription language.
@@ -94,7 +94,7 @@ struct Progress {
     error: Option<String>,
 }
 
-/// Download the model into `~/.gilb/models/`, emitting `model-download` progress
+/// Download the model into `<Documents>/gilb/models/`, emitting `model-download` progress
 /// events. The bytes go to a `.part` file that is renamed into place only on
 /// success, so a partial/aborted download is never seen as a valid model.
 /// Best-effort cancellable via [`cancel_model_download`].

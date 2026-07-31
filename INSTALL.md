@@ -11,10 +11,10 @@ both. For build and release instructions, see
 gilb is a macOS desktop app that records your on-screen activity —
 clicks, typed text, navigation keys, scrolls, clipboard, focus
 changes — through the macOS Accessibility API. Each event is written
-to a local SQLite database at `~/.gilb/db.sqlite`.
+to a local SQLite database at `~/Documents/gilb/db.sqlite`.
 
 It also records meetings: when a video-conference app starts a call,
-gilb captures the screen and audio to `~/.gilb/meetings/` and, once
+gilb captures the screen and audio to `~/Documents/gilb/meetings/` and, once
 the call ends, transcribes it on your own machine.
 
 Your recordings stay on your machine — nothing is uploaded, and there
@@ -127,7 +127,7 @@ The `.app` bundle ships a read-only MCP server, `gilb-mcp`, at:
 /Applications/Gilb.app/Contents/MacOS/gilb-mcp
 ```
 
-It reads `~/.gilb/db.sqlite` directly over stdio MCP transport. It
+It reads `~/Documents/gilb/db.sqlite` directly over stdio MCP transport. It
 does not need `Gilb.app` itself to be running. To wire it into
 Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -146,20 +146,32 @@ binary. Restart the client after editing the config.
 
 ## Where your data lives
 
-| Path                            | What it is                                       |
-|---------------------------------|--------------------------------------------------|
-| `~/.gilb/db.sqlite`             | All recorded actions, sessions and transcripts.   |
-| `~/.gilb/db.sqlite-wal`, `-shm` | SQLite write-ahead-log companion files.           |
-| `~/.gilb/meetings/<timestamp>/` | One folder per meeting: `video.mp4`, `audio.wav`. |
-| `~/.gilb/models/`               | The speech model, if you enabled transcription.   |
-| `~/.gilb/logs/`                 | Daily-rotated app log.                            |
+Everything is in **one visible folder** you can open, back up or delete
+like any other — `~/Documents/gilb` on macOS,
+`%USERPROFILE%\Documents\gilb` on Windows (wherever Windows actually
+puts your Documents, including a OneDrive-redirected one):
 
-Nothing is written outside `~/.gilb/`, and nothing leaves your machine
+| Path                     | What it is                                        |
+|--------------------------|---------------------------------------------------|
+| `db.sqlite`              | All recorded actions, sessions and transcripts.   |
+| `db.sqlite-wal`, `-shm`  | SQLite write-ahead-log companion files.           |
+| `meetings/<timestamp>/`  | One folder per meeting: `video.mp4`, `audio.wav`. |
+| `models/`                | The speech model, if you enabled transcription.   |
+| `prompts/`               | `realtime_assist.md` — the suggestions prompt.    |
+| `logs/`                  | Daily-rotated app log.                            |
+| `prefs.json`             | Your settings.                                    |
+
+Nothing is written outside that folder, and nothing leaves your machine
 except as described under "What gilb does" above.
 
-To wipe everything, quit `Gilb` and delete `~/.gilb/`; a new database
-is created on next launch. The meeting folders are the bulky part —
-video, at meeting length.
+Earlier versions kept all of this in a hidden `~/.gilb`. The first launch
+after updating moves it into Documents for you — nothing is copied or
+re-downloaded, and if the move cannot be made the old folder is left
+untouched and the app says so in its log.
+
+To wipe everything, quit `Gilb` and delete the folder; a new database is
+created on next launch. The meeting folders are the bulky part — video,
+at meeting length.
 
 ## Storage format caveat
 
@@ -179,7 +191,7 @@ before upgrading.
    ```
    (Or System Settings → General → Login Items → uncheck `Gilb`.)
 3. Drag `Gilb.app` from `/Applications` to the Trash.
-4. Optionally, remove `~/.gilb/` to delete all recorded data.
+4. Optionally, remove `~/Documents/gilb/` to delete all recorded data.
 5. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
    removed).
