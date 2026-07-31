@@ -59,7 +59,7 @@ const en = {
   "capture.thisMeeting": "this meeting",
   "capture.stop": "Stop",
 
-  "assist.title": "{brand} Assist",
+  "assist.title": "{brand} Realtime Assistant",
   "assist.empty": "Listening — suggestions will appear here.",
   "assist.idle": "Not recording — start one (⌘⇧R) and I'll listen.",
   "assist.thinking": "Thinking…",
@@ -69,7 +69,7 @@ const en = {
 
   // The switch in the signed-in workspace card. The first turn-on downloads
   // the speech model, so the off state says so up front.
-  "assist.label": "Live suggestions",
+  "assist.label": "Realtime Assistant",
   "assist.desc":
     "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
   "assist.descDownloading": "Downloading the model… {pct}%",
@@ -161,7 +161,7 @@ const ru: typeof en = {
   "capture.thisMeeting": "эта встреча",
   "capture.stop": "Остановить",
 
-  "assist.title": "{brand} — подсказки",
+  "assist.title": "{brand} — ассистент реального времени",
   "assist.empty": "Слушаю — подсказки появятся здесь.",
   "assist.idle": "Запись не идёт — начните её (⌘⇧R), и я буду слушать.",
   "assist.thinking": "Думаю…",
@@ -169,11 +169,11 @@ const ru: typeof en = {
   "assist.hide": "Скрыть",
   "assist.error": "Ошибка подсказок: {error}",
 
-  "assist.label": "Онлайн-подсказки",
+  "assist.label": "Ассистент реального времени",
   "assist.desc":
     "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
   "assist.descDownloading": "Загрузка модели… {pct}%",
-  "assist.settingsTitle": "Realtime Assistant",
+  "assist.settingsTitle": "Ассистент реального времени",
   "assist.captureLabel": "Видна при шеринге экрана",
   "assist.captureDesc":
     "Выключено — панель не попадает в записи и в расшаренный экран, её видите только вы. Включено — её видят все, кому вы показываете экран; это то, что нужно для демонстрации самого ассистента.",
