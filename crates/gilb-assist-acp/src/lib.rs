@@ -73,6 +73,16 @@ pub struct AcpConfig {
     /// from the turn deadline: a cold agent may be slow once, and failing the
     /// handshake disables the feature rather than losing one suggestion.
     pub startup_timeout: Duration,
+    /// Session config to apply right after the handshake, as `(configId,
+    /// value)` — the knobs `session/new` advertises in `configOptions`, e.g.
+    /// `("model", "haiku")` or `("effort", "low")` on the Claude Code adapter.
+    ///
+    /// Best-effort by design: an adapter that has no such option (or no such
+    /// method) gets a warning in the log, not a dead feature. The values are
+    /// the user's own choice for *this* feature, which is the point — a
+    /// suggestion worth having in fifteen seconds and an interactive coding
+    /// session do not want the same model.
+    pub config_options: Vec<(String, String)>,
 }
 
 impl Default for AcpConfig {
@@ -85,6 +95,7 @@ impl Default for AcpConfig {
             cwd: std::env::temp_dir(),
             turn_timeout: Duration::from_secs(20),
             startup_timeout: Duration::from_secs(30),
+            config_options: Vec::new(),
         }
     }
 }
@@ -172,6 +183,26 @@ impl AcpSession {
                     config.startup_timeout
                 )
             })??;
+
+        // Apply the session knobs the caller asked for. After the handshake,
+        // before the first prompt — the first suggestion should already run on
+        // the configured model. Failures are logged and skipped: the option
+        // set differs per adapter, and a knob that does not exist must not
+        // cost the feature.
+        for (config_id, value) in &config.config_options {
+            let result = conn
+                .request(
+                    "session/set_config_option",
+                    json!({ "sessionId": session_id, "configId": config_id, "value": value }),
+                )
+                .await;
+            match result {
+                Ok(_) => debug!(config_id, value, "session option set"),
+                Err(err) => {
+                    warn!(error = %err, config_id, value, "session option not applied")
+                }
+            }
+        }
 
         Ok(Self {
             conn,

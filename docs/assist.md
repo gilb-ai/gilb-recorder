@@ -268,18 +268,33 @@ minutes when the npx path is taken and left at thirty seconds otherwise.
 
 ### Which model it uses
 
-Not ours to choose: the agent brings its own, and gilb never overrides it.
-Codex reads `~/.codex/config.toml` (`model = …`), Claude Code reads
-`~/.claude/settings.json` (`"model": …`) or `ANTHROPIC_MODEL`. That is the
-right default — a user who set a model for their coding agent means it — but
-worth knowing that a heavy reasoning configuration is the wrong shape for this
-feature: a suggestion is worth having for about fifteen seconds, and
-`model_reasoning_effort = "high"` spends longer than that thinking. If the
-panel is mostly silent while the agent is clearly working, that is where to
-look first.
+By default, whatever the agent itself is configured with: Codex reads
+`~/.codex/config.toml` (`model = …`), Claude Code reads
+`~/.claude/settings.json` (`"model": …`) or `ANTHROPIC_MODEL`.
+
+That default is often the wrong shape for this feature. A suggestion is worth
+having for about fifteen seconds, and the model someone picked for interactive
+coding — a heavyweight with high reasoning effort — spends longer than that
+thinking. If the panel is mostly silent while the agent is clearly working,
+this is the first place to look.
+
+So the session's model can be set independently, without touching the coding
+setup:
+
+```sh
+GILB_ASSIST_MODEL=haiku GILB_ASSIST_EFFORT=low npm run tauri dev
+```
+
+This rides on ACP itself: `session/new` advertises the agent's knobs in
+`configOptions` (the Claude Code adapter lists `model`, `effort` and the
+permission `mode`; run `initialize` + `session/new` by hand to see an
+adapter's set), and gilb applies the values via `session/set_config_option`
+right after the handshake, before the first suggestion. Best-effort by design:
+an adapter without the method — or without that particular knob — gets a
+warning in the log, never a dead feature.
 
 `GILB_ASSIST_AGENT_ARGS` replaces the arguments gilb passes, for an agent that
-takes the model on its command line.
+takes the model on its command line instead.
 
 Whichever agent won is **named in the UI** — a chip under the switch, "Runs on
 Claude Code". With more than one CLI installed the choice is ours to make but

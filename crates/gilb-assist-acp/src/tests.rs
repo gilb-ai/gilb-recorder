@@ -22,6 +22,7 @@ fn config(bin: PathBuf) -> AcpConfig {
         cwd: std::env::temp_dir(),
         turn_timeout: Duration::from_secs(5),
         startup_timeout: Duration::from_secs(5),
+        ..AcpConfig::default()
     }
 }
 

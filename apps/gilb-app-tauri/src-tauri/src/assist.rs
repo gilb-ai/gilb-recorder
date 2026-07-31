@@ -44,6 +44,14 @@ const AGENT_BIN_ENV: &str = "GILB_ASSIST_AGENT";
 const AGENT_NONE: &str = "none";
 /// Extra arguments, space-separated. Replaces the defaults for a known agent.
 const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
+/// Model for the suggestions session, e.g. `haiku` — one of the values the
+/// agent's ACP `configOptions` advertises. Separate from the agent's own
+/// default on purpose: a suggestion is worth having for ~15 seconds, and the
+/// model someone picked for interactive coding (a heavyweight with high
+/// reasoning effort) is usually the wrong shape for that.
+const MODEL_ENV: &str = "GILB_ASSIST_MODEL";
+/// Reasoning effort for the session, e.g. `low`. Same mechanism.
+const EFFORT_ENV: &str = "GILB_ASSIST_EFFORT";
 
 /// Coding agents we know how to reach over ACP, in preference order.
 ///
@@ -187,6 +195,15 @@ impl AssistHost for GilbAssistHost {
             )
         })?;
         info!(bin = %agent.bin.display(), args = ?agent.args, "assist backend");
+        let mut config_options = Vec::new();
+        for (env, config_id) in [(MODEL_ENV, "model"), (EFFORT_ENV, "effort")] {
+            if let Ok(value) = std::env::var(env) {
+                if !value.trim().is_empty() {
+                    info!(config_id, value = %value, "assist session option");
+                    config_options.push((config_id.to_string(), value));
+                }
+            }
+        }
         let acp = AcpConfig {
             bin: agent.bin,
             args: agent.args,
@@ -195,6 +212,7 @@ impl AssistHost for GilbAssistHost {
             // meeting prompter has no business reading the working tree.
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
+            config_options,
         };
         Ok((Box::new(config), Box::new(AcpBackend::new(acp))))
     }
@@ -253,6 +271,9 @@ impl AssistHost for GilbAssistHost {
             startup_timeout: agent.startup_timeout,
             cwd: std::env::temp_dir(),
             turn_timeout: TURN_TIMEOUT,
+            // The install check needs only the handshake; session knobs are
+            // the real session's business.
+            ..AcpConfig::default()
         });
         // Dropped immediately: the session's only job here was to prove it
         // could exist. The meeting gets its own.
