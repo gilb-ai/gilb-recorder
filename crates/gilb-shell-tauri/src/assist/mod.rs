@@ -40,8 +40,8 @@ use std::sync::Arc;
 use download::{start_model_download, ModelDownload};
 use journal::{close_journal, journal, open_journal, Journal, Kind};
 use window::{
-    auto_show_suppressed, emit_listening, ensure_window, register_shortcut,
-    set_auto_show_suppressed, show_window,
+    apply_capture_visibility, auto_show_suppressed, emit_listening, ensure_window,
+    register_shortcut, set_auto_show_suppressed, show_window, visible_in_capture,
 };
 
 use anyhow::Result;
@@ -256,6 +256,8 @@ pub struct AssistStatus {
     /// An agent is being installed right now — the switch is on, the feature
     /// is not usable yet, and neither fact is an error.
     pub preparing: bool,
+    /// Whether the panel is allowed to appear in screen recordings and shares.
+    pub visible_in_capture: bool,
     /// Why it cannot run, in the product's words, when `available` is false.
     /// Sent so the UI can say what is missing instead of hiding the control:
     /// a feature that vanishes teaches the user nothing, and "where did the
@@ -291,6 +293,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             agents: Vec::new(),
             agent: None,
             preparing: false,
+            visible_in_capture: visible_in_capture(),
             unavailable: None,
         };
     };
@@ -310,6 +313,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
         agents: state.host.agents(),
         agent: gilb_config::load_preferences().assist_agent,
         preparing: state.preparing.load(Ordering::SeqCst),
+        visible_in_capture: visible_in_capture(),
         unavailable: (!available).then(|| state.host.strings().unavailable),
     }
 }
@@ -731,6 +735,22 @@ pub fn assist_set_session_option(
     // The knobs are read when the backend is built, so the stack has to be
     // rebuilt for a new one to take effect.
     rewire(&app);
+    Ok(())
+}
+
+/// Let the panel be seen in screen recordings and shares, or hide it again.
+///
+/// Off by default: the panel is a prompter and its content is for the person
+/// reading it. On is for demoing the assistant itself, where the whole point
+/// is that the other side sees it.
+#[tauri::command]
+pub fn assist_set_visible_in_capture(app: AppHandle, on: bool) -> Result<(), String> {
+    gilb_config::update_preferences(|p| p.assist_visible_in_capture = on)
+        .map_err(|err| err.to_string())?;
+    // Applied to the live window too: a switch that only took effect on the
+    // next panel would be flipped mid-demo and appear broken.
+    apply_capture_visibility(&app);
+    emit_status(&app);
     Ok(())
 }
 

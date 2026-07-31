@@ -75,6 +75,9 @@ const en = {
     "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
   "assist.descDownloading": "Downloading the model… {pct}%",
   "assist.modelLabel": "Suggestions model",
+  "assist.captureLabel": "Show suggestions on screen shares",
+  "assist.captureDesc":
+    "Off, the panel stays out of recordings and shared screens — only you see it. On, it is visible to everyone you share with, which is what you want when demoing the assistant itself.",
   "assist.modelDesc":
     "For live suggestions speed matters more than depth. This only affects suggestions — your agent's own setup is untouched.",
   "assist.model": "Model",
@@ -173,6 +176,9 @@ const ru: typeof en = {
     "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
   "assist.descDownloading": "Загрузка модели… {pct}%",
   "assist.modelLabel": "Модель подсказок",
+  "assist.captureLabel": "Показывать подсказки при шеринге экрана",
+  "assist.captureDesc":
+    "Выключено — панель не попадает в записи и в расшаренный экран, её видите только вы. Включено — её видят все, кому вы показываете экран; это то, что нужно для демонстрации самого ассистента.",
   "assist.modelDesc":
     "Для живых подсказок скорость важнее глубины. Влияет только на подсказки — настройки самого агента не трогаются.",
   "assist.model": "Модель",

@@ -129,6 +129,33 @@
               <select id="select-assist-effort" class="key-input"></select>
             </label>
           </div>
+
+          <!-- The panel is hidden from screen capture by default: it is a
+               prompter, and what it says is for the person reading it. This
+               is the deliberate exception — demoing the assistant on a call
+               means the other side has to see it. -->
+          <div class="settings-row" id="assist-capture-row" hidden>
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="assist-capture-label" data-i18n="assist.captureLabel">
+                Show suggestions on screen shares
+              </span>
+              <span class="settings-row-desc" data-i18n="assist.captureDesc">
+                Off, the panel stays out of recordings and shared screens — only
+                you see it. On, it is visible to everyone you share with, which
+                is what you want when demoing the assistant itself.
+              </span>
+            </div>
+            <button
+              id="toggle-assist-capture"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="assist-capture-label"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
         </div>
 
         <div class="settings-actions">

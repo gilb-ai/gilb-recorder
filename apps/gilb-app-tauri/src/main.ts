@@ -335,6 +335,8 @@ type AssistStatus = {
   wanted: boolean;
   /// Why it cannot run, when `available` is false — the product's words.
   unavailable: string | null;
+  /// Whether the panel may appear in screen recordings and shares.
+  visible_in_capture: boolean;
   /// What the user can pick from. Empty when the product decides itself.
   agents: { id: string; label: string; installed: boolean }[];
   /// What they picked, if anything.
@@ -381,6 +383,7 @@ function renderAssist(s: AssistStatus | null) {
     if (toggle) toggle.disabled = false;
     progress?.setAttribute("hidden", "");
     renderAgentPicker(s, false);
+  renderCaptureToggle(s);
     // "Choose an agent" is the wrong thing to say when there is nothing to
     // choose from — then the answer is which one to install.
     const anyInstalled = s.agents.some((a) => a.installed);
@@ -628,6 +631,40 @@ type SessionOptionsPayload = {
   model: string | null;
   effort: string | null;
 };
+
+/// The "show it on screen shares" switch in Settings.
+///
+/// Hidden until the feature is actually usable: a switch that governs the
+/// visibility of a panel the user cannot yet open explains nothing. Flipping
+/// it takes effect immediately, on a panel that is already open — this is a
+/// setting people reach for mid-demo.
+function renderCaptureToggle(s: AssistStatus) {
+  const row = $("assist-capture-row");
+  const toggle = $<HTMLButtonElement>("toggle-assist-capture");
+  if (!row || !toggle) return;
+  row.hidden = !s.available;
+  toggle.setAttribute("aria-checked", s.visible_in_capture ? "true" : "false");
+}
+
+function initCaptureToggle() {
+  const toggle = $<HTMLButtonElement>("toggle-assist-capture");
+  if (!toggle) return;
+  toggle.addEventListener("click", async () => {
+    const was = toggle.getAttribute("aria-checked") === "true";
+    const on = !was;
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+    toggle.disabled = true;
+    try {
+      await invoke("assist_set_visible_in_capture", { on });
+    } catch (e) {
+      console.warn("assist_set_visible_in_capture failed", e);
+      // Put it back rather than lie about what the other side can see.
+      toggle.setAttribute("aria-checked", was ? "true" : "false");
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+}
 
 /// The suggestions-model row in Settings. The list is the agent's own,
 /// fetched over ACP (and cached backend-side), so opening the screen is what
@@ -964,6 +1001,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
   initMeetingToggle();
+  initCaptureToggle();
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {

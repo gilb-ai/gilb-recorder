@@ -13,6 +13,26 @@ use tracing::warn;
 
 use super::{state, ASSIST_WINDOW};
 
+/// Whether the panel may show up in a screen recording or share.
+///
+/// Content protection is the default and the safe answer — the panel is a
+/// prompter, and what it says is for the person reading it, not the person
+/// they are talking to.
+pub(super) fn visible_in_capture() -> bool {
+    gilb_config::load_preferences().assist_visible_in_capture
+}
+
+/// Apply that choice to a panel that already exists, so the switch takes
+/// effect on the call it was flipped during rather than the next one.
+pub(super) fn apply_capture_visibility(app: &AppHandle) {
+    let protect = !visible_in_capture();
+    if let Some(window) = app.get_webview_window(ASSIST_WINDOW) {
+        if let Err(err) = window.set_content_protected(protect) {
+            warn!(error = %err, "could not change the panel's screen-capture visibility");
+        }
+    }
+}
+
 /// Show/hide the overlay. Deliberately not the record hotkey's neighbour:
 /// `Cmd+M` is already manual recording in shells that bind it.
 const ASSIST_SHORTCUT: &str = "CmdOrCtrl+Backslash";
@@ -51,7 +71,7 @@ pub(super) fn ensure_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
             .always_on_top(true)
             .skip_taskbar(true)
             .visible_on_all_workspaces(true)
-            .content_protected(true)
+            .content_protected(!visible_in_capture())
             .focused(false)
             .visible(false);
 

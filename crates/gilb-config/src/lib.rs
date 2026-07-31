@@ -532,6 +532,15 @@ pub struct Preferences {
     /// Reasoning effort for the suggestions session; same mechanism.
     #[serde(default)]
     pub assist_effort: Option<String>,
+    /// Let the suggestions panel appear in screen recordings and shares.
+    ///
+    /// Off by default, and that default is the safe one: the panel is a
+    /// prompter, and everything it says would otherwise be visible to the
+    /// person on the other end of the call. It exists because the opposite is
+    /// sometimes exactly what is wanted — demoing the assistant *is* showing
+    /// it on a call — and a feature nobody can point at is hard to sell.
+    #[serde(default)]
+    pub assist_visible_in_capture: bool,
 }
 
 impl Default for Preferences {
@@ -544,6 +553,7 @@ impl Default for Preferences {
             assist_agent: None,
             assist_model: None,
             assist_effort: None,
+            assist_visible_in_capture: false,
         }
     }
 }
