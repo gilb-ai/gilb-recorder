@@ -260,7 +260,7 @@ The CLI a user has is usually *not* the thing that speaks ACP. `claude` is an
 interactive REPL: pipe an `initialize` into it and nothing comes back, so the
 session dies at the handshake timeout — a failure that looks like a hang and
 says nothing about the cause. Claude Code and Codex reach ACP through adapter
-packages; Cursor (`agent acp`) and opencode (`opencode acp`) serve the protocol
+packages; Cursor (`agent acp`) and OpenCode (`opencode acp`) serve the protocol
 themselves, and need nothing fetched.
 
 Which of the two a harness needs is the whole content of its table entry, and

@@ -93,8 +93,8 @@ pub(super) const HARNESSES: &[Harness] = &[
     },
     Harness {
         id: "opencode",
-        // Lowercase is the project's own spelling.
-        name: "opencode",
+        // As the app and its bundle spell it.
+        name: "OpenCode",
         // Nothing preferred, because there is nothing universal to prefer:
         // opencode's model list is whatever providers the user configured, so
         // the names differ from machine to machine. Its own default is the
