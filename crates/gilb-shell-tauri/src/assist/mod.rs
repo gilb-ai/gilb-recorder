@@ -29,10 +29,20 @@
 //! registered before the first suggestion, and only surfaces when the model
 //! actually says something — silence never opens it.
 
-use std::io::Write;
+mod download;
+mod journal;
+mod window;
+
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use download::{start_model_download, ModelDownload};
+use journal::{close_journal, journal, open_journal};
+use window::{
+    auto_show_suppressed, emit_listening, ensure_window, register_shortcut,
+    set_auto_show_suppressed, show_window,
+};
 
 use anyhow::Result;
 use gilb_assist::{AssistBackend, AssistConfig, AssistEvent, AssistHandle, EngineParams};
@@ -40,16 +50,12 @@ use gilb_assist_audio::{
     spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig, LocalTranscriber, SharedModel,
     WhisperTranscriber,
 };
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager};
 use tracing::{info, warn};
 
 use crate::AudioTapHandle;
 
 pub const ASSIST_WINDOW: &str = "assist";
-
-/// Show/hide the overlay. Deliberately not the record hotkey's neighbour:
-/// `Cmd+M` is already manual recording in shells that bind it.
-const ASSIST_SHORTCUT: &str = "CmdOrCtrl+Backslash";
 
 /// The whisper build both products ship, from gilb-config so transcription and
 /// suggestions cannot drift apart. Gating the feature on a ~570 MB download
@@ -80,18 +86,6 @@ pub trait AssistHost: Send + Sync + 'static {
     /// on without it.
     fn model_url(&self) -> String {
         DEFAULT_MODEL_URL.to_string()
-    }
-
-    /// What the suggestions will actually run on, in the user's words — the
-    /// agent gilb found on this machine, the workspace a hosted product is
-    /// signed into. Shown next to the switch, because "which of my tools is
-    /// this using" is the first question a local-agent feature raises, and
-    /// silently picking one of several installed agents is how a user ends up
-    /// surprised by a bill or a model.
-    ///
-    /// `None` means "nothing to say" and shows nothing.
-    fn backend_label(&self) -> Option<String> {
-        None
     }
 
     /// The process-wide whisper model, when the product already has one.
@@ -217,72 +211,9 @@ pub struct AssistState {
     journal: parking_lot::Mutex<Option<PathBuf>>,
 }
 
-/// Append one entry to the meeting's assist journal.
-///
-/// Best-effort and synchronous: it is one short line on a local disk, and a
-/// failure here must never cost the user a suggestion — the panel is the
-/// product, the file is a record of it. Markdown because a meeting folder is
-/// something people open, and this sits next to `video.mp4` and `audio.wav`.
-/// Tell the overlay whether audio is actually reaching it.
-///
-/// The panel listens to a tap the recorder feeds, so with nothing recording it
-/// hears nothing — and said nothing about it, which makes an idle panel
-/// indistinguishable from a broken one. Someone who opens it and starts
-/// talking has every reason to expect otherwise.
-fn emit_listening(app: &AppHandle, on: bool) {
-    let _ = app.emit_to(
-        ASSIST_WINDOW,
-        "assist://listening",
-        serde_json::json!({ "on": on }),
-    );
-}
-
-fn open_journal(app: &AppHandle, meeting_id: i64) {
-    let Some(state) = state(app) else { return };
-    let path = state.host.journal_path(meeting_id);
-    if let Some(path) = &path {
-        info!(path = %path.display(), "assist journal");
-    }
-    *state.journal.lock() = path;
-}
-
-fn close_journal(app: &AppHandle) {
-    if let Some(state) = state(app) {
-        *state.journal.lock() = None;
-    }
-}
-
-fn journal(app: &AppHandle, heading: &str, body: &str) {
-    let Some(path) = state(app).and_then(|s| s.journal.lock().clone()) else {
-        return;
-    };
-    let stamp = chrono::Local::now().format("%H:%M:%S");
-    let entry = format!("\n## {stamp} · {heading}\n\n{}\n", body.trim());
-    let opened = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path);
-    match opened {
-        Ok(mut file) => {
-            if let Err(err) = file.write_all(entry.as_bytes()) {
-                warn!(error = %err, path = %path.display(), "assist journal write failed");
-            }
-        }
-        Err(err) => warn!(error = %err, path = %path.display(), "assist journal open failed"),
-    }
-}
-
 struct Wired {
     handle: AssistHandle,
     _pipeline: AssistPipeline,
-}
-
-#[derive(Default)]
-struct ModelDownload {
-    active: AtomicBool,
-    percent: AtomicU8,
-    /// Raised when the user turns the feature off mid-download.
-    cancel: AtomicBool,
 }
 
 /// What a settings card renders: whether the feature is available at all, what
@@ -304,8 +235,6 @@ pub struct AssistStatus {
     /// on and watching it spring back to off, because an agent is not chosen
     /// yet, reads as the app refusing rather than as a step remaining.
     pub wanted: bool,
-    /// What it will run on ([`AssistHost::backend_label`]), or `None`.
-    pub backend: Option<String>,
     /// Agents the user can pick from ([`AssistHost::agents`]). Empty when the
     /// product makes the choice itself.
     pub agents: Vec<AgentChoice>,
@@ -347,7 +276,6 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             percent: 0,
             enabled: false,
             wanted: false,
-            backend: None,
             agents: Vec::new(),
             agent: None,
             preparing: false,
@@ -367,7 +295,6 @@ pub fn status(app: &AppHandle) -> AssistStatus {
         },
         enabled: available && model_ready() && is_enabled(),
         wanted: is_enabled(),
-        backend: state.host.backend_label(),
         agents: state.host.agents(),
         agent: gilb_config::load_preferences().assist_agent,
         preparing: state.preparing.load(Ordering::SeqCst),
@@ -590,149 +517,6 @@ fn wire(app: &AppHandle) {
         }
     });
     info!("assist pipeline wired");
-}
-
-/// Download the model in the background (D9). On success the stack wires
-/// itself up — no restart needed.
-fn start_model_download(app: &AppHandle) {
-    use tauri_plugin_notification::NotificationExt;
-
-    let Some(state) = state(app) else { return };
-    if state.download.active.swap(true, Ordering::SeqCst) {
-        return; // already running
-    }
-    state.download.percent.store(0, Ordering::SeqCst);
-    state.download.cancel.store(false, Ordering::SeqCst);
-    let strings = state.host.strings();
-    let url = state.host.model_url();
-    emit_status(app);
-
-    let app = app.clone();
-    tauri::async_runtime::spawn(async move {
-        let result = async {
-            gilb_config::ensure_models_dir()?;
-            let path = gilb_config::transcribe_model_path()?;
-            let progress_app = app.clone();
-            let state = app.state::<AssistState>();
-            crate::model::download(&url, &path, &state.download.cancel, move |done, total| {
-                if total == 0 {
-                    return;
-                }
-                let pct = (done * 100 / total).min(100) as u8;
-                let Some(state) = progress_app.try_state::<AssistState>() else {
-                    return;
-                };
-                if state.download.percent.swap(pct, Ordering::SeqCst) != pct {
-                    emit_status(&progress_app);
-                }
-            })
-            .await
-        }
-        .await;
-
-        if let Some(state) = app.try_state::<AssistState>() {
-            state.download.active.store(false, Ordering::SeqCst);
-        }
-        match result {
-            Ok(crate::model::Downloaded::Cancelled) => info!("assist model download cancelled"),
-            Ok(crate::model::Downloaded::Completed(_)) => {
-                info!("assist model downloaded");
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title(&strings.app_name)
-                    .body(&strings.model_downloaded)
-                    .show();
-                if is_enabled() {
-                    wire(&app);
-                }
-            }
-            Err(err) => {
-                warn!(error = %err, "assist model download failed");
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title(&strings.app_name)
-                    .body(&strings.model_failed)
-                    .show();
-            }
-        }
-        emit_status(&app);
-    });
-}
-
-/// Create the overlay if it doesn't exist yet — hidden, transparent,
-/// always-on-top, excluded from our own screen capture, and never focused
-/// (stealing focus from the meeting app mid-call is worse than a second click).
-fn ensure_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
-    if let Some(window) = app.get_webview_window(ASSIST_WINDOW) {
-        return Some(window);
-    }
-    let title = state(app)
-        .map(|s| s.host.strings().window_title)
-        .unwrap_or_default();
-    let builder =
-        WebviewWindowBuilder::new(app, ASSIST_WINDOW, WebviewUrl::App("assist.html".into()))
-            .title(title)
-            .inner_size(380.0, 520.0)
-            .resizable(true)
-            .decorations(false)
-            .transparent(true)
-            .always_on_top(true)
-            .skip_taskbar(true)
-            .visible_on_all_workspaces(true)
-            .content_protected(true)
-            .focused(false)
-            .visible(false);
-
-    // No NSVisualEffectView here: the vibrancy material paints the window
-    // opaque, which defeats transparent(true) — tried, and the panel came out
-    // solid. Translucency stays a plain CSS alpha in assist.html.
-
-    match builder.build() {
-        Ok(window) => Some(window),
-        Err(err) => {
-            warn!(error = %err, "failed to create assist window");
-            None
-        }
-    }
-}
-
-fn show_window(app: &AppHandle) {
-    if let Some(window) = ensure_window(app) {
-        let _ = window.show();
-    }
-}
-
-fn auto_show_suppressed(app: &AppHandle) -> bool {
-    state(app).is_some_and(|s| s.auto_show_suppressed.load(Ordering::SeqCst))
-}
-
-/// Remember (or forget) that the panel was closed on purpose.
-fn set_auto_show_suppressed(app: &AppHandle, suppressed: bool) {
-    if let Some(state) = state(app) {
-        state
-            .auto_show_suppressed
-            .store(suppressed, Ordering::SeqCst);
-    }
-}
-
-fn toggle_window(app: &AppHandle) {
-    match app.get_webview_window(ASSIST_WINDOW) {
-        Some(window) if window.is_visible().unwrap_or(false) => {
-            let _ = window.hide();
-            set_auto_show_suppressed(app, true);
-        }
-        // Reopening by hand is consent to see suggestions again.
-        _ => {
-            set_auto_show_suppressed(app, false);
-            show_window(app);
-        }
-    }
-}
-
-fn register_shortcut(app: &AppHandle) {
-    crate::shortcut::register(app, ASSIST_SHORTCUT, toggle_window);
 }
 
 // ---------------------------------------------------------------------------

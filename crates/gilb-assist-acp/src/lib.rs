@@ -124,45 +124,13 @@ pub struct SessionOption {
     pub choices: Vec<SessionChoice>,
 }
 
-/// Ask the agent which session knobs it has: spawn it, shake hands, open a
-/// session, read `configOptions`, and drop the whole thing. Costs one agent
-/// start (cached-npx fast), so callers should cache the answer per agent.
+/// Ask the agent which session knobs it has: one [`bootstrap`], read
+/// `configOptions` off `session/new`, drop everything. Costs an agent start
+/// (cached-npx fast), so callers should cache the answer per agent.
 pub async fn probe_session_options(config: &AcpConfig) -> Result<Vec<SessionOption>> {
-    let mut child = Command::new(&config.bin)
-        .args(&config.args)
-        .current_dir(&config.cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("spawn agent {}", config.bin.display()))?;
-    let stdin = child.stdin.take().context("agent stdin")?;
-    let stdout = child.stdout.take().context("agent stdout")?;
-    let _guard = ChildGuard(child);
-    let conn = Connection::spawn(stdin, stdout);
-
-    let handshake = async {
-        conn.request(
-            "initialize",
-            json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
-                "clientInfo": { "name": "gilb-assist", "version": env!("CARGO_PKG_VERSION") },
-            }),
-        )
-        .await?;
-        conn.request(
-            "session/new",
-            json!({ "cwd": config.cwd.to_string_lossy(), "mcpServers": [] }),
-        )
-        .await
-    };
-    let session = tokio::time::timeout(config.startup_timeout, handshake)
-        .await
-        .map_err(|_| anyhow!("`{}` did not answer the handshake", config.bin.display()))??;
-
-    let options = session
+    let boot = bootstrap(config).await?;
+    let options = boot
+        .session
         .get("configOptions")
         .and_then(Value::as_array)
         .map(|list| {
@@ -223,6 +191,80 @@ impl AssistBackend for AcpBackend {
     }
 }
 
+/// A spawned agent that has answered the handshake: the process (killed on
+/// drop), the connection, and `session/new`'s full result.
+///
+/// The one way to reach an agent, shared by the real session and the options
+/// probe — two hand-rolled handshakes had already started to drift (one
+/// carried the helpful timeout message, the other did not).
+struct Bootstrap {
+    conn: Arc<Connection>,
+    child: ChildGuard,
+    /// `session/new`'s result verbatim; `configOptions` and friends live here.
+    session: Value,
+    session_id: String,
+}
+
+async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
+    let mut child = Command::new(&config.bin)
+        .args(&config.args)
+        .current_dir(&config.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .with_context(|| format!("spawn agent {}", config.bin.display()))?;
+
+    let stdin = child.stdin.take().context("agent stdin")?;
+    let stdout = child.stdout.take().context("agent stdout")?;
+    let conn = Connection::spawn(stdin, stdout);
+
+    let handshake = async {
+        conn.request(
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
+                "clientInfo": { "name": "gilb-assist", "version": env!("CARGO_PKG_VERSION") },
+            }),
+        )
+        .await?;
+        conn.request(
+            "session/new",
+            json!({ "cwd": config.cwd.to_string_lossy(), "mcpServers": [] }),
+        )
+        .await
+    };
+
+    // Name the binary. The overwhelmingly likely cause is that it does not
+    // speak ACP at all — an interactive coding CLI started instead of its
+    // ACP adapter reads every byte we send and answers nothing, which is
+    // indistinguishable from "slow" until you know which command ran.
+    let session = tokio::time::timeout(config.startup_timeout, handshake)
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "`{}` did not answer the ACP handshake within {:?} — does it speak ACP? \
+                 (an interactive CLI never will; Claude Code needs the claude-code-acp adapter)",
+                config.bin.display(),
+                config.startup_timeout
+            )
+        })??;
+    let session_id = session
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("session/new returned no sessionId"))?;
+
+    Ok(Bootstrap {
+        conn,
+        child: ChildGuard(child),
+        session,
+        session_id,
+    })
+}
+
 /// One live agent process, one ACP session.
 pub struct AcpSession {
     conn: Arc<Connection>,
@@ -236,58 +278,7 @@ pub struct AcpSession {
 
 impl AcpSession {
     async fn start(config: AcpConfig, system_prompt: String) -> Result<Self> {
-        let mut child = Command::new(&config.bin)
-            .args(&config.args)
-            .current_dir(&config.cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .with_context(|| format!("spawn agent {}", config.bin.display()))?;
-
-        let stdin = child.stdin.take().context("agent stdin")?;
-        let stdout = child.stdout.take().context("agent stdout")?;
-        let conn = Connection::spawn(stdin, stdout);
-
-        let handshake = async {
-            conn.request(
-                "initialize",
-                json!({
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "clientCapabilities": { "fs": { "readTextFile": false, "writeTextFile": false } },
-                    "clientInfo": { "name": "gilb-assist", "version": env!("CARGO_PKG_VERSION") },
-                }),
-            )
-            .await?;
-
-            let session = conn
-                .request(
-                    "session/new",
-                    json!({ "cwd": config.cwd.to_string_lossy(), "mcpServers": [] }),
-                )
-                .await?;
-            session
-                .get("sessionId")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-                .ok_or_else(|| anyhow!("session/new returned no sessionId"))
-        };
-
-        // Name the binary. The overwhelmingly likely cause is that it does not
-        // speak ACP at all — an interactive coding CLI started instead of its
-        // ACP adapter reads every byte we send and answers nothing, which is
-        // indistinguishable from "slow" until you know which command ran.
-        let session_id = tokio::time::timeout(config.startup_timeout, handshake)
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "`{}` did not answer the ACP handshake within {:?} — does it speak ACP? \
-                     (an interactive CLI never will; Claude Code needs the claude-code-acp adapter)",
-                    config.bin.display(),
-                    config.startup_timeout
-                )
-            })??;
+        let boot = bootstrap(&config).await?;
 
         // Apply the session knobs the caller asked for. After the handshake,
         // before the first prompt — the first suggestion should already run on
@@ -295,10 +286,11 @@ impl AcpSession {
         // set differs per adapter, and a knob that does not exist must not
         // cost the feature.
         for (config_id, value) in &config.config_options {
-            let result = conn
+            let result = boot
+                .conn
                 .request(
                     "session/set_config_option",
-                    json!({ "sessionId": session_id, "configId": config_id, "value": value }),
+                    json!({ "sessionId": boot.session_id, "configId": config_id, "value": value }),
                 )
                 .await;
             match result {
@@ -310,11 +302,11 @@ impl AcpSession {
         }
 
         Ok(Self {
-            conn,
-            session_id,
+            conn: boot.conn,
+            session_id: boot.session_id,
             pending_system_prompt: Some(system_prompt).filter(|p| !p.trim().is_empty()),
             turn_timeout: config.turn_timeout,
-            _child: ChildGuard(child),
+            _child: boot.child,
         })
     }
 

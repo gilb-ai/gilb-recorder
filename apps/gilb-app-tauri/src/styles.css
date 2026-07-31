@@ -903,26 +903,6 @@ body.assist-window {
 }
 .assist-ask input::placeholder { color: #9ca3af; }
 
-/* The agent a feature runs on, named under its description. A chip rather
-   than another sentence: it is a fact about this machine, not a claim about
-   the feature, and it should read as reportage — quiet, and identical in
-   shape whichever agent was found. */
-.agent-chip {
-  align-self: flex-start;
-  margin-top: 2px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: #f1f3f5;
-  border: 1px solid #e5e7eb;
-  color: #6b7280;
-  font-size: 11px;
-  line-height: 1.6;
-}
-.agent-chip[hidden] { display: none; }
-
-@media (prefers-color-scheme: dark) {
-  .agent-chip { background: #232631; border-color: #2f3340; color: #9ca3af; }
-}
 
 /* Agent picker: the answer to "which of my coding agents should this use".
    Buttons, not a <select> — with two or three options the choice is the whole

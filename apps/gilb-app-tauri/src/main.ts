@@ -333,10 +333,6 @@ type AssistStatus = {
   enabled: boolean;
   /// What the user asked for, whether or not it can run yet.
   wanted: boolean;
-  /// Which agent the suggestions will run on, named by the backend. Shown as
-  /// a chip: with several coding CLIs installed, *which* one gets the
-  /// conversation is not a detail to leave implicit.
-  backend: string | null;
   /// Why it cannot run, when `available` is false — the product's words.
   unavailable: string | null;
   /// What the user can pick from. Empty when the product decides itself.
@@ -368,7 +364,6 @@ function renderAssist(s: AssistStatus | null) {
     // Indeterminate: npx tells us nothing we could turn into a percentage.
     progress?.classList.add("indeterminate");
     progress?.removeAttribute("hidden");
-    renderAssistBackend(null);
     renderAgentPicker(s, true);
     setText("assist-desc", t("assist.preparing"));
     return;
@@ -385,7 +380,6 @@ function renderAssist(s: AssistStatus | null) {
     toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
     if (toggle) toggle.disabled = false;
     progress?.setAttribute("hidden", "");
-    renderAssistBackend(null);
     renderAgentPicker(s, false);
     // "Choose an agent" is the wrong thing to say when there is nothing to
     // choose from — then the answer is which one to install.
@@ -403,15 +397,11 @@ function renderAssist(s: AssistStatus | null) {
     toggle?.setAttribute("aria-checked", "false");
     if (toggle) toggle.disabled = true;
     progress?.setAttribute("hidden", "");
-    renderAssistBackend(null);
     renderAgentPicker(s, false);
     setText("assist-desc", s.unavailable ?? t("assist.desc"));
     return;
   }
 
-  // No chip: with the picker always on screen, the highlighted button already
-  // says what it runs on, and two of them would disagree the moment one lags.
-  renderAssistBackend(s.agents.length > 0 ? null : s.backend);
   renderAgentPicker(s, false);
   if (toggle) toggle.disabled = false;
   const bar = $("assist-progress-bar");
@@ -433,20 +423,6 @@ function renderAssist(s: AssistStatus | null) {
   // label that rewrites itself as you flip it makes the control harder to
   // read, not easier — the switch already says which way it is.
   setText("assist-desc", t("assist.desc"));
-}
-
-/// The detected agent, as a chip under the label. Hidden when the backend has
-/// nothing to name (a product where the answer is "your workspace" and the
-/// card already says so).
-function renderAssistBackend(backend: string | null) {
-  const el = $("assist-backend");
-  if (!el) return;
-  if (!backend) {
-    el.hidden = true;
-    return;
-  }
-  el.textContent = t("assist.runsOn", { agent: backend });
-  el.hidden = false;
 }
 
 /// The agent picker: one button per agent gilb knows, the current one marked,

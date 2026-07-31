@@ -74,7 +74,6 @@ const en = {
   "assist.desc":
     "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
   "assist.descDownloading": "Downloading the model… {pct}%",
-  "assist.runsOn": "Runs on {agent}",
   "assist.modelLabel": "Suggestions model",
   "assist.modelDesc":
     "For live suggestions speed matters more than depth. This only affects suggestions — your agent's own setup is untouched.",
@@ -173,7 +172,6 @@ const ru: typeof en = {
   "assist.desc":
     "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
   "assist.descDownloading": "Загрузка модели… {pct}%",
-  "assist.runsOn": "Работает на {agent}",
   "assist.modelLabel": "Модель подсказок",
   "assist.modelDesc":
     "Для живых подсказок скорость важнее глубины. Влияет только на подсказки — настройки самого агента не трогаются.",
