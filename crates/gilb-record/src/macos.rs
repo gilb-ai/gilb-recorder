@@ -340,6 +340,30 @@ impl Drop for StreamGuard {
     }
 }
 
+/// The same idea for the microphone thread, which now starts before anything
+/// else can fail. Without it, a failure while bringing the video stream up
+/// would leave a `cpal` stream running and a thread parked forever.
+struct MicGuard(Option<mpsc::Sender<()>>);
+
+impl MicGuard {
+    fn new(stop: &mpsc::Sender<()>) -> Self {
+        Self(Some(stop.clone()))
+    }
+
+    /// The session owns it from here.
+    fn disarm(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for MicGuard {
+    fn drop(&mut self) {
+        if let Some(stop) = self.0.take() {
+            let _ = stop.send(());
+        }
+    }
+}
+
 /// macOS [`ScreenAudioCapturer`]. Holds the active [`Session`] behind a mutex so
 /// the trait stays `Send + Sync` (the engine drives it from a spawned task).
 #[derive(Default)]
@@ -872,7 +896,25 @@ impl ScreenAudioCapturer for MacosCapturer {
         let health = Arc::new(VideoHealth::new());
         let display = &displays[0];
 
-        // --- Audio first: it carries the far end's voice. Primary source is a
+        // --- Microphone before everything else. Not a style choice: install
+        // the Core Audio process tap first and a `cpal` input stream created
+        // afterwards *on another thread* never receives a single callback. It
+        // opens without error, `play()` succeeds, and the callback is simply
+        // never called — so the recording comes back with a 44-byte `mic.wav`
+        // and nothing to say about why.
+        //
+        // The combination is what breaks: tap-then-mic works if both happen on
+        // the same thread, and mic-on-a-thread works if no tap exists. Only
+        // tap-first plus a separate thread is silent, and the recorder is
+        // necessarily both (a `cpal::Stream` is not `Send`, so it has to live
+        // on the thread that made it). Starting the mic first sidesteps the
+        // whole thing, and a tap installed afterwards does not disturb it.
+        // Reproducible with `cargo run -p gilb-record --example mic_probe --
+        // with-tap on-thread`.
+        let (mic_stop, mic_thread, sample_rate) = spawn_mic_capture(audio.clone())?;
+        let mut mic_guard = MicGuard::new(&mic_stop);
+
+        // --- Audio second: it carries the far end's voice. Primary source is a
         // Core Audio process tap — `replayd` (where the `-3818` race and the
         // mid-call stream deaths lived) is not in its path, and nothing the
         // call app does to its windows or process set can invalidate it. If
@@ -962,8 +1004,6 @@ impl ScreenAudioCapturer for MacosCapturer {
         let video_stream = Arc::new(Mutex::new(video_stream));
         let mut video_guard = StreamGuard::new(&video_stream);
 
-        let (mic_stop, mic_thread, sample_rate) = spawn_mic_capture(audio.clone())?;
-
         // Watcher last: it is the only step that isn't fallible, so nothing can
         // orphan a running thread behind it.
         let watcher_stop = Arc::new(AtomicBool::new(false));
@@ -986,6 +1026,7 @@ impl ScreenAudioCapturer for MacosCapturer {
             g.disarm();
         }
         video_guard.disarm();
+        mic_guard.disarm();
 
         *guard = Some(Session {
             system_tap,
@@ -1229,13 +1270,28 @@ fn spawn_mic_capture(
         .context("query default mic input config")?;
     let sample_rate = config.sample_rate().0;
     let channels = config.channels() as usize;
+    // Which device, at what rate — the first thing worth knowing when a
+    // recording comes back silent.
+    info!(
+        device = device.name().as_deref().unwrap_or("?"),
+        sample_rate,
+        channels,
+        format = ?config.sample_format(),
+        "mic capture starting"
+    );
 
     let (tx, rx) = mpsc::channel::<()>();
     let handle = std::thread::spawn(move || {
         let err_fn = |e| warn!(error = ?e, "mic stream error");
+        // Counted so a stream that starts and delivers nothing — the shape a
+        // denied or hijacked microphone takes on macOS — is visible instead of
+        // arriving as an empty wav nobody looks at until later.
+        let heard = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let heard_cb = heard.clone();
         let stream = match device.build_input_stream(
             &config.into(),
             move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                heard_cb.fetch_add(data.len() as u64, std::sync::atomic::Ordering::Relaxed);
                 // Downmix interleaved frames to mono by averaging channels.
                 let mono: Vec<f32> = data
                     .chunks(channels.max(1))
@@ -1269,6 +1325,12 @@ fn spawn_mic_capture(
         // Keep the stream alive until stop is signalled (or the sender drops).
         let _ = rx.recv();
         drop(stream);
+        let total = heard.load(std::sync::atomic::Ordering::Relaxed);
+        if total == 0 {
+            warn!("mic stream delivered no samples — this recording has no microphone audio");
+        } else {
+            info!(samples = total, "mic capture stopped");
+        }
     });
 
     Ok((tx, handle, sample_rate))
