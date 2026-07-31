@@ -335,20 +335,36 @@ type AssistStatus = {
   /// a chip: with several coding CLIs installed, *which* one gets the
   /// conversation is not a detail to leave implicit.
   backend: string | null;
+  /// Why it cannot run, when `available` is false — the product's words.
+  unavailable: string | null;
 };
 
 function renderAssist(s: AssistStatus | null) {
   const row = $("assist-row");
   if (!row) return;
-  // No status, or the product says the feature cannot run: nothing to offer.
-  if (!s || !s.available) {
+  // No status at all — a shell that does not ship the feature. Nothing to say.
+  if (!s) {
     row.hidden = true;
     return;
   }
   row.hidden = false;
 
+  // Present but not usable yet: show the switch off and disabled, with what is
+  // missing where the description goes. Hiding the row instead would leave a
+  // user who came looking for suggestions with nothing to read.
+  if (!s.available) {
+    const toggle = $<HTMLButtonElement>("toggle-assist");
+    toggle?.setAttribute("aria-checked", "false");
+    if (toggle) toggle.disabled = true;
+    $("assist-progress")?.setAttribute("hidden", "");
+    renderAssistBackend(null);
+    setText("assist-desc", s.unavailable ?? t("assist.desc"));
+    return;
+  }
+
   renderAssistBackend(s.backend);
   const toggle = $<HTMLButtonElement>("toggle-assist");
+  if (toggle) toggle.disabled = false;
   const progress = $("assist-progress");
   const bar = $("assist-progress-bar");
 

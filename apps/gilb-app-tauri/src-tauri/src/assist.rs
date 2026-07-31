@@ -33,7 +33,14 @@ use tracing::{info, warn};
 
 /// Override the agent command; also how a power user points gilb at a wrapper
 /// script or an in-house ACP adapter.
+///
+/// Set it to [`AGENT_NONE`] to pretend nothing is installed — the only way to
+/// see the empty state on a machine that has an agent, which is every machine
+/// this is developed on.
 const AGENT_BIN_ENV: &str = "GILB_ASSIST_AGENT";
+
+/// `GILB_ASSIST_AGENT=none` — "act as if no agent were installed".
+const AGENT_NONE: &str = "none";
 /// Extra arguments, space-separated. Replaces the defaults for a known agent.
 const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 
@@ -224,7 +231,9 @@ impl AssistHost for GilbAssistHost {
             app_name: "gilb".into(),
             model_downloaded: "Speech model ready — suggestions start at the next meeting.".into(),
             model_failed: "Could not download the speech model. Try again from the app.".into(),
-            unavailable: "needs Claude Code or Codex installed".into(),
+            unavailable: "Needs a coding agent: install Claude Code, Codex or Cursor \
+                 and this turns on."
+                .into(),
         }
     }
 }
@@ -258,8 +267,24 @@ fn agent() -> Option<Agent> {
     });
 
     if let Ok(bin) = std::env::var(AGENT_BIN_ENV) {
-        if !bin.trim().is_empty() {
+        let bin = bin.trim();
+        if bin.eq_ignore_ascii_case(AGENT_NONE) {
+            info!("{AGENT_BIN_ENV}={AGENT_NONE}: pretending no agent is installed");
+            return None;
+        }
+        if !bin.is_empty() {
             let bin = PathBuf::from(bin);
+            // Check it exists rather than taking the user's word for it: an
+            // override with a typo would otherwise report the feature as ready
+            // and then fail the handshake once per meeting, which looks like a
+            // hang and says nothing about the cause.
+            if !agent_available(&bin) {
+                warn!(
+                    bin = %bin.display(),
+                    "{AGENT_BIN_ENV} points at something that is not there"
+                );
+                return None;
+            }
             let label = bin
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())

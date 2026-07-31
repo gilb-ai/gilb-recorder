@@ -33,7 +33,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true, optional = true }
 tauri-plugin-notification = { version = "2", optional = true }
-tauri-plugin-global-shortcut = { version = "2", optional = true }
+# Not optional: the shortcut helper serves every hotkey a shell binds, and the
+# record hotkey exists in builds that ship no suggestions.
+tauri-plugin-global-shortcut = "2"
 
 [features]
 # The overlay, its commands and the whisper-model gate. Pulls in whisper.cpp
@@ -49,5 +51,4 @@ assist = [
     "gilb-assist-audio/silero",
     "dep:reqwest",
     "dep:tauri-plugin-notification",
-    "dep:tauri-plugin-global-shortcut",
 ]

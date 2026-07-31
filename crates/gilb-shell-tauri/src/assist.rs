@@ -208,6 +208,11 @@ pub struct AssistStatus {
     pub enabled: bool,
     /// What it will run on ([`AssistHost::backend_label`]), or `None`.
     pub backend: Option<String>,
+    /// Why it cannot run, in the product's words, when `available` is false.
+    /// Sent so the UI can say what is missing instead of hiding the control:
+    /// a feature that vanishes teaches the user nothing, and "where did the
+    /// suggestions go" has no answer they can act on.
+    pub unavailable: Option<String>,
 }
 
 fn state(app: &AppHandle) -> Option<tauri::State<'_, AssistState>> {
@@ -235,6 +240,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             percent: 0,
             enabled: false,
             backend: None,
+            unavailable: None,
         };
     };
     let available = state.host.available();
@@ -250,6 +256,7 @@ pub fn status(app: &AppHandle) -> AssistStatus {
         },
         enabled: available && model_ready() && is_enabled(),
         backend: state.host.backend_label(),
+        unavailable: (!available).then(|| state.host.strings().unavailable),
     }
 }
 
