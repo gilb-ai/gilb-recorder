@@ -74,6 +74,9 @@ const en = {
     "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
   "assist.descDownloading": "Downloading the model… {pct}%",
   "assist.runsOn": "Runs on {agent}",
+  "assist.pickAgent": "Choose the agent to run suggestions on:",
+  "assist.agentMissing": "{agent} — not installed",
+  "assist.preparing": "Setting the agent up… the first time this downloads its ACP adapter.",
   "capture.trackingLabel": "Activity tracking",
   "capture.trackingDesc":
     "Windows you open, keys you type, clicks, scrolling and the clipboard — recorded to this Mac.",
@@ -162,6 +165,9 @@ const ru: typeof en = {
     "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
   "assist.descDownloading": "Загрузка модели… {pct}%",
   "assist.runsOn": "Работает на {agent}",
+  "assist.pickAgent": "Выберите агента для подсказок:",
+  "assist.agentMissing": "{agent} — не установлен",
+  "assist.preparing": "Настраиваю агента… при первом запуске скачивается ACP-адаптер.",
   "capture.trackingLabel": "Отслеживание активности",
   "capture.trackingDesc":
     "Открытые окна, нажатия клавиш, клики, прокрутка и буфер обмена — записываются на этот Mac.",

@@ -26,7 +26,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use gilb_assist::{AssistBackend, AssistConfig};
 use gilb_assist_acp::{agent_available, AcpBackend, AcpConfig};
-use gilb_shell_tauri::assist::{AssistHost, AssistStrings};
+use gilb_shell_tauri::assist::{AgentChoice, AssistHost, AssistStrings};
 use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
@@ -58,6 +58,7 @@ const AGENT_ARGS_ENV: &str = "GILB_ASSIST_AGENT_ARGS";
 /// (Zed, block/buzz) do it too.
 const HARNESSES: &[Harness] = &[
     Harness {
+        id: "claude",
         name: "Claude Code",
         cli: &["claude"],
         // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
@@ -68,6 +69,7 @@ const HARNESSES: &[Harness] = &[
         cli_acp_args: &[],
     },
     Harness {
+        id: "codex",
         name: "Codex",
         cli: &["codex"],
         adapter_bin: Some(&["codex-acp"]),
@@ -75,6 +77,7 @@ const HARNESSES: &[Harness] = &[
         cli_acp_args: &[],
     },
     Harness {
+        id: "cursor",
         name: "Cursor",
         // Cursor renamed its CLI from `cursor-agent` to `agent`. The specific
         // name goes first: `agent` is generic enough to belong to something
@@ -106,6 +109,8 @@ impl Harness {
 }
 
 struct Harness {
+    /// Stable id, persisted in preferences and sent to the UI. Never shown.
+    id: &'static str,
     /// What to call it in the UI — the product's name, not our binary.
     name: &'static str,
     /// Names the coding CLI may go by, most specific first. Its presence is
@@ -198,6 +203,52 @@ impl AssistHost for GilbAssistHost {
     /// — it decides which vendor sees the conversation.
     fn backend_label(&self) -> Option<String> {
         agent().map(|a| a.label)
+    }
+
+    /// Every agent gilb knows how to reach, and whether its CLI is here.
+    ///
+    /// Uninstalled ones are listed too: "Codex — not installed" tells the user
+    /// what their options are, which their absence from a list cannot.
+    fn agents(&self) -> Vec<AgentChoice> {
+        HARNESSES
+            .iter()
+            .map(|h| AgentChoice {
+                id: h.id.to_string(),
+                label: h.name.to_string(),
+                installed: h.installed_cli().is_some(),
+            })
+            .collect()
+    }
+
+    /// Install the agent's ACP adapter by *using* it: open a session and let
+    /// the handshake happen.
+    ///
+    /// That is the whole install — `npx` fetches the package on first run —
+    /// and it is also the only proof worth having. A package that downloaded
+    /// but does not answer `initialize` is not installed in any sense the user
+    /// cares about, and finding that out here beats finding out mid-meeting.
+    fn prepare(&self, agent_id: &str) -> Result<()> {
+        let harness = HARNESSES
+            .iter()
+            .find(|h| h.id == agent_id)
+            .ok_or_else(|| anyhow!("unknown agent `{agent_id}`"))?;
+        if harness.installed_cli().is_none() {
+            return Err(anyhow!("{} is not installed on this machine", harness.name));
+        }
+        let agent = agent().ok_or_else(|| anyhow!("could not resolve {}", harness.name))?;
+        info!(bin = %agent.bin.display(), args = ?agent.args, "preparing assist agent");
+        let backend = AcpBackend::new(AcpConfig {
+            bin: agent.bin,
+            args: agent.args,
+            startup_timeout: agent.startup_timeout,
+            cwd: std::env::temp_dir(),
+            turn_timeout: TURN_TIMEOUT,
+        });
+        // Dropped immediately: the session's only job here was to prove it
+        // could exist. The meeting gets its own.
+        tauri::async_runtime::block_on(backend.begin(""))
+            .map(|_| ())
+            .with_context(|| format!("{} could not start", harness.name))
     }
 
     /// `assist.md` in the meeting's own folder, next to `video.mp4` and
@@ -298,7 +349,16 @@ fn agent() -> Option<Agent> {
         }
     }
 
-    HARNESSES.iter().find_map(|h| {
+    // No choice yet means no agent — deliberately, so the UI asks instead of
+    // guessing. Which coding CLI runs the suggestions decides whose model
+    // hears the meeting; picking that silently because it happened to be
+    // first in a list is not a decision to make on someone's behalf.
+    //
+    // And a choice, once made, is the whole answer — including "the one you
+    // picked is gone", which must not quietly fall through to another vendor.
+    let chosen = gilb_config::load_preferences().assist_agent?;
+
+    HARNESSES.iter().filter(|h| h.id == chosen).find_map(|h| {
         // An adapter already on disk beats fetching one.
         if let Some(bin) = h.installed_adapter() {
             return Some(Agent {

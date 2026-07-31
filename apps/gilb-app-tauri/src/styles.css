@@ -898,3 +898,38 @@ body.assist-window {
 @media (prefers-color-scheme: dark) {
   .agent-chip { background: #232631; border-color: #2f3340; color: #9ca3af; }
 }
+
+/* Agent picker: the answer to "which of my coding agents should this use".
+   Buttons, not a <select> — with two or three options the choice is the whole
+   question, and a dropdown hides it behind a click. An agent that is not
+   installed stays in the list, disabled: knowing Codex is an option you do not
+   have beats not knowing Codex is an option. */
+.agent-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.agent-picker[hidden] { display: none; }
+
+.agent-option {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: white;
+  font-size: 12px;
+  cursor: pointer;
+}
+.agent-option:hover:not(:disabled) { background: #f3f4f6; }
+.agent-option:disabled { opacity: 0.45; cursor: default; }
+.agent-option.chosen {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .agent-option { background: #232631; border-color: #2f3340; color: #f5f5f7; }
+  .agent-option:hover:not(:disabled) { background: #2c2f3a; }
+  .agent-option.chosen { border-color: #60a5fa; color: #93c5fd; }
+}

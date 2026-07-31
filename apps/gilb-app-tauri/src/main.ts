@@ -337,6 +337,12 @@ type AssistStatus = {
   backend: string | null;
   /// Why it cannot run, when `available` is false — the product's words.
   unavailable: string | null;
+  /// What the user can pick from. Empty when the product decides itself.
+  agents: { id: string; label: string; installed: boolean }[];
+  /// What they picked, if anything.
+  agent: string | null;
+  /// An agent is being installed right now.
+  preparing: boolean;
 };
 
 function renderAssist(s: AssistStatus | null) {
@@ -349,23 +355,50 @@ function renderAssist(s: AssistStatus | null) {
   }
   row.hidden = false;
 
-  // Present but not usable yet: show the switch off and disabled, with what is
-  // missing where the description goes. Hiding the row instead would leave a
-  // user who came looking for suggestions with nothing to read.
+  const toggle = $<HTMLButtonElement>("toggle-assist");
+  const progress = $("assist-progress");
+
+  // Installing the agent the user just picked. The switch reads as on — they
+  // asked for this — and stays put until it lands.
+  if (s.preparing) {
+    toggle?.setAttribute("aria-checked", "true");
+    if (toggle) toggle.disabled = true;
+    progress?.setAttribute("hidden", "");
+    renderAssistBackend(null);
+    renderAgentPicker(s, true);
+    setText("assist-desc", t("assist.preparing"));
+    return;
+  }
+
+  // Switched on, nothing chosen yet: this is the question, not an error. The
+  // picker is the answer to it — never a dead end telling them to go install
+  // something themselves.
+  const needsChoice = !s.available && s.agents.length > 0;
+  if (needsChoice) {
+    toggle?.setAttribute("aria-checked", s.enabled ? "true" : "false");
+    if (toggle) toggle.disabled = false;
+    progress?.setAttribute("hidden", "");
+    renderAssistBackend(null);
+    renderAgentPicker(s, false);
+    setText("assist-desc", t("assist.pickAgent"));
+    return;
+  }
+
+  // Unavailable with nothing to pick — a product where the answer is
+  // elsewhere (sign in). Say what is missing rather than hiding the control.
   if (!s.available) {
-    const toggle = $<HTMLButtonElement>("toggle-assist");
     toggle?.setAttribute("aria-checked", "false");
     if (toggle) toggle.disabled = true;
-    $("assist-progress")?.setAttribute("hidden", "");
+    progress?.setAttribute("hidden", "");
     renderAssistBackend(null);
+    renderAgentPicker(s, false);
     setText("assist-desc", s.unavailable ?? t("assist.desc"));
     return;
   }
 
   renderAssistBackend(s.backend);
-  const toggle = $<HTMLButtonElement>("toggle-assist");
+  renderAgentPicker(s, false);
   if (toggle) toggle.disabled = false;
-  const progress = $("assist-progress");
   const bar = $("assist-progress-bar");
 
   // While the model downloads the switch reads as on (the user asked for it)
@@ -399,6 +432,45 @@ function renderAssistBackend(backend: string | null) {
   }
   el.textContent = t("assist.runsOn", { agent: backend });
   el.hidden = false;
+}
+
+/// The agent picker: one button per agent gilb knows, disabled when its CLI is
+/// not on the machine. Shown only while the choice is open — once made, the
+/// chip says what it runs on and the buttons would be clutter.
+function renderAgentPicker(s: AssistStatus, busy: boolean) {
+  const box = $("assist-agents");
+  if (!box) return;
+  const open = !s.available && s.agents.length > 0;
+  if (!open) {
+    box.hidden = true;
+    box.textContent = "";
+    return;
+  }
+  box.textContent = "";
+  for (const agent of s.agents) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "agent-option";
+    btn.textContent = agent.installed
+      ? agent.label
+      : t("assist.agentMissing", { agent: agent.label });
+    // Not installed is not "hidden": knowing Codex is an option you do not
+    // have is worth more than not knowing Codex is an option.
+    btn.disabled = busy || !agent.installed;
+    if (s.agent === agent.id) btn.classList.add("chosen");
+    btn.addEventListener("click", () => chooseAgent(agent.id));
+    box.appendChild(btn);
+  }
+  box.hidden = false;
+}
+
+async function chooseAgent(id: string) {
+  try {
+    await invoke("assist_choose_agent", { agent: id });
+  } catch (err) {
+    setMessage(t("assist.error", { error: String(err) }), "error");
+  }
+  refreshAssist();
 }
 
 async function refreshAssist() {

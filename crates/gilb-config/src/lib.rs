@@ -516,6 +516,12 @@ pub struct Preferences {
     /// overlay). Independent of the server-side feature flag: `false` tears
     /// the local pipeline down entirely, so no STT runs during meetings.
     pub assist_enabled: bool,
+    /// Which agent the assistant runs on, as the product's own id (gilb:
+    /// `"claude"` / `"codex"` / `"cursor"`). `None` means the user has not
+    /// chosen yet — with two coding CLIs installed, picking one for them is
+    /// picking whose model sees the meeting.
+    #[serde(default)]
+    pub assist_agent: Option<String>,
 }
 
 impl Default for Preferences {
@@ -525,6 +531,7 @@ impl Default for Preferences {
             meeting_detection_enabled: true,
             transcription_language: "auto".to_string(),
             assist_enabled: true,
+            assist_agent: None,
         }
     }
 }

@@ -91,6 +91,27 @@ pub trait AssistHost: Send + Sync + 'static {
         None
     }
 
+    /// The agents this product can run on, and whether each is installed.
+    ///
+    /// Empty — the default — means "no choice to make": the product decides,
+    /// and the UI shows no picker. gilb returns the coding CLIs it knows how
+    /// to reach, because on a machine with two of them the choice is whose
+    /// model sees the meeting, and that is the user's to make.
+    fn agents(&self) -> Vec<AgentChoice> {
+        Vec::new()
+    }
+
+    /// Do whatever "install" means for `agent_id`, blocking until it is
+    /// usable. Called off the UI thread when the user picks one.
+    ///
+    /// For gilb this warms (and thereby downloads) the ACP adapter and proves
+    /// it answers — install and verification in one, because an adapter that
+    /// downloaded but does not speak the protocol is not installed in any
+    /// sense the user cares about.
+    fn prepare(&self, _agent_id: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Where to write a transcript of the suggestions and questions for the
     /// meeting now recording, if the product keeps one.
     ///
@@ -102,6 +123,19 @@ pub trait AssistHost: Send + Sync + 'static {
     /// User-visible text. Kept out of the shared code because it carries the
     /// product's name and voice.
     fn strings(&self) -> AssistStrings;
+}
+
+/// One agent a user can pick, as the picker shows it.
+#[derive(Clone, serde::Serialize)]
+pub struct AgentChoice {
+    /// Stable id, persisted in prefs. Not shown.
+    pub id: String,
+    /// What to call it in the UI.
+    pub label: String,
+    /// Whether its CLI is on this machine. A missing one is still listed —
+    /// "Codex (not installed)" tells the user what their options are, which an
+    /// absence cannot.
+    pub installed: bool,
 }
 
 /// The few strings the shared glue has to show.
@@ -132,6 +166,9 @@ pub struct AssistState {
     /// suggestion.
     auto_show_suppressed: AtomicBool,
     download: ModelDownload,
+    /// An agent install is in flight. Kept here rather than in the frontend so
+    /// a reopened window sees it, and so two clicks cannot start two installs.
+    preparing: AtomicBool,
     /// Where this meeting's suggestions are being written, if anywhere. Set
     /// when a recording arms and cleared when it ends, so a suggestion that
     /// arrives between meetings is not filed under the previous one.
@@ -208,6 +245,15 @@ pub struct AssistStatus {
     pub enabled: bool,
     /// What it will run on ([`AssistHost::backend_label`]), or `None`.
     pub backend: Option<String>,
+    /// Agents the user can pick from ([`AssistHost::agents`]). Empty when the
+    /// product makes the choice itself.
+    pub agents: Vec<AgentChoice>,
+    /// The id they picked, if any. `None` with a non-empty `agents` is the
+    /// state that asks the question.
+    pub agent: Option<String>,
+    /// An agent is being installed right now — the switch is on, the feature
+    /// is not usable yet, and neither fact is an error.
+    pub preparing: bool,
     /// Why it cannot run, in the product's words, when `available` is false.
     /// Sent so the UI can say what is missing instead of hiding the control:
     /// a feature that vanishes teaches the user nothing, and "where did the
@@ -240,6 +286,9 @@ pub fn status(app: &AppHandle) -> AssistStatus {
             percent: 0,
             enabled: false,
             backend: None,
+            agents: Vec::new(),
+            agent: None,
+            preparing: false,
             unavailable: None,
         };
     };
@@ -256,6 +305,9 @@ pub fn status(app: &AppHandle) -> AssistStatus {
         },
         enabled: available && model_ready() && is_enabled(),
         backend: state.host.backend_label(),
+        agents: state.host.agents(),
+        agent: gilb_config::load_preferences().assist_agent,
+        preparing: state.preparing.load(Ordering::SeqCst),
         unavailable: (!available).then(|| state.host.strings().unavailable),
     }
 }
@@ -276,6 +328,7 @@ pub fn init(app: &AppHandle, host: impl AssistHost) {
             shortcut_registered: AtomicBool::new(false),
             auto_show_suppressed: AtomicBool::new(false),
             download: ModelDownload::default(),
+            preparing: AtomicBool::new(false),
             journal: parking_lot::Mutex::new(None),
         });
     }
@@ -651,6 +704,75 @@ pub fn assist_ask(app: AppHandle, question: String) -> Result<(), String> {
 // No click-through command: a window with ignore_cursor_events(true) also
 // ignores the control that would turn it off, so the overlay stayed inert until
 // the app restarted. The panel simply takes the mouse; the hotkey hides it.
+
+/// Pick the agent the suggestions run on, and install it if it needs
+/// installing.
+///
+/// The install is the point. Telling a user to go run an npm command is how a
+/// feature stays off forever; the flow that works is the one Zed and
+/// block/buzz use — show what is on the machine, let them pick, fetch the
+/// adapter yourself. [`AssistHost::prepare`] does the fetching and proves the
+/// result answers before we call it done.
+///
+/// Runs off the UI thread and reports through `assist-status`, because the
+/// first install downloads a package over the network.
+#[tauri::command]
+pub fn assist_choose_agent(app: AppHandle, agent: String) -> Result<(), String> {
+    let Some(shared) = state(&app) else {
+        return Err("assist is not set up".into());
+    };
+    // One install at a time: the second click would race the first for the
+    // same npx cache entry.
+    if shared.preparing.swap(true, Ordering::SeqCst) {
+        return Err("already installing".into());
+    }
+    if let Err(err) = gilb_config::update_preferences(|p| p.assist_agent = Some(agent.clone())) {
+        shared.preparing.store(false, Ordering::SeqCst);
+        return Err(format!("could not save the choice: {err}"));
+    }
+    emit_status(&app);
+
+    let app_bg = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let prepared = {
+            let app = app_bg.clone();
+            let agent = agent.clone();
+            // `prepare` spawns a process and waits on it — off the async
+            // runtime's shoulders.
+            tauri::async_runtime::spawn_blocking(move || {
+                state(&app)
+                    .map(|shared| shared.host.prepare(&agent))
+                    .unwrap_or(Ok(()))
+            })
+            .await
+        };
+        if let Some(shared) = state(&app_bg) {
+            shared.preparing.store(false, Ordering::SeqCst);
+        }
+        match prepared {
+            Ok(Ok(())) => {
+                info!(%agent, "assist agent ready");
+                // Availability just changed: wire it up (or tear down, if the
+                // user turned the switch off while we were installing).
+                refresh(&app_bg);
+            }
+            Ok(Err(err)) => {
+                warn!(error = %err, %agent, "assist agent install failed");
+                let _ = app_bg.emit_to(
+                    "main",
+                    "assist-error",
+                    serde_json::json!({ "message": err.to_string() }),
+                );
+                emit_status(&app_bg);
+            }
+            Err(err) => {
+                warn!(error = %err, %agent, "assist agent install task failed");
+                emit_status(&app_bg);
+            }
+        }
+    });
+    Ok(())
+}
 
 #[tauri::command]
 pub fn assist_hide(app: AppHandle, window: tauri::WebviewWindow) {

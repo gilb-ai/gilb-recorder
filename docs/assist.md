@@ -178,6 +178,27 @@ two places computing the same path is how they end up disagreeing. Writing is
 best-effort: the panel is the product, the file is a record of it, and a failed
 write must never cost a suggestion.
 
+### Choosing an agent
+
+The switch turns on before anything is installed — that is the point. Flipping
+it with no agent chosen shows the agents gilb knows, marking the ones this
+machine has; picking one saves the choice and installs its adapter (a first
+`npx` run downloads it), and the feature comes up when that lands. No step
+where the user is told to go and run an npm command: that is a feature that
+stays off forever.
+
+Nothing is chosen by default, even when only one agent is installed. Which CLI
+runs the suggestions decides whose model hears the meeting, and picking that on
+someone's behalf because it happened to be first in a list is not a decision to
+make for them. An agent that is not installed stays in the list, disabled —
+knowing Codex is an option you do not have beats not knowing Codex is an
+option.
+
+"Install" is a handshake, not a download: `AssistHost::prepare` opens a real
+ACP session and throws the result away. A package that fetched but does not
+answer `initialize` is not installed in any sense the user cares about, and
+finding that out at setup beats finding it out mid-meeting.
+
 ### Finding an agent
 
 The CLI a user has is usually *not* the thing that speaks ACP. `claude` is an
