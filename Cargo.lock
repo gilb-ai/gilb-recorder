@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-a11y"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "accessibility-sys",
  "anyhow",
@@ -2015,7 +2015,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-analyzer"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2037,7 +2037,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-app-tauri"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2074,7 +2074,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2084,7 +2084,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist-acp"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2098,7 +2098,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-assist-audio"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2116,7 +2116,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-config"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "directories",
@@ -2127,7 +2127,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-core"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "chrono",
  "serde",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-db"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2150,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-engine"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "gilb-a11y",
@@ -2166,7 +2166,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-events"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "chrono",
  "serde",
@@ -2176,7 +2176,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-mcp"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2194,7 +2194,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-meeting"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2208,7 +2208,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-pipeline"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2223,7 +2223,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-record"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "aec-rs",
  "anyhow",
@@ -2256,7 +2256,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-shell-tauri"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "chrono",
@@ -2283,7 +2283,7 @@ dependencies = [
 
 [[package]]
 name = "gilb-transcribe"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "anyhow",
  "async-trait",
