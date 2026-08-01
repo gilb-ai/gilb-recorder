@@ -111,6 +111,24 @@ pub fn run() {
                     // inert without an agent binary or the whisper model.
                     assist::init(app.handle(), assist_db);
 
+                    // Closing the window hides it instead of destroying it.
+                    // This is a tray app: it keeps detecting meetings and
+                    // recording with no window open, and the tray is how you
+                    // get back. A destroyed window cannot be shown again, so
+                    // without this the tray's "Open gilb" is a dead button
+                    // from the first time someone presses the red dot.
+                    if let Some(window) = app.get_webview_window("main") {
+                        let handle = app.handle().clone();
+                        window.on_window_event(move |event| {
+                            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                                api.prevent_close();
+                                if let Some(window) = handle.get_webview_window("main") {
+                                    let _ = window.hide();
+                                }
+                            }
+                        });
+                    }
+
                     // System tray: gilb's home (open the window, toggle a manual
                     // recording, quit). Built after `AppState` is managed — the
                     // controller reads `recording` from it.
