@@ -55,7 +55,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use tokio::sync::{mpsc, oneshot, Mutex};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 /// ACP revision this client speaks.
 const PROTOCOL_VERSION: u32 = 1;
@@ -294,7 +294,24 @@ async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
                 "clientInfo": { "name": "gilb-assist", "version": env!("CARGO_PKG_VERSION") },
             }),
         )
-        .await?;
+        .await
+        .inspect(|init| {
+            // Which adapter actually answered. The package is fetched
+            // unversioned, so this moves under us by design — and when a
+            // suggestion path breaks on a Tuesday, this line is the whole
+            // difference between "the adapter changed" and a week of guessing.
+            if let Some(agent_info) = init.get("agentInfo") {
+                // Read before the macro: inside it, `Value` resolves to
+                // tracing's own trait of that name, not serde_json's type.
+                let name = agent_info.get("name").and_then(|v| v.as_str());
+                let version = agent_info.get("version").and_then(|v| v.as_str());
+                info!(
+                    agent = name.unwrap_or("?"),
+                    version = version.unwrap_or("?"),
+                    "ACP agent"
+                );
+            }
+        })?;
         conn.request(
             "session/new",
             json!({ "cwd": config.cwd.to_string_lossy(), "mcpServers": [] }),
