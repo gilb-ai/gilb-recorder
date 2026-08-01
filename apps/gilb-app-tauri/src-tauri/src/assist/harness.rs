@@ -56,10 +56,12 @@ pub(super) const HARNESSES: &[Harness] = &[
         preferred_effort: Some("low"),
         effort_config_id: "effort",
         cli: &["claude"],
-        // Both adapter names: `@zed-industries/claude-code-acp` was renamed to
-        // `@agentclientprotocol/claude-agent-acp`, and a machine may have
-        // either installed. We *fetch* the current one.
-        adapter_bin: Some(&["claude-agent-acp", "claude-code-acp"]),
+        // Only the official adapter. The Zed-era `claude-code-acp` still
+        // exists on npm and still works, but it is superseded — and an old
+        // copy sitting on a machine used to win over the current package
+        // simply by being there, which is how someone ends up on a version
+        // nobody chose, reading documentation for the other one.
+        adapter_bin: Some(&["claude-agent-acp"]),
         npx_package: Some("@agentclientprotocol/claude-agent-acp"),
         cli_acp_args: &[],
     },

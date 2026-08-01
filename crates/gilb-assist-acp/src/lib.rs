@@ -3,7 +3,7 @@
 //! One of the two backend shapes the engine supports (`docs/assist.md`): the
 //! same engine and the same audio pipeline as a cloud provider would use, but
 //! the turns go to an agent already installed on the user's machine — Claude
-//! Code through its `claude-code-acp` adapter, `gemini --experimental-acp`, or
+//! Code through its `claude-agent-acp` adapter, `gemini --experimental-acp`, or
 //! any other ACP-speaking command.
 //!
 //! ## Why ACP and not `claude -p`
@@ -109,8 +109,8 @@ impl Default for AcpConfig {
     fn default() -> Self {
         Self {
             // The ACP adapter, not the interactive `claude` CLI — that one
-            // never answers a JSON-RPC handshake. See KNOWN_AGENTS in the app.
-            bin: PathBuf::from("claude-code-acp"),
+            // never answers a JSON-RPC handshake. See HARNESSES in the app.
+            bin: PathBuf::from("claude-agent-acp"),
             args: Vec::new(),
             cwd: std::env::temp_dir(),
             turn_timeout: Duration::from_secs(20),
@@ -311,7 +311,7 @@ async fn bootstrap(config: &AcpConfig) -> Result<Bootstrap> {
         .map_err(|_| {
             anyhow!(
                 "`{}` did not answer the ACP handshake within {:?} — does it speak ACP? \
-                 (an interactive CLI never will; Claude Code needs the claude-code-acp adapter)",
+                 (an interactive CLI never will; Claude Code needs the claude-agent-acp adapter)",
                 config.bin.display(),
                 config.startup_timeout
             )

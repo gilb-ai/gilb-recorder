@@ -278,8 +278,10 @@ one or the other.
 So gilb looks for the *harness* and works out what to run for it:
 
 1. `GILB_ASSIST_AGENT`, if set — a wrapper script, an in-house adapter.
-2. An adapter already installed (`claude-agent-acp`, or the older
-   `claude-code-acp`).
+2. The official adapter, if it is already installed (`claude-agent-acp`).
+   The Zed-era `claude-code-acp` is deliberately not looked for: it is
+   superseded, and an old copy on a machine would win over the current
+   package simply by being present.
 3. The CLI itself, when it speaks ACP with a flag.
 4. Otherwise `npx -y @agentclientprotocol/claude-agent-acp`, which fetches the
    adapter on first use and serves it from the npx cache afterwards.
