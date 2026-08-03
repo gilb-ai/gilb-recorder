@@ -116,6 +116,37 @@ button:disabled {
 /* `.track` sets display:flex, which would otherwise beat the UA
    `[hidden]{display:none}`. Meetings-only builds hide the tracking row. */
 .track[hidden] { display: none; }
+
+/* The capture switches, in a card of their own. Same `.settings-row` grammar
+   the gear uses — label, description, switch — but on the main window, because
+   flipping one takes effect at once. No separator: the card edge is the
+   separator now. */
+.card-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* The switches card carries nothing but switches, so they are the card: no
+   caption above them and no outline around each. A row keeps its own box in
+   Settings, where it sits among other kinds of row and the border is what
+   separates them; here every row is the same kind and the outlines only added
+   a frame inside a frame. Hairlines between them do the separating. */
+.card-switches .card-toggles { gap: 0; }
+.card-switches .settings-row {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 14px 0;
+}
+.card-switches .settings-row + .settings-row {
+  border-top: 1px solid #e5e7eb;
+}
+/* First and last hug the card's own padding rather than doubling it. */
+.card-switches .settings-row:first-child { padding-top: 0; }
+.card-switches .settings-row:last-child { padding-bottom: 0; }
+/* No rows to show (a build with neither switch) — drop the separator too. */
+.card-toggles:empty { display: none; }
 /* Capture card header: just the "Capture" caption. App-level Settings lives in
    the footer (.appbar), not in this card. */
 .capture-head {
@@ -128,11 +159,12 @@ button:disabled {
    Headless-tracking builds hide the "Capture" caption. */
 .capture-head[hidden] { display: none; }
 .capture-head h2 { margin: 0; }
-/* Headless-tracking build (VITE_FEATURE_TRACKING_UI=0): the engine still runs
-   but the card has no tracking row. Collapse the whole card when nothing else is
-   live — no active meeting recording (#rec-indicator shown) and no status text
-   (.message non-empty) — so it doesn't render as an empty box. */
-.capture-ui-hidden:not(:has(#rec-indicator:not([hidden]))):not(:has(.message:not(:empty))) {
+/* The Capture card holds only live state: the recording pill and the status
+   line. With the switches moved to their own card, an idle app would render
+   this as an empty box with a heading — so it collapses when there is nothing
+   to report: no meeting recording (#rec-indicator hidden) and no status text.
+   Nothing is happening, so no box says so. */
+.card.capture:not(:has(#rec-indicator:not([hidden]))):not(:has(.message:not(:empty))) {
   display: none;
 }
 .track-state { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -592,6 +624,16 @@ body.countdown-window {
   gap: 10px;
 }
 
+/* Real-time suggestions row inside the signed-in workspace card: the usual
+   label + switch line, with the model-download progress bar stacked under it
+   while a download runs. */
+.assist-row { margin: 0 0 12px; text-align: left; }
+.assist-row-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
 .key-input {
   width: 100%;
   border: 1px solid #d1d5db;
@@ -684,6 +726,43 @@ body.countdown-window {
   transition: width 0.2s ease;
 }
 
+/* Indeterminate: something is happening, and we genuinely cannot say how far
+   along it is. The whisper model is our own download with a content-length, so
+   that bar shows a real fraction; an ACP adapter is fetched by `npx`, which
+   reports nothing we could turn into a percentage. A sweeping bar says "still
+   working" without inventing a number — a fake percentage that jumps to 100%
+   and then waits is worse than no percentage at all. */
+.model-progress.indeterminate .model-progress-bar {
+  width: 35%;
+  transition: none;
+  animation: progress-sweep 1.1s ease-in-out infinite;
+}
+@keyframes progress-sweep {
+  0% { margin-left: -35%; }
+  100% { margin-left: 100%; }
+}
+/* Respect a user who asked the OS for less motion: hold the bar still and let
+   the text carry the state. */
+@media (prefers-reduced-motion: reduce) {
+  .model-progress.indeterminate .model-progress-bar {
+    animation: none;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+/* A line inside a stacked settings row: label + description on the left, a
+   control on the right. Not a `.settings-row` — nesting one would draw a card
+   inside a card; the hairline is enough to separate it from what it belongs
+   to. */
+.settings-subrow {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 10px;
+  border-top: 1px solid #e5e7eb;
+}
+
 .model-lang {
   display: flex;
   align-items: center;
@@ -695,6 +774,9 @@ body.countdown-window {
 @media (prefers-color-scheme: dark) {
   .model-progress { background: #2f3340; }
   .settings-row { background: #1a1c24; border-color: #2f3340; }
+  .settings-subrow { border-top-color: #2f3340; }
+  .card-switches .settings-row { background: none; }
+  .card-switches .settings-row + .settings-row { border-top-color: #2f3340; }
   .settings-row-desc { color: #9ca3af; }
   .key-input { background: #232631; color: #f5f5f7; border-color: #2f3340; }
   .key-input::placeholder { color: #6b7280; }
@@ -745,4 +827,162 @@ body.countdown-window {
     color: #4ade80;
     border-color: #166534;
   }
+}
+
+/* ---- assist overlay (assist.html) — transparent always-on-top panel ----
+   The window is built with transparent(true), but that only shows through if
+   nothing in the page paints a background. `:root` (and its dark-mode
+   override) sets the app surface colour for every other page, so both the
+   root element and the body have to be cleared here — a transparent body over
+   an opaque html still renders as a solid panel. The class selectors outrank
+   the `:root` / `body` rules above regardless of order. */
+html.assist-root,
+html.assist-root body.assist-window {
+  background: transparent;
+}
+body.assist-window {
+  margin: 0;
+  /* The base body padding would inset the panel while `.assist` still claims
+     100vh, pushing the Ask field past the bottom edge — same reset as
+     `body.countdown-window`. */
+  padding: 0;
+  overflow: hidden;
+}
+.assist {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  box-sizing: border-box;
+  border-radius: 12px;
+  /* Plain alpha, deliberately: backdrop-filter inside a transparent window
+     has nothing of its own to blur and samples the window's backing store,
+     which the compositor updates out of step with the page — the panel
+     pulses. A native NSVisualEffectView backdrop was tried instead and made
+     the window opaque, so translucency lives here and only here. */
+  background: rgba(10, 12, 18, 0.55);
+  color: #f5f5f7;
+  font-size: 13px;
+}
+/* Dragging is the host's job (data-tauri-drag-region in assist.html);
+   -webkit-app-region is a Chromium feature WKWebView does not implement. */
+.assist-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  cursor: default;
+  user-select: none;
+}
+.assist-bar button {
+  background: rgba(255, 255, 255, 0.08);
+  color: #d1d5db;
+  border: none;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.assist-bar button:hover { background: rgba(255, 255, 255, 0.16); }
+.assist-title { font-weight: 600; flex: 1; }
+.assist-nav { display: flex; align-items: center; gap: 4px; color: #9ca3af; }
+/* display:flex would otherwise beat the UA `[hidden] { display: none }` —
+   the block is hidden until the first suggestion arrives. */
+.assist-nav[hidden] { display: none; }
+.assist-bar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+  background: rgba(255, 255, 255, 0.04);
+}
+/* Newer suggestions than the one on screen: the forward arrow lights up. */
+.assist-bar button.has-new:not(:disabled) {
+  background: rgba(96, 165, 250, 0.35);
+  color: #eff6ff;
+}
+.assist-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4ade80;
+}
+.assist-dot.loading {
+  background: #facc15;
+  animation: assist-pulse 1s ease-in-out infinite;
+}
+@keyframes assist-pulse {
+  50% { opacity: 0.3; }
+}
+.assist-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 14px;
+  line-height: 1.45;
+}
+.assist-content pre {
+  background: rgba(255, 255, 255, 0.08);
+  padding: 8px;
+  border-radius: 6px;
+  overflow-x: auto;
+}
+.assist-empty { color: #9ca3af; }
+.assist-error { color: #f87171; padding: 0 14px; font-size: 12px; }
+.assist-ask { padding: 8px 10px; }
+.assist-ask input {
+  width: 100%;
+  box-sizing: border-box;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #f5f5f7;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+.assist-ask input::placeholder { color: #9ca3af; }
+
+
+/* Agent picker: the answer to "which of my coding agents should this use".
+   Buttons, not a <select> — with two or three options the choice is the whole
+   question, and a dropdown hides it behind a click. An agent that is not
+   installed stays in the list, disabled: knowing Codex is an option you do not
+   have beats not knowing Codex is an option. */
+.agent-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+.agent-picker[hidden] { display: none; }
+
+.agent-option {
+  padding: 4px 10px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: white;
+  font-size: 12px;
+  cursor: pointer;
+}
+.agent-option:hover:not(:disabled) { background: #f3f4f6; }
+.agent-option:disabled { opacity: 0.45; cursor: default; }
+.agent-option.chosen {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  .agent-option { background: #232631; border-color: #2f3340; color: #f5f5f7; }
+  .agent-option:hover:not(:disabled) { background: #2c2f3a; }
+  .agent-option.chosen { border-color: #60a5fa; color: #93c5fd; }
+}
+
+/* Settings row waiting on the agent: the placeholder text carries the message,
+   the pulse says it is alive. Not the sweep bar — nothing is downloading, we
+   are waiting on one process to answer a handshake. */
+.settings-row[aria-busy="true"] select {
+  animation: busy-pulse 1.2s ease-in-out infinite;
+}
+@keyframes busy-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .settings-row[aria-busy="true"] select { animation: none; opacity: 0.6; }
 }

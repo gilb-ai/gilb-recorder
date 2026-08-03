@@ -1,8 +1,10 @@
 //! 300ms debounce aggregator that flushes typing bursts into a single
 //! `text` action.
 //!
-//! Phase 0 ships only the buffer state machine + unit tests; the real keycode
-//! → string translation (UCKeyTranslate + deadkey state) lands in Phase 1.
+//! Only the buffer state machine lives here, with no notion of keycodes: the
+//! platform layer hands it already-translated characters (macOS reads them off
+//! the event, so no TIS/UCKeyTranslate detour), which is what keeps this
+//! testable without an OS.
 
 use std::time::{Duration, Instant};
 

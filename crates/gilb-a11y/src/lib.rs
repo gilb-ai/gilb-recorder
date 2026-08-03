@@ -1,17 +1,12 @@
 //! Accessibility capture surface for gilb.
 //!
-//! Phase 0 ships:
-//! - [`CapturePlatform`] trait + per-OS impls behind `cfg`.
-//! - macOS stub that emits a single "debug" action on start, proving the
-//!   end-to-end path action → channel → engine → DB.
-//! - skeleton modules for text-buffer / activity-feed / budget / tree-cache
-//!   that get filled in by Phase 1+.
-//!
-//! Real CGEventTap / AX integration lands in Phase 1 inside
-//! [`platform::macos`].
+//! [`CapturePlatform`] is the seam: one trait, per-OS implementations behind
+//! `cfg`, and everything above it — text buffering, password masking, the
+//! normalizer, the tree snapshotter — written once against OS-independent
+//! types. macOS captures through CGEventTap + the Accessibility API, Windows
+//! through UI Automation + event hooks, and `unsupported` is a no-op so the
+//! crate still builds (and CI still lints) on Linux.
 
-pub mod activity_feed;
-pub mod budget;
 pub mod events;
 pub mod focus;
 pub mod keyboard;

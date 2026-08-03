@@ -1,8 +1,7 @@
 //! `tree_snapshots` table — periodic AX-tree dumps of the focused window.
 //!
-//! Schema is defined in `migrations/0001_init.sql`. The Phase 2
-//! snapshotter (in `gilb-a11y::tree`) decides when to call us; we just
-//! insert.
+//! Schema is defined in `migrations/0001_init.sql`. The snapshotter (in
+//! `gilb-a11y::tree`) decides when to call us; we just insert.
 
 use anyhow::Result;
 

@@ -1,6 +1,6 @@
 //! Shannon — the local, auditable analyzer.
 //!
-//! `find` (Phase 1) runs a job's prompt as a `claude -p` subprocess over
+//! `find` runs a job's prompt as a `claude -p` subprocess over
 //! `gilb-mcp`, parses the emitted findings (opaque JSON), and POSTs each to the
 //! job's gilb-web endpoint. Only the derived findings cross the vendor boundary,
 //! and that egress lives in deterministic Rust (`web`/`pipeline`).

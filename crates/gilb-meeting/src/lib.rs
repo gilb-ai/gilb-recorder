@@ -3,9 +3,9 @@
 //! This crate defines the [`MeetingDetector`] trait and the
 //! [`MeetingEvent`] enum that platform detectors (macOS unified log,
 //! Windows WASAPI session events) emit and downstream consumers (the
-//! recording pipeline, UI) subscribe to. The event names and field
-//! shape are the contract referenced by `research/07-meeting-detection.md`
-//! §5 — keep them in sync with that document.
+//! recording pipeline, UI) subscribe to. The event names and field shape
+//! are the contract between them: both platform detectors emit the same
+//! sequence, so consumers never branch on the OS.
 //!
 //! The in-memory [`MockDetector`], the macOS [`MacosDetector`], and the
 //! Windows [`WindowsDetector`] (WASAPI session events) live here.

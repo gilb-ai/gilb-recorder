@@ -16,11 +16,16 @@ use std::time::Duration;
 use gilb_config::{load_preferences, transcribe_model_path};
 use gilb_db::meetings::{get_meeting, pending_transcriptions};
 use gilb_db::Db;
+use gilb_transcribe::SharedModel;
 use gilb_transcribe::{transcribe_meeting, LocalTranscriber};
+use std::sync::{Arc, OnceLock};
+
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tracing::{debug, info, warn};
 
-/// Drop the warm model after this much idle time.
+/// Drop the warm model after this much idle time. The window belongs to the
+/// shared owner now: real-time suggestions borrow the same instance, and
+/// whoever goes idle first must not pull it out from under the other.
 const IDLE_UNLOAD: Duration = Duration::from_secs(5 * 60);
 
 /// Work item for the transcription worker.
@@ -30,6 +35,8 @@ pub enum TranscriptionJob {
     /// Re-scan the DB and enqueue every meeting still needing a transcript.
     Sweep,
     /// Drop the warm model so the next job reloads it (e.g. language changed).
+    /// Drops the shared cache entry too — otherwise the next job would get the
+    /// old model right back from the realtime side's cache.
     ReloadModel,
 }
 
@@ -46,24 +53,33 @@ pub fn spawn_transcription_worker(db: Db) -> TranscribeTx {
     TranscribeTx(tx)
 }
 
-/// Load the model off the async runtime (it's a blocking, ~570 MB read).
-/// Returns `None` if no model is downloaded or loading fails.
-async fn load_model() -> Option<LocalTranscriber> {
+/// The process-wide model. Real-time suggestions ask the same handle, so a
+/// meeting that ends while the overlay is still warm no longer costs a second
+/// ~570 MB copy.
+pub fn shared_model() -> Arc<SharedModel<LocalTranscriber>> {
+    static SHARED: OnceLock<Arc<SharedModel<LocalTranscriber>>> = OnceLock::new();
+    SHARED.get_or_init(|| SharedModel::new(IDLE_UNLOAD)).clone()
+}
+
+/// Borrow the model, loading it if this is the first ask. `None` when no model
+/// is downloaded or loading fails — jobs then wait for a download.
+async fn load_model() -> Option<Arc<LocalTranscriber>> {
     let path = transcribe_model_path().ok()?;
     if !path.exists() {
         debug!("no local transcription model; jobs will wait for a download");
         return None;
     }
     let language = load_preferences().transcription_language;
-    match tauri::async_runtime::spawn_blocking(move || LocalTranscriber::new(&path, language)).await
+    // The language keys the shared cache: after a language change the next
+    // job gets a fresh model, not the realtime side's instance (or vice versa).
+    let key = language.clone();
+    match shared_model()
+        .get(&key, move || LocalTranscriber::new(&path, language))
+        .await
     {
-        Ok(Ok(model)) => Some(model),
-        Ok(Err(err)) => {
-            warn!(error = %err, "failed to load transcription model");
-            None
-        }
+        Ok(model) => Some(model),
         Err(err) => {
-            warn!(error = %err, "model-load task panicked");
+            warn!(error = %err, "failed to load transcription model");
             None
         }
     }
@@ -74,15 +90,18 @@ async fn run_worker(
     mut rx: UnboundedReceiver<TranscriptionJob>,
     self_tx: UnboundedSender<TranscriptionJob>,
 ) {
-    let mut model: Option<LocalTranscriber> = None;
+    let mut model: Option<Arc<LocalTranscriber>> = None;
     loop {
         // Wait for the next job; while a model is warm, unload it after idle.
         let job = if model.is_some() {
             tokio::select! {
                 job = rx.recv() => job,
                 _ = tokio::time::sleep(IDLE_UNLOAD) => {
-                    debug!("unloading idle transcription model");
+                    debug!("transcription worker idle; releasing the model");
                     model = None;
+                    // Ask the shared owner to drop its reference too; it
+                    // refuses while suggestions are still using it.
+                    shared_model().unload_if_idle();
                     continue;
                 }
             }
@@ -94,6 +113,10 @@ async fn run_worker(
         match job {
             TranscriptionJob::ReloadModel => {
                 model = None;
+                // The worker's borrow is gone; evict the shared cache entry
+                // too so the next job reloads with the new configuration now,
+                // not after both consumers have idled out.
+                shared_model().invalidate();
             }
             TranscriptionJob::Sweep => match pending_transcriptions(&db).await {
                 Ok(ids) => {
@@ -129,8 +152,13 @@ async fn run_worker(
                     continue;
                 };
 
-                if let Err(err) =
-                    transcribe_meeting(&db, meeting_id, Path::new(&audio_path), transcriber).await
+                if let Err(err) = transcribe_meeting(
+                    &db,
+                    meeting_id,
+                    Path::new(&audio_path),
+                    transcriber.as_ref(),
+                )
+                .await
                 {
                     warn!(meeting_id, error = %err, "failed to persist transcription");
                 }

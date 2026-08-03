@@ -1,0 +1,66 @@
+name: Shell (Tauri crates)
+
+# The Tauri crates cannot run in ci.yml: on Linux they need GTK/WebKit that the
+# runner does not have, which is why ci.yml excludes them. They ship on
+# macOS/Windows, so they are checked where they ship.
+#
+# This matters more than it used to: gilb-shell-tauri is no longer thin glue —
+# it owns the suggestions overlay, the model gate with its download, and the
+# pipeline wiring, and none of that was linted or tested anywhere.
+
+on:
+  pull_request:
+    paths:
+      - "apps/gilb-app-tauri/**"
+      - "crates/gilb-shell-tauri/**"
+      - "crates/gilb-assist/**"
+      - "crates/gilb-assist-acp/**"
+      - "crates/gilb-assist-audio/**"
+      - "crates/gilb-transcribe/**"
+      - ".github/workflows/shell.yml"
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Without the feature first: a shell that ships no suggestions must keep
+      # compiling, and this catches a `#[cfg(feature = "assist")]` that drifted.
+      - name: Clippy (shell, no assist)
+        run: cargo clippy -p gilb-shell-tauri --all-targets -- -D warnings
+
+      # With it: whisper.cpp and onnxruntime build here (cached between runs).
+      - name: Clippy (shell + assist stack)
+        run: |
+          cargo clippy -p gilb-shell-tauri --features assist --all-targets -- -D warnings
+          cargo clippy -p gilb-assist-acp --all-targets -- -D warnings
+
+      - name: Test
+        run: |
+          cargo test -p gilb-shell-tauri --features assist
+          cargo test -p gilb-assist-acp
+
+      # The app crate was linted nowhere, and it collected exactly what you
+      # would expect: doc comments orphaned by a deleted const, a pointless
+      # conversion. It needs the sidecars staged or the bundler config fails
+      # before rustc runs.
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Clippy (app)
+        run: |
+          bash apps/gilb-app-tauri/scripts/build-sidecars.sh
+          cargo clippy -p gilb-app-tauri --all-targets -- -D warnings

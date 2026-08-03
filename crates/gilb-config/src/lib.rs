@@ -1,7 +1,9 @@
 //! Recording configuration shared between the Tauri app and the standalone CLI.
 //!
-//! v0 is intentionally tiny: paths + a few capture toggles. Per-app exclusion
-//! lists land in Phase 4.
+//! Intentionally tiny: paths, a few capture toggles, and the persisted user
+//! preferences. Anything that needs to be true before the app has a window
+//! belongs here; anything the user edits through the UI belongs in
+//! `Preferences` below.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -9,17 +11,35 @@ use std::sync::{Mutex, OnceLock};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_DATA_DIR_NAME: &str = ".gilb";
+/// Folder name inside the user's Documents. Visible on purpose: everything
+/// gilb produces — the database, meeting recordings, transcripts, the prompt
+/// the assistant runs on — is the user's own data, and data you cannot find in
+/// Finder or Explorer is data you cannot delete, back up or inspect.
+const DATA_DIR_NAME: &str = "Gilb";
+/// Where installs before the move kept everything. Migrated on first run.
+const LEGACY_DATA_DIR_NAME: &str = ".gilb";
 const DB_FILE_NAME: &str = "db.sqlite";
 const LOGS_DIR_NAME: &str = "logs";
 const CREDENTIALS_FILE_NAME: &str = "credentials.json";
 const PREFERENCES_FILE_NAME: &str = "prefs.json";
 const MODELS_DIR_NAME: &str = "models";
+const PROMPTS_DIR_NAME: &str = "prompts";
+
+/// The real-time assistant's prompt, in [`prompts_dir`]. Seeded from the
+/// bundled copy on first run and then the user's to edit.
+pub const ASSIST_PROMPT_FILE: &str = "realtime_assist.md";
 
 /// Filename of the local Whisper model (ggml large-v3-turbo, q5_0 quantized),
 /// downloaded on demand into [`models_dir`]. Its presence is the gate that
 /// enables on-device meeting transcription.
 pub const TRANSCRIBE_MODEL_FILE: &str = "ggml-large-v3-turbo-q5_0.bin";
+
+/// Where [`TRANSCRIBE_MODEL_FILE`] is fetched from. Next to the file name on
+/// purpose: post-meeting transcription and realtime suggestions download the
+/// same ~570 MB build, and two copies of this string drift the moment one of
+/// them is bumped.
+pub const TRANSCRIBE_MODEL_URL: &str =
+    "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin";
 
 /// Default cadence for the analyzer's incremental upload when the server
 /// doesn't specify one. Hourly — see `Credentials::analyze_interval_secs`.
@@ -98,31 +118,133 @@ static DATA_DIR_OVERRIDE: OnceLock<PathBuf> = OnceLock::new();
 /// calling this once at startup, before any other gilb API.
 ///
 /// First write wins: returns `Err` with the rejected path if an override is
-/// already in place. When never called, [`data_dir`] resolves to `$HOME/.gilb`.
+/// already in place. When never called, [`data_dir`] resolves to
+/// `<Documents>/Gilb`.
 pub fn set_data_dir(dir: impl Into<PathBuf>) -> std::result::Result<(), PathBuf> {
     DATA_DIR_OVERRIDE.set(dir.into())
 }
 
 /// The per-user data directory: the [`set_data_dir`] override when one was
-/// installed, otherwise `$HOME/.gilb/`.
+/// installed, otherwise `<Documents>/Gilb/` — `~/Documents/Gilb` on macOS,
+/// `%USERPROFILE%\Documents\Gilb` on Windows.
+///
+/// Documents is resolved through the OS rather than assembled from `$HOME`,
+/// because on Windows it is a known folder the user (or OneDrive) may have
+/// moved, and writing to a literal `%USERPROFILE%\Documents` that nothing
+/// points at any more would hide the data as effectively as the old dotfile
+/// did. When the OS has no answer, fall back to `$HOME/Documents/Gilb` and
+/// finally to `$HOME/Gilb` — never silently to a hidden directory.
 pub fn data_dir() -> Result<PathBuf> {
     if let Some(dir) = DATA_DIR_OVERRIDE.get() {
         return Ok(dir.clone());
     }
-    let home = directories::BaseDirs::new()
-        .context("could not determine the user's home directory")?
-        .home_dir()
-        .to_path_buf();
-    Ok(home.join(DEFAULT_DATA_DIR_NAME))
+    Ok(documents_dir()?.join(DATA_DIR_NAME))
 }
 
-/// Resolve `$HOME/.gilb/db.sqlite`. Caller is responsible for creating the
-/// parent directory before opening the database.
+fn documents_dir() -> Result<PathBuf> {
+    if let Some(docs) =
+        directories::UserDirs::new().and_then(|d| d.document_dir().map(Path::to_path_buf))
+    {
+        return Ok(docs);
+    }
+    let home = home_dir()?;
+    let guess = home.join("Documents");
+    Ok(if guess.is_dir() { guess } else { home })
+}
+
+fn home_dir() -> Result<PathBuf> {
+    Ok(directories::BaseDirs::new()
+        .context("could not determine the user's home directory")?
+        .home_dir()
+        .to_path_buf())
+}
+
+/// Bring an older install's directory to where (and what) [`data_dir`] says,
+/// once, at startup — before anything opens the database.
+///
+/// Two shapes of "older": the hidden `$HOME/.gilb` every install had before the
+/// move into Documents, and a `Documents/Gilb` from the short window when the
+/// folder was lowercase. The second is a rename that only changes case, which
+/// macOS and Windows will do happily on their case-insensitive filesystems and
+/// which is invisible to `Path::exists` — so it is detected by reading the
+/// parent directory, not by asking whether the target is there.
+///
+/// A rename in both cases, so the ~570 MB model and the meeting recordings are
+/// never copied. If it fails — the two paths on different volumes, a permission
+/// problem — the old directory is left exactly as it was and the caller is
+/// told, rather than the app half-migrating and losing history.
+///
+/// Returns where the data came from, or `None` when there was nothing to do
+/// (fresh install, already migrated, or a [`set_data_dir`] override in force —
+/// a product with its own directory is not ours to move).
+pub fn migrate_legacy_data_dir() -> Result<Option<PathBuf>> {
+    if DATA_DIR_OVERRIDE.get().is_some() {
+        return Ok(None);
+    }
+    let target = data_dir()?;
+
+    if let Some(previous) = differently_cased_sibling(&target)? {
+        rename_into_place(&previous, &target)?;
+        return Ok(Some(previous));
+    }
+
+    let legacy = home_dir()?.join(LEGACY_DATA_DIR_NAME);
+    if !legacy.is_dir() || target.exists() {
+        // Nothing to move, or both are present — in which case the new one
+        // wins (it is what the app has been writing to) and the old one stays
+        // for the user to look through and delete.
+        return Ok(None);
+    }
+    rename_into_place(&legacy, &target)?;
+    Ok(Some(legacy))
+}
+
+/// A directory next to `target` whose name matches it apart from case. `None`
+/// when the name on disk is already exactly right — including when nothing is
+/// there at all.
+fn differently_cased_sibling(target: &Path) -> Result<Option<PathBuf>> {
+    let (Some(parent), Some(name)) = (target.parent(), target.file_name().and_then(|n| n.to_str()))
+    else {
+        return Ok(None);
+    };
+    if !parent.is_dir() {
+        return Ok(None);
+    }
+    for entry in std::fs::read_dir(parent)
+        .with_context(|| format!("failed to read {}", parent.display()))?
+        .flatten()
+    {
+        let Some(found) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        if found != name && found.eq_ignore_ascii_case(name) && entry.path().is_dir() {
+            return Ok(Some(parent.join(found)));
+        }
+    }
+    Ok(None)
+}
+
+fn rename_into_place(from: &Path, to: &Path) -> Result<()> {
+    if let Some(parent) = to.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    std::fs::rename(from, to).with_context(|| {
+        format!(
+            "failed to move {} to {} — the old directory is untouched; move it by hand",
+            from.display(),
+            to.display()
+        )
+    })
+}
+
+/// The database file inside [`data_dir`]. Caller is responsible for creating
+/// the parent directory before opening it.
 pub fn db_path() -> Result<PathBuf> {
     Ok(data_dir()?.join(DB_FILE_NAME))
 }
 
-/// Ensure `$HOME/.gilb/` exists; returns its absolute path.
+/// Ensure [`data_dir`] exists; returns its absolute path.
 pub fn ensure_data_dir() -> Result<PathBuf> {
     let dir = data_dir()?;
     std::fs::create_dir_all(&dir)
@@ -130,13 +252,13 @@ pub fn ensure_data_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// `$HOME/.gilb/logs/` — directory for rotating log files written by the
-/// Tauri app (the CLI smoke binary stays stdout-only).
+/// `<data_dir>/logs/` — rotating log files written by the Tauri app (the CLI
+/// smoke binary stays stdout-only).
 pub fn logs_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join(LOGS_DIR_NAME))
 }
 
-/// Ensure `$HOME/.gilb/logs/` exists; returns its absolute path.
+/// Ensure [`logs_dir`] exists; returns its absolute path.
 pub fn ensure_logs_dir() -> Result<PathBuf> {
     let dir = logs_dir()?;
     std::fs::create_dir_all(&dir)
@@ -144,12 +266,12 @@ pub fn ensure_logs_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-/// `$HOME/.gilb/models/` — where downloaded local transcription models live.
+/// `<data_dir>/models/` — where downloaded local transcription models live.
 pub fn models_dir() -> Result<PathBuf> {
     Ok(data_dir()?.join(MODELS_DIR_NAME))
 }
 
-/// Ensure `$HOME/.gilb/models/` exists; returns its absolute path.
+/// Ensure [`models_dir`] exists; returns its absolute path.
 pub fn ensure_models_dir() -> Result<PathBuf> {
     let dir = models_dir()?;
     std::fs::create_dir_all(&dir).with_context(|| {
@@ -161,6 +283,30 @@ pub fn ensure_models_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
+/// `<data_dir>/prompts/` — the prompts the user is meant to edit. A directory
+/// rather than a single file so a second prompt does not have to invent a new
+/// home for itself.
+pub fn prompts_dir() -> Result<PathBuf> {
+    Ok(data_dir()?.join(PROMPTS_DIR_NAME))
+}
+
+/// Ensure [`prompts_dir`] exists; returns its absolute path.
+pub fn ensure_prompts_dir() -> Result<PathBuf> {
+    let dir = prompts_dir()?;
+    std::fs::create_dir_all(&dir).with_context(|| {
+        format!(
+            "failed to create gilb prompts directory at {}",
+            dir.display()
+        )
+    })?;
+    Ok(dir)
+}
+
+/// `<data_dir>/prompts/realtime_assist.md` — the real-time assistant's prompt.
+pub fn assist_prompt_path() -> Result<PathBuf> {
+    Ok(prompts_dir()?.join(ASSIST_PROMPT_FILE))
+}
+
 /// Absolute path to the local Whisper model file ([`TRANSCRIBE_MODEL_FILE`]).
 /// Its existence is the gate for on-device transcription.
 pub fn transcribe_model_path() -> Result<PathBuf> {
@@ -169,7 +315,7 @@ pub fn transcribe_model_path() -> Result<PathBuf> {
 
 /// Enterprise credentials written by the recorder's auth flow and read by the
 /// analyzer ("Shannon") to know where to push and how to authenticate. Stored
-/// at `$HOME/.gilb/credentials.json`. Its presence is also the gate that
+/// at `<data_dir>/credentials.json`. Its presence is also the gate that
 /// activates the analyzer — absent means Tier-1 (local-only, nothing uploaded).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Credentials {
@@ -196,12 +342,12 @@ impl Credentials {
     }
 }
 
-/// Resolve `$HOME/.gilb/credentials.json`.
+/// Resolve `<data_dir>/credentials.json`.
 pub fn credentials_path() -> Result<PathBuf> {
     Ok(data_dir()?.join(CREDENTIALS_FILE_NAME))
 }
 
-/// Load `$HOME/.gilb/credentials.json` if it exists. Returns `Ok(None)` when the
+/// Load `<data_dir>/credentials.json` if it exists. Returns `Ok(None)` when the
 /// file is absent (Tier-1 / not enterprise-configured), `Err` only on a present
 /// but unreadable/malformed file.
 pub fn load_credentials() -> Result<Option<Credentials>> {
@@ -218,7 +364,7 @@ pub fn load_credentials() -> Result<Option<Credentials>> {
     Ok(Some(creds))
 }
 
-/// Write `$HOME/.gilb/credentials.json` (creating `$HOME/.gilb/` if needed),
+/// Write `<data_dir>/credentials.json` (creating the data directory if needed),
 /// flipping the recorder into Tier-2. The file holds a personal bearer token,
 /// so it is written `0600` on unix.
 pub fn save_credentials(creds: &Credentials) -> Result<()> {
@@ -279,7 +425,7 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Remove `$HOME/.gilb/credentials.json`, returning the recorder to Tier-1
+/// Remove `<data_dir>/credentials.json`, returning the recorder to Tier-1
 /// (local-only). A no-op (Ok) if the file is already absent — used by sign-out.
 pub fn clear_credentials() -> Result<()> {
     let path = credentials_path()?;
@@ -350,7 +496,7 @@ impl AnalyzerConfig {
     }
 }
 
-/// On-disk shape of `$HOME/.gilb/prefs.json` — persisted UI preferences that
+/// On-disk shape of `<data_dir>/prefs.json` — persisted UI preferences that
 /// survive restarts. Not secret, so no `0600`. `#[serde(default)]` lets new
 /// fields land later without breaking older files.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -366,6 +512,35 @@ pub struct Preferences {
     /// Language for on-device meeting transcription: `"auto"` | `"ru"` | `"en"`.
     /// Passed to Whisper; `"auto"` detects the language from the first audio.
     pub transcription_language: String,
+    /// User-level switch for the real-time meeting assistant (suggestions
+    /// overlay). Independent of the server-side feature flag: `false` tears
+    /// the local pipeline down entirely, so no STT runs during meetings.
+    pub assist_enabled: bool,
+    /// Which agent the assistant runs on, as the product's own id (gilb:
+    /// `"claude"` / `"codex"` / `"cursor"`). `None` means the user has not
+    /// chosen yet — with two coding CLIs installed, picking one for them is
+    /// picking whose model sees the meeting.
+    #[serde(default)]
+    pub assist_agent: Option<String>,
+    /// Model for the suggestions session (an ACP `configOptions` value from
+    /// the chosen agent). `None` = the agent's own default. Separate from the
+    /// agent's coding configuration on purpose: a suggestion is worth having
+    /// within seconds, and the model someone picked for interactive coding is
+    /// usually the wrong shape for that.
+    #[serde(default)]
+    pub assist_model: Option<String>,
+    /// Reasoning effort for the suggestions session; same mechanism.
+    #[serde(default)]
+    pub assist_effort: Option<String>,
+    /// Let the suggestions panel appear in screen recordings and shares.
+    ///
+    /// Off by default, and that default is the safe one: the panel is a
+    /// prompter, and everything it says would otherwise be visible to the
+    /// person on the other end of the call. It exists because the opposite is
+    /// sometimes exactly what is wanted — demoing the assistant *is* showing
+    /// it on a call — and a feature nobody can point at is hard to sell.
+    #[serde(default)]
+    pub assist_visible_in_capture: bool,
 }
 
 impl Default for Preferences {
@@ -374,11 +549,16 @@ impl Default for Preferences {
             tracking_paused: false,
             meeting_detection_enabled: true,
             transcription_language: "auto".to_string(),
+            assist_enabled: true,
+            assist_agent: None,
+            assist_model: None,
+            assist_effort: None,
+            assist_visible_in_capture: false,
         }
     }
 }
 
-/// Resolve `$HOME/.gilb/prefs.json`.
+/// Resolve `<data_dir>/prefs.json`.
 pub fn preferences_path() -> Result<PathBuf> {
     Ok(data_dir()?.join(PREFERENCES_FILE_NAME))
 }
@@ -403,7 +583,7 @@ pub fn save_preferences_to(path: &Path, prefs: &Preferences) -> Result<()> {
     std::fs::write(path, &json).with_context(|| format!("failed to write {}", path.display()))
 }
 
-/// Load `$HOME/.gilb/prefs.json` (defaults if absent/unreadable).
+/// Load `<data_dir>/prefs.json` (defaults if absent/unreadable).
 pub fn load_preferences() -> Preferences {
     match preferences_path() {
         Ok(p) => load_preferences_from(&p),
@@ -411,7 +591,7 @@ pub fn load_preferences() -> Preferences {
     }
 }
 
-/// Persist preferences to `$HOME/.gilb/prefs.json`.
+/// Persist preferences to `<data_dir>/prefs.json`.
 pub fn save_preferences(prefs: &Preferences) -> Result<()> {
     save_preferences_to(&preferences_path()?, prefs)
 }
@@ -434,8 +614,199 @@ pub fn update_preferences(update: impl FnOnce(&mut Preferences)) -> Result<Prefe
     Ok(prefs)
 }
 
+// ---------------------------------------------------------------------------
+// Locating an external agent CLI
+// ---------------------------------------------------------------------------
+
+/// Bin dirs a coding agent (and the `node` it needs) commonly installs into, in
+/// probe order.
+///
+/// A bundled `.app` starts with a minimal PATH — no shell profile has run — so
+/// a bare `claude` is not findable there. Both the analyzer (`claude -p`) and
+/// the assist backend (ACP) hit this, which is why the probe lives here rather
+/// than in whichever crate needed it first.
+#[cfg(unix)]
+pub fn agent_bin_dirs() -> Vec<String> {
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut dirs = vec![
+        format!("{home}/.local/bin"),
+        format!("{home}/.claude/local"),
+        "/opt/homebrew/bin".to_string(),
+        "/usr/local/bin".to_string(),
+        format!("{home}/.npm-global/bin"),
+        // Version managers put global npm binaries under the *active* runtime,
+        // which a GUI app never sees: they work by rewriting PATH in a login
+        // shell, and a bundle launched from Finder gets none of that. Omitting
+        // them means a user with a perfectly good agent installed is told they
+        // have none.
+        format!("{home}/.volta/bin"),
+        format!("{home}/.bun/bin"),
+        // Where opencode's install script puts its binary. It picks the first
+        // of `$OPENCODE_INSTALL_DIR`, `$XDG_BIN_DIR`, `~/bin`, `~/.opencode/bin`
+        // that it can use, so all four are worth looking in — a user who ran
+        // the documented one-liner and a gilb launched from Finder would
+        // otherwise disagree about whether they have an agent.
+        format!("{home}/bin"),
+        format!("{home}/.opencode/bin"),
+    ];
+    // Two of those four are the user's own choice, so they are read rather
+    // than guessed.
+    for var in ["OPENCODE_INSTALL_DIR", "XDG_BIN_DIR"] {
+        if let Ok(dir) = std::env::var(var) {
+            if !dir.trim().is_empty() {
+                dirs.push(dir);
+            }
+        }
+    }
+    dirs.extend(node_version_dirs(&home));
+    dirs
+}
+
+/// The known-dir list above is all unix paths (`$HOME/...`, `/opt/homebrew`,
+/// nvm/fnm layouts). On Windows an agent's installer puts its bin dir on PATH
+/// itself, so there is nothing to add and the inherited PATH is the answer.
+#[cfg(not(unix))]
+pub fn agent_bin_dirs() -> Vec<String> {
+    Vec::new()
+}
+
+/// `bin/` of every installed nvm/fnm node version, newest first.
+///
+/// Newest first because a binary installed globally under an old runtime is
+/// usually a leftover, and running it under that old node is how you get an
+/// error from inside the agent rather than from us.
+#[cfg(unix)]
+fn node_version_dirs(home: &str) -> Vec<String> {
+    let roots = [
+        format!("{home}/.nvm/versions/node"),
+        format!("{home}/.local/share/fnm/node-versions"),
+    ];
+    let mut found = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        let mut versions: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .collect();
+        // Version-aware order: v10 after v9, not before it.
+        versions.sort_by_key(|name| std::cmp::Reverse(version_key(name)));
+        for name in versions {
+            // nvm: <root>/<version>/bin. fnm: <root>/<version>/installation/bin.
+            found.push(format!("{root}/{name}/bin"));
+            found.push(format!("{root}/{name}/installation/bin"));
+        }
+    }
+    found
+}
+
+#[cfg(unix)]
+fn version_key(name: &str) -> Vec<u32> {
+    name.trim_start_matches('v')
+        .split('.')
+        .map(|part| part.parse().unwrap_or(0))
+        .collect()
+}
+
+/// Locate an agent CLI by name. `env_override` (when set and non-empty) wins
+/// over everything; otherwise the known install dirs are probed. Falls back to
+/// the bare name so PATH still gets its chance.
+pub fn resolve_agent_bin(name: &str, env_override: &str) -> String {
+    if let Ok(path) = std::env::var(env_override) {
+        if !path.trim().is_empty() {
+            return path;
+        }
+    }
+    for dir in agent_bin_dirs() {
+        let candidate = format!("{dir}/{name}");
+        if std::path::Path::new(&candidate).is_file() {
+            return candidate;
+        }
+    }
+    name.to_string()
+}
+
+/// PATH for a spawned agent: the known bin dirs prepended to the inherited
+/// PATH, so an npm-installed CLI can find its `node` even from a bundle.
+/// Joined with the OS separator — a hand-joined ":" would mangle PATH on
+/// Windows into one long nonsense entry.
+pub fn agent_path_env() -> String {
+    let mut parts: Vec<std::path::PathBuf> = agent_bin_dirs().into_iter().map(Into::into).collect();
+    if let Some(current) = std::env::var_os("PATH") {
+        if !current.is_empty() {
+            parts.extend(std::env::split_paths(&current));
+        }
+    }
+    std::env::join_paths(parts)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
+
+    /// The install locations an agent can legitimately land in, which a GUI
+    /// app will never learn from PATH: it is handed the launchd environment,
+    /// not a login shell's. Every one of these has cost a user their agent at
+    /// some point — the list is a record of that, not a guess.
+    #[cfg(unix)]
+    #[test]
+    fn agent_search_covers_the_documented_install_locations() {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let dirs = agent_bin_dirs();
+        for expected in [
+            format!("{home}/.local/bin"),    // npm --prefix, pipx
+            format!("{home}/bin"),           // opencode, third choice
+            format!("{home}/.opencode/bin"), // opencode, default fallback
+            format!("{home}/.bun/bin"),      // bun install -g
+            "/opt/homebrew/bin".to_string(), // brew on Apple silicon
+        ] {
+            assert!(
+                dirs.contains(&expected),
+                "{expected} is not searched; installed agents there stay invisible"
+            );
+        }
+    }
+
+    /// `$OPENCODE_INSTALL_DIR` and `$XDG_BIN_DIR` are the user's own answer to
+    /// where binaries go, so they are read rather than assumed.
+    #[cfg(unix)]
+    #[test]
+    fn a_configured_install_dir_is_searched() {
+        // SAFETY: single-threaded test process; the variable is read back
+        // immediately and removed after.
+        unsafe { std::env::set_var("OPENCODE_INSTALL_DIR", "/tmp/gilb-test-agent-dir") };
+        let dirs = agent_bin_dirs();
+        unsafe { std::env::remove_var("OPENCODE_INSTALL_DIR") };
+        assert!(dirs.iter().any(|d| d == "/tmp/gilb-test-agent-dir"));
+    }
+
+    /// The spawned agent's PATH must survive a split back into entries —
+    /// entries joined by hand with ":" parse as one mangled entry on Windows.
+    /// (On non-unix there are no known dirs; the inherited PATH still has to
+    /// round-trip.)
+    #[test]
+    fn agent_path_env_round_trips_through_split_paths() {
+        let joined = agent_path_env();
+        let parts: Vec<std::path::PathBuf> = std::env::split_paths(&joined).collect();
+        for dir in agent_bin_dirs() {
+            assert!(
+                parts.iter().any(|p| p.as_os_str() == dir.as_str()),
+                "{dir} did not survive the join/split round trip"
+            );
+        }
+        if let Some(current) = std::env::var_os("PATH") {
+            for entry in std::env::split_paths(&current) {
+                assert!(
+                    parts.contains(&entry),
+                    "inherited PATH entry {} was lost",
+                    entry.display()
+                );
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -477,6 +848,32 @@ mod tests {
         assert_eq!(
             preferences_path().unwrap(),
             base.join(PREFERENCES_FILE_NAME)
+        );
+        assert_eq!(prompts_dir().unwrap(), base.join(PROMPTS_DIR_NAME));
+        assert_eq!(
+            assist_prompt_path().unwrap(),
+            base.join(PROMPTS_DIR_NAME).join(ASSIST_PROMPT_FILE)
+        );
+
+        // A product that brought its own directory must never have its data
+        // moved by gilb's migration.
+        assert_eq!(migrate_legacy_data_dir().unwrap(), None);
+    }
+
+    /// The point of the move: a user can find this in Finder / Explorer.
+    /// `set_data_dir` is process-global and claimed by the test above, so this
+    /// checks the pieces the default is assembled from instead.
+    #[test]
+    fn default_data_dir_is_visible() {
+        assert!(
+            !DATA_DIR_NAME.starts_with('.'),
+            "the data directory must not be hidden"
+        );
+        let docs = documents_dir().expect("a home directory exists in any test environment");
+        assert!(
+            docs.is_absolute(),
+            "documents dir must be absolute, got {}",
+            docs.display()
         );
     }
 

@@ -4,7 +4,10 @@ name: CI
 # is the required status check for branch protection — main stays green and
 # shippable. The Tauri crates (gilb-app-tauri and gilb-shell-tauri) are
 # excluded: they need GTK/WebKit system libs to compile on Linux and only ship
-# on macOS/Windows, where windows-build.yml (smoke) and release.yml validate them.
+# on macOS/Windows. gilb-shell-tauri — which now carries the suggestions
+# overlay and its model gate, not just glue — is linted and tested by
+# shell.yml on macOS; the app crate by windows-build.yml (smoke build on every
+# push to main) and release.yml.
 
 on:
   pull_request:
@@ -33,3 +36,17 @@ jobs:
 
       - name: Test
         run: cargo test --workspace --exclude gilb-app-tauri --exclude gilb-shell-tauri
+
+      # The app version lives in three files that cannot read each other. The
+      # Cargo one is stamped into every recorded session row and reported as
+      # the MCP server's version, so drift silently mislabels data rather than
+      # breaking a build. Needs no toolchain — checked here, not at release
+      # time, so a bump lands complete.
+      - name: Versions in sync
+        run: |
+          cargo="$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)"
+          tauri="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' apps/gilb-app-tauri/src-tauri/tauri.conf.json | head -1)"
+          npm="$(sed -n 's/.*"version": "\(.*\)".*/\1/p' apps/gilb-app-tauri/package.json | head -1)"
+          echo "Cargo=$cargo tauri.conf.json=$tauri package.json=$npm"
+          test "$cargo" = "$tauri" && test "$cargo" = "$npm" || {
+            echo "::error::version mismatch — see RELEASING.md"; exit 1; }

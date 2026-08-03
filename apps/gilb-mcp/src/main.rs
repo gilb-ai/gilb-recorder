@@ -1,4 +1,4 @@
-//! gilb-mcp — stdio MCP-server exposing recorded activity from `~/.gilb/db.sqlite`
+//! gilb-mcp — stdio MCP-server exposing recorded activity from `<Documents>/Gilb/db.sqlite`
 //! to Claude Code / other MCP clients.
 //!
 //! Launched on demand by the client (not a daemon). Opens the DB **read-only**;
@@ -40,7 +40,7 @@ fn init_tracing() {
         .try_init();
 }
 
-/// Env override `GILB_DB` wins over the default `$HOME/.gilb/db.sqlite`.
+/// Env override `GILB_DB` wins over the default `<Documents>/Gilb/db.sqlite`.
 fn resolve_db_path() -> Result<std::path::PathBuf> {
     if let Ok(p) = std::env::var("GILB_DB") {
         return Ok(std::path::PathBuf::from(p));

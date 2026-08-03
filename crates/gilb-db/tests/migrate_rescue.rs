@@ -82,3 +82,38 @@ async fn archive_and_reopen_after_checksum_mismatch() {
     let _ = std::fs::remove_file(sidecar(&path, "-wal"));
     let _ = std::fs::remove_file(sidecar(&path, "-shm"));
 }
+
+/// The case the test above steps around by recreating them: after a failed
+/// open, SQLite deletes `-wal`/`-shm` as its last connection closes, so the
+/// rescue normally runs with no sidecars to move.
+///
+/// This does *not* reproduce the race that made the rescue fail in the field —
+/// the sidecar was there when the code looked and gone microseconds later,
+/// while the failed pool finished closing — which is why the rename now
+/// tolerates NotFound instead of asking first. What this pins down is the
+/// no-sidecar path itself, which nothing covered.
+#[tokio::test]
+async fn archive_succeeds_when_sqlite_already_removed_the_sidecars() {
+    let path = temp_db_path();
+    {
+        let db = open_db(&path).await.expect("initial open");
+        db.close().await;
+    }
+    assert!(
+        !sidecar(&path, "-wal").exists(),
+        "a clean close should have removed -wal; this test would prove nothing otherwise"
+    );
+
+    let archived = archive_incompatible_db(&path).expect("archive without sidecars");
+    assert!(archived.exists());
+    assert!(!path.exists());
+
+    let db = open_db(&path).await.expect("reopen after archive");
+    db.close().await;
+
+    for p in [&path, &archived] {
+        let _ = std::fs::remove_file(p);
+    }
+    let _ = std::fs::remove_file(sidecar(&path, "-wal"));
+    let _ = std::fs::remove_file(sidecar(&path, "-shm"));
+}

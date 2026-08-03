@@ -7,6 +7,11 @@ publish.workspace = true
 description = "gilb (Gilbreth) — accessibility-driven activity recorder"
 authors = ["Leonid Dinershtein"]
 
+# serde_json has no `use` anywhere — it is reached only through
+# `tauri::generate_context!`, which dependency scanners cannot see.
+[package.metadata.cargo-machete]
+ignored = ["serde_json"]
+
 [lib]
 name = "gilb_app_tauri_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
@@ -21,29 +26,39 @@ tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
 tauri-plugin-process = "2"
 tauri-plugin-deep-link = "2"
-base64 = "0.22"
-directories = { workspace = true }
+# The suggestions overlay's show/hide hotkey. gilb-shell-tauri calls into it,
+# but a plugin can only be registered by the app that owns the builder.
+tauri-plugin-global-shortcut = "2"
 uuid = { workspace = true }
 url = "2"
 serde = { workspace = true }
+# No `use` anywhere — `tauri::generate_context!` expands to `::serde_json`
+# paths, so the crate must be a direct dependency. Removing it fails the build
+# inside a macro expansion, which is not obvious from the error.
 serde_json = { workspace = true }
 tokio = { workspace = true }
-# Streaming download of the local transcription model from HuggingFace.
-reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 anyhow = { workspace = true }
 parking_lot = { workspace = true }
 
-gilb-core = { workspace = true }
 gilb-config = { workspace = true }
 gilb-events = { workspace = true }
-gilb-a11y = { workspace = true }
 gilb-db = { workspace = true }
 gilb-engine = { workspace = true }
-gilb-pipeline = { workspace = true }
-gilb-shell-tauri = { workspace = true }
+gilb-shell-tauri = { workspace = true, features = [
+    # Real-time suggestions: overlay window, commands, whisper model gate.
+    "assist",
+] }
+# gilb's own halves of the assist stack: the prompt file and the local agent.
+gilb-assist = { workspace = true }
+gilb-assist-acp = { workspace = true }
+# For the shared whisper model handed to the realtime worker — the same one
+# post-meeting transcription uses, so a meeting ending mid-panel does not load
+# a second copy.
+gilb-assist-audio = { workspace = true, features = ["whisper"] }
+async-trait = "0.1"
 gilb-transcribe = { workspace = true, features = ["local-whisper"] }
 
 [target.'cfg(unix)'.dependencies]

@@ -10,7 +10,6 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
-tracing = { workspace = true }
 anyhow = { workspace = true }
 async-trait = "0.1"
 
@@ -24,7 +23,3 @@ windows = { version = "0.58", features = [
     "Win32_Media_Audio_Endpoints",
     "implement",
 ] }
-
-[dev-dependencies]
-tokio = { workspace = true }
-chrono = { workspace = true }

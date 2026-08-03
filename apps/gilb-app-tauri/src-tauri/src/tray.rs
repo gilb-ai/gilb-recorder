@@ -8,6 +8,7 @@
 
 use gilb_shell_tauri::tray::{self, TrayConfig, TrayController};
 use tauri::{AppHandle, Manager};
+use tracing::{info, warn};
 
 use crate::recording;
 use crate::state::AppState;
@@ -42,7 +43,7 @@ impl TrayController for GilbTrayController {
     fn account_line(&self, _app: &AppHandle) -> Option<String> {
         // The signed-in user's email, shown at the top of the menu. gilb-web
         // sends it as the `employee` label in the auth callback (see
-        // commands::auth), persisted in ~/.gilb/credentials.json. `None` while
+        // commands::auth), persisted in <Documents>/Gilb/credentials.json. `None` while
         // signed out, so the shared renderer hides the line.
         gilb_config::load_credentials()
             .ok()
@@ -75,6 +76,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
             open_label: "Open gilb".into(),
             start_label: "Start Recording".into(),
             stop_label: "Stop Recording".into(),
+            toggle_accelerator: Some(crate::recording::RECORD_SHORTCUT.into()),
             quit_label: "Quit".into(),
             icon_idle: ICON_IDLE,
             icon_recording: ICON_RECORDING,
@@ -93,5 +95,36 @@ fn show_main_window(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
         let _ = win.show();
         let _ = win.set_focus();
+        return;
+    }
+    // The window is gone. Closing it is supposed to hide it (see the
+    // CloseRequested handler in lib.rs), but a window can still be destroyed —
+    // by the OS, or by a path that does not go through that event — and the
+    // tray must not become a button that does nothing. Rebuild it from the
+    // config the app starts with, so it comes back the same size and shape.
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == "main")
+        .cloned();
+    let Some(config) = config else {
+        warn!("no main window config to rebuild from");
+        return;
+    };
+    match tauri::WebviewWindowBuilder::from_config(app, &config) {
+        Ok(builder) => match builder.build() {
+            Ok(win) => {
+                // The rebuilt window needs the same close-to-hide handler as
+                // the original, or the next red dot destroys it for good.
+                crate::install_close_to_hide(app, &win);
+                let _ = win.show();
+                let _ = win.set_focus();
+                info!("main window rebuilt after it was destroyed");
+            }
+            Err(err) => warn!(error = %err, "could not rebuild the main window"),
+        },
+        Err(err) => warn!(error = %err, "could not read the main window config"),
     }
 }

@@ -168,8 +168,8 @@ impl Normalizer {
                     if matches!(special, SpecialKey::Backspace | SpecialKey::Delete) {
                         // Drop the most recent grapheme from the buffer so
                         // undo/edit operations don't leak the final string.
-                        // For Phase 1 we just flush, which over-counts edits
-                        // but never leaks more than typed.
+                        // We just flush, which over-counts edits but never leaks
+                        // more than the user typed — the safe direction to be wrong in.
                         self.flush_text(buffer, FlushReason::NavigationKey).await;
                         self.emit_key(special, &snap, drops).await;
                         return;

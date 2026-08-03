@@ -29,8 +29,9 @@ const en = {
   "splash.notGranted": "not granted",
 
   "settings.title": "Settings",
-  "settings.meetingLabel": "Enable meeting detection",
-  "settings.meetingDesc": "We'll catch the start of every call and offer to record.",
+  "settings.meetingLabel": "Meeting detection",
+  "settings.meetingDesc": "We'll notice when a call starts and offer to record it.",
+  "settings.meetingFailed": "Could not change meeting detection.",
   "settings.transcription": "Transcription",
   "settings.transcriptionDesc":
     "Runs on this Mac — audio never leaves your device. Transcription turns on automatically once the model is downloaded.",
@@ -57,13 +58,39 @@ const en = {
   "capture.recordingManual": "Recording screen",
   "capture.thisMeeting": "this meeting",
   "capture.stop": "Stop",
+
+  "assist.title": "Realtime Assistant",
+  "assist.empty": "Listening — suggestions will appear here.",
+  "assist.idle": "Not recording — start one (⌘⇧R) and I'll listen.",
+  "assist.thinking": "Thinking…",
+  "assist.askPlaceholder": "Ask about the conversation… (Enter)",
+  "assist.hide": "Hide",
+  "assist.prev": "Previous",
+  "assist.next": "Next",
+  "assist.error": "Assist error: {error}",
+
+  // The switch in the signed-in workspace card. The first turn-on downloads
+  // the speech model, so the off state says so up front.
+  "assist.label": "Realtime Assistant",
+  "assist.desc":
+    "During a meeting, suggestions appear over the other windows. ⌘\\ shows and hides them.",
+  "assist.descDownloading": "Downloading the model… {pct}%",
+  "assist.settingsTitle": "Realtime Assistant",
+  "assist.captureLabel": "Visible on screen shares",
+  "assist.captureDesc":
+    "Off, the panel stays out of recordings and shared screens — only you see it. On, everyone you share with sees it, which is what you want when demoing the assistant itself.",
+  "assist.settingsDesc":
+    "Suggestions during a live call. Speed matters more than depth here, so a fast model usually beats a clever one — this only affects suggestions, your agent's own setup is untouched.",
+  "assist.model": "Model",
+  "assist.effort": "Effort",
+  "assist.agentDefault": "Agent default ({value})",
+  "assist.optionsLoading": "Asking the agent…",
+  "assist.pickAgent": "Choose the agent to run suggestions on:",
+  "assist.agentMissing": "{agent} — not installed",
+  "assist.preparing": "Setting the agent up… the first time this downloads its ACP adapter.",
   "capture.trackingLabel": "Activity tracking",
-  "capture.trackingOn": "Activity tracking — on",
-  "capture.trackingPaused": "Activity tracking — paused",
-  "capture.pause": "Pause",
-  "capture.resume": "Resume",
-  "capture.trackingPausedMsg": "Activity tracking paused",
-  "capture.trackingOnMsg": "Activity tracking on",
+  "capture.trackingDesc":
+    "Windows you open, keys you type, clicks, scrolling and the clipboard — recorded to this Mac.",
   "capture.cantResume": "Couldn't resume tracking: {error}",
   "capture.cantPause": "Couldn't pause tracking: {error}",
   "capture.stopError": "stop recording error: {error}",
@@ -106,8 +133,9 @@ const ru: typeof en = {
   "splash.notGranted": "запрещено",
 
   "settings.title": "Настройки",
-  "settings.meetingLabel": "Автодетекция встреч",
+  "settings.meetingLabel": "Детекция встреч",
   "settings.meetingDesc": "Заметим начало каждого звонка и предложим записать.",
+  "settings.meetingFailed": "Не удалось переключить автодетекцию встреч.",
   "settings.transcription": "Транскрипция",
   "settings.transcriptionDesc":
     "Работает на этом Mac — аудио не покидает устройство. Транскрипция включится автоматически после загрузки модели.",
@@ -134,13 +162,37 @@ const ru: typeof en = {
   "capture.recordingManual": "Идёт запись экрана",
   "capture.thisMeeting": "эта встреча",
   "capture.stop": "Остановить",
+
+  "assist.title": "Ассистент реального времени",
+  "assist.empty": "Слушаю — подсказки появятся здесь.",
+  "assist.idle": "Запись не идёт — начните её (⌘⇧R), и я буду слушать.",
+  "assist.thinking": "Думаю…",
+  "assist.askPlaceholder": "Спросить о разговоре… (Enter)",
+  "assist.hide": "Скрыть",
+  "assist.prev": "Предыдущая",
+  "assist.next": "Следующая",
+  "assist.error": "Ошибка подсказок: {error}",
+
+  "assist.label": "Ассистент реального времени",
+  "assist.desc":
+    "Во время встречи подсказки показываются поверх других окон. ⌘\\ — показать или скрыть.",
+  "assist.descDownloading": "Загрузка модели… {pct}%",
+  "assist.settingsTitle": "Ассистент реального времени",
+  "assist.captureLabel": "Видна при шеринге экрана",
+  "assist.captureDesc":
+    "Выключено — панель не попадает в записи и в расшаренный экран, её видите только вы. Включено — её видят все, кому вы показываете экран; это то, что нужно для демонстрации самого ассистента.",
+  "assist.settingsDesc":
+    "Подсказки во время живого звонка. Скорость здесь важнее глубины, поэтому быстрая модель обычно лучше умной — влияет только на подсказки, настройки самого агента не трогаются.",
+  "assist.model": "Модель",
+  "assist.effort": "Усилие",
+  "assist.agentDefault": "По умолчанию агента ({value})",
+  "assist.optionsLoading": "Спрашиваю агента…",
+  "assist.pickAgent": "Выберите агента для подсказок:",
+  "assist.agentMissing": "{agent} — не установлен",
+  "assist.preparing": "Настраиваю агента… при первом запуске скачивается ACP-адаптер.",
   "capture.trackingLabel": "Отслеживание активности",
-  "capture.trackingOn": "Отслеживание активности — включено",
-  "capture.trackingPaused": "Отслеживание активности — на паузе",
-  "capture.pause": "Пауза",
-  "capture.resume": "Возобновить",
-  "capture.trackingPausedMsg": "Отслеживание активности на паузе",
-  "capture.trackingOnMsg": "Отслеживание активности включено",
+  "capture.trackingDesc":
+    "Открытые окна, нажатия клавиш, клики, прокрутка и буфер обмена — записываются на этот Mac.",
   "capture.cantResume": "Не удалось возобновить отслеживание: {error}",
   "capture.cantPause": "Не удалось приостановить отслеживание: {error}",
   "capture.stopError": "Ошибка остановки записи: {error}",
@@ -185,8 +237,10 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 
 /**
  * Replace the text of every `[data-i18n="key"]` element with its translation
- * and set the window title to the brand name. Call once on DOMContentLoaded;
- * markup keeps its English text as the fallback for missing keys.
+ * and set the window title to the brand name. Attribute variants follow the
+ * same pattern: `data-i18n-title` sets `title`, `data-i18n-placeholder` sets
+ * `placeholder`. Call once on DOMContentLoaded; markup keeps its English text
+ * as the fallback for missing keys.
  */
 export function applyI18n(): void {
   document.documentElement.lang = LOCALE;
@@ -194,5 +248,11 @@ export function applyI18n(): void {
   for (const el of document.querySelectorAll<HTMLElement>("[data-i18n]")) {
     const key = el.dataset.i18n as MessageKey | undefined;
     if (key && STRINGS[key] !== undefined) el.textContent = t(key);
+  }
+  for (const attr of ["title", "placeholder"] as const) {
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-i18n-${attr}]`)) {
+      const key = el.getAttribute(`data-i18n-${attr}`) as MessageKey | null;
+      if (key && STRINGS[key] !== undefined) el.setAttribute(attr, t(key));
+    }
   }
 }

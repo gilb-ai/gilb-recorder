@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "assist",
+  "description": "Capability for the real-time suggestions overlay (label 'assist'): it listens for assist:// events and drags itself by its title bar. App-defined commands (assist_ask, assist_hide, …) are auto-allowed for local origins because no app ACL manifest is declared.",
+  "windows": ["assist"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:window:allow-start-dragging"
+  ]
+}

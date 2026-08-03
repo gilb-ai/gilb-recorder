@@ -1,7 +1,9 @@
-//! In-process pub/sub bus for permission / health / lifecycle events.
+//! In-process pub/sub bus for capture-health and recording-lifecycle events.
 //!
-//! Phase 0 wires the channel plumbing; producers/consumers across crates
-//! are added incrementally in later phases.
+//! Broadcast, not queued: a subscriber that falls behind is told it lagged and
+//! re-syncs from current state rather than replaying a backlog. That suits both
+//! consumers — the UI wants what is true now, and the recorder reacts to the
+//! latest countdown outcome, not an old one.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -11,29 +13,21 @@ use tokio::sync::broadcast;
 /// notice and re-sync rather than keep stale state.
 const BUS_CAPACITY: usize = 64;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum PermissionEvent {
-    AccessibilityGranted,
-    AccessibilityLost,
-    InputMonitoringGranted,
-    InputMonitoringLost,
-}
-
+/// Capture-pipeline diagnostics. Permission changes are deliberately *not*
+/// here: the UI polls `status` every few seconds and reads the current grants
+/// from the OS, which stays correct even if an event is missed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum HealthEvent {
     Started,
     Stopped { reason: String },
     DroppedEvent { reason: String, count: u64 },
-    AxQueryTimeout { ms: u64 },
-    SleepDetected,
-    WakeDetected,
 }
 
 /// Outcome of the pre-record countdown popup. `Armed` means the user let the
-/// countdown finish or pressed Record; `Cancelled` means they backed out. No
-/// consumer starts recording on these yet — the trigger wiring lands later.
+/// countdown finish or pressed Record; `Cancelled` means they backed out. The
+/// recorder starts and stops on these, and the assist pipeline uses them to
+/// decide whether to keep the speech model resident.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RecordingEvent {
@@ -56,30 +50,23 @@ impl<T> BusMessage<T> {
     }
 }
 
-/// Bus carrying both permission and health events.
+/// Bus carrying health and recording-lifecycle events.
 ///
 /// Cheap to clone — internally an `Arc` of two `broadcast::Sender`s.
 #[derive(Clone)]
 pub struct EventBus {
-    permission_tx: broadcast::Sender<BusMessage<PermissionEvent>>,
     health_tx: broadcast::Sender<BusMessage<HealthEvent>>,
     recording_tx: broadcast::Sender<BusMessage<RecordingEvent>>,
 }
 
 impl EventBus {
     pub fn new() -> Self {
-        let (permission_tx, _) = broadcast::channel(BUS_CAPACITY);
         let (health_tx, _) = broadcast::channel(BUS_CAPACITY);
         let (recording_tx, _) = broadcast::channel(BUS_CAPACITY);
         Self {
-            permission_tx,
             health_tx,
             recording_tx,
         }
-    }
-
-    pub fn publish_permission(&self, ev: PermissionEvent) {
-        let _ = self.permission_tx.send(BusMessage::now(ev));
     }
 
     pub fn publish_health(&self, ev: HealthEvent) {
@@ -88,10 +75,6 @@ impl EventBus {
 
     pub fn publish_recording(&self, ev: RecordingEvent) {
         let _ = self.recording_tx.send(BusMessage::now(ev));
-    }
-
-    pub fn subscribe_permission(&self) -> broadcast::Receiver<BusMessage<PermissionEvent>> {
-        self.permission_tx.subscribe()
     }
 
     pub fn subscribe_health(&self) -> broadcast::Receiver<BusMessage<HealthEvent>> {

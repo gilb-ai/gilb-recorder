@@ -1,10 +1,11 @@
 # Security policy
 
-gilb reads keystrokes, mouse events, focused-window contents, and
-clipboard text on the user's Mac and writes them to a local SQLite
-database. Any flaw that lets that data escape the machine, lets an
-unprivileged process read the database, or expands gilb's permission
-surface beyond what the user granted, is in scope.
+gilb reads keystrokes, mouse events, focused-window contents and
+clipboard text, records meetings (screen and audio), and writes all of
+it to local storage. Any flaw that lets that data escape the machine,
+lets an unprivileged process read the database or the recordings, or
+expands gilb's permission surface beyond what the user granted, is in
+scope.
 
 ## Reporting a vulnerability
 
@@ -14,8 +15,7 @@ Email **leonid@dinershtein.com** with:
 
 - A description of the issue.
 - Steps to reproduce, or a proof-of-concept, if you have one.
-- The version of gilb (visible in the `.app` info pane), macOS
-  version, and architecture.
+- The version of gilb, your OS version, and architecture.
 - Whether the report is already public elsewhere.
 
 You should get an acknowledgement within 7 days. If you do not, feel
@@ -31,13 +31,17 @@ free to send a polite reminder.
 ## In scope
 
 - Anything in this repository: the Tauri shell (`apps/gilb-app-tauri`),
-  the MCP sidecar (`apps/gilb-mcp`), all `crates/*`.
-- Build artefacts produced by `npm run tauri build` — the signed
-  `.app` and `.dmg`.
+  the MCP sidecar (`apps/gilb-mcp`), the analyzer (`apps/gilb-analyzer`),
+  all `crates/*`.
+- Build artefacts we publish — the signed `.app` / `.dmg` and the
+  Windows installer.
 
 ## Out of scope
 
-- macOS itself, the Tauri framework, the Rust toolchain, third-party
+- The OS itself, the Tauri framework, the Rust toolchain, third-party
   crates. Forward those upstream.
+- Whatever a locally installed agent does with the conversation when
+  real-time suggestions are enabled — that is between you and that
+  agent's vendor. A flaw in *how gilb hands it over* is in scope.
 - Issues that require an attacker who already has root or full disk
   access on the same machine.

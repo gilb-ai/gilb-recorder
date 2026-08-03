@@ -316,47 +316,17 @@ impl ClaudeRunner {
     }
 }
 
-/// Bin dirs Claude Code (and a Homebrew/npm `node`) commonly install into, in
-/// probe order. Used both to locate `claude` and to widen the child's PATH.
-fn claude_bin_dirs() -> Vec<String> {
-    let home = std::env::var("HOME").unwrap_or_default();
-    vec![
-        format!("{home}/.local/bin"),
-        format!("{home}/.claude/local"),
-        "/opt/homebrew/bin".to_string(),
-        "/usr/local/bin".to_string(),
-        format!("{home}/.npm-global/bin"),
-    ]
-}
-
-/// Locate the `claude` binary. `GILB_CLAUDE_BIN` overrides everything; otherwise
-/// probe the known install dirs (a bundled `.app` has a minimal PATH, so we
-/// cannot rely on a bare `claude`). Falls back to `claude` (PATH) if none hit.
+/// Locate the `claude` binary. `GILB_CLAUDE_BIN` overrides everything; the
+/// probe order and the reason for probing at all (a bundled `.app` has a
+/// minimal PATH) live in gilb-config, shared with the ACP assist backend.
 pub fn resolve_claude_bin() -> String {
-    if let Ok(p) = std::env::var("GILB_CLAUDE_BIN") {
-        if !p.is_empty() {
-            return p;
-        }
-    }
-    for dir in claude_bin_dirs() {
-        let candidate = format!("{dir}/claude");
-        if std::path::Path::new(&candidate).is_file() {
-            return candidate;
-        }
-    }
-    "claude".to_string()
+    gilb_config::resolve_agent_bin("claude", "GILB_CLAUDE_BIN")
 }
 
-/// PATH for the spawned `claude`: the known bin dirs prepended to the inherited
-/// PATH, so an npm-installed `claude` can find its `node` even from a bundle.
+/// PATH for the spawned `claude`, so an npm-installed CLI finds its `node`
+/// even from a bundle.
 fn augmented_path() -> String {
-    let mut parts = claude_bin_dirs();
-    if let Ok(current) = std::env::var("PATH") {
-        if !current.is_empty() {
-            parts.push(current);
-        }
-    }
-    parts.join(":")
+    gilb_config::agent_path_env()
 }
 
 /// Build the inline MCP-config JSON pointing `claude` at the `gilb-mcp` binary

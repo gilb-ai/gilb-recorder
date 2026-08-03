@@ -42,6 +42,11 @@ const SHOW_TRACKING_UI = FEATURE_TRACKING && FEATURE_TRACKING_UI;
 // permission prompt since the grant already exists.
 const FEATURE_TRACKING_AUTOSTART =
   import.meta.env.VITE_FEATURE_TRACKING_AUTOSTART !== "0";
+// Real-time meeting suggestions. The switch sits on the main window next to
+// meeting detection — both are capture subsystems the user turns on and off —
+// and the backend decides whether to offer it at all (a shell without the
+// assist commands simply keeps the row hidden).
+const FEATURE_ASSIST = import.meta.env.VITE_FEATURE_ASSIST !== "0";
 
 // Set once per launch after the first successful `start_capture` (manual or
 // auto). Prevents the refresh loop from re-arming a recording the user
@@ -239,7 +244,7 @@ function updateSplash(perms: Permissions, platform: string) {
 }
 
 // Sequence counter — refresh() calls can race in parallel (poll, explicit
-// call after start/stop, listen("permission"/"health")). Apply to the DOM
+// call after start/stop, listen("health")). Apply to the DOM
 // only the result of the most recently started call — out-of-order
 // responses are discarded.
 let refreshSeq = 0;
@@ -256,19 +261,19 @@ async function refresh() {
   }
   if (mySeq !== refreshSeq) return;
 
-  // Activity tracking (subsystem A): calm status + Pause/Resume. Never
+  // Activity tracking (subsystem A): a switch, with the state spelled out
+  // underneath and the calm dot next to the label — the switch says what the
+  // user asked for, the dot says what the engine is actually doing. Never
   // "recording". A meetings-only build hides the row and never auto-starts; a
   // headless-tracking build keeps the engine but hides the row (SHOW_TRACKING_UI).
   if (SHOW_TRACKING_UI) {
     tracking = s.recording;
-    setText("track-label", tracking ? t("capture.trackingOn") : t("capture.trackingPaused"));
     const dot = $("track-dot");
     if (dot) {
       dot.classList.toggle("on", tracking);
       dot.classList.toggle("paused", !tracking);
     }
-    const toggleBtn = $<HTMLButtonElement>("btn-track-toggle");
-    if (toggleBtn) toggleBtn.textContent = tracking ? t("capture.pause") : t("capture.resume");
+    $("btn-track-toggle")?.setAttribute("aria-checked", tracking ? "true" : "false");
   }
 
   updateSplash(s.permissions, s.platform);
@@ -308,6 +313,189 @@ async function refreshAuth() {
     setText("auth-employee", s.employee ?? t("auth.thisDevice"));
     setText("auth-ws-url", s.gilb_web_url ?? "");
   }
+  // Availability can follow the session in a product whose prompt and model
+  // come from a server; in gilb it follows the agent CLI and this is a no-op
+  // refresh. Cheap either way, and it keeps the switch honest right after a
+  // sign-in or sign-out.
+  if (FEATURE_ASSIST) refreshAssist();
+}
+
+// ----- real-time suggestions (settings) -----------------------------------
+
+type AssistStatus = {
+  /// Product-level availability, decided by the host (gilb_shell_tauri::assist).
+  /// Gilb answers "the agent CLI is installed"; a hosted product would answer
+  /// "signed in".
+  available: boolean;
+  model_ready: boolean;
+  downloading: boolean;
+  percent: number;
+  enabled: boolean;
+  /// What the user asked for, whether or not it can run yet.
+  wanted: boolean;
+  /// Why it cannot run, when `available` is false — the product's words.
+  unavailable: string | null;
+  /// Whether the panel may appear in screen recordings and shares.
+  visible_in_capture: boolean;
+  /// What the user can pick from. Empty when the product decides itself.
+  agents: { id: string; label: string; installed: boolean }[];
+  /// What they picked, if anything.
+  agent: string | null;
+  /// An agent is being installed right now.
+  preparing: boolean;
+};
+
+function renderAssist(s: AssistStatus | null) {
+  const row = $("assist-row");
+  if (!row) return;
+  // The Settings section mirrors availability in every branch: shown once the
+  // feature can run at all, hidden while there is no panel to configure.
+  renderAssistSettings(s);
+  // No status at all — a shell that does not ship the feature. Nothing to say.
+  if (!s) {
+    row.hidden = true;
+    return;
+  }
+  row.hidden = false;
+
+  const toggle = $<HTMLButtonElement>("toggle-assist");
+  const progress = $("assist-progress");
+
+  // Installing the agent the user just picked. The switch reads as on — they
+  // asked for this — and stays put until it lands.
+  if (s.preparing) {
+    toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
+    if (toggle) toggle.disabled = true;
+    // Indeterminate: npx tells us nothing we could turn into a percentage.
+    progress?.classList.add("indeterminate");
+    progress?.removeAttribute("hidden");
+    renderAgentPicker(s, true);
+    setText("assist-desc", t("assist.preparing"));
+    return;
+  }
+  progress?.classList.remove("indeterminate");
+
+  // Switched on, nothing chosen yet: this is the question, not an error. The
+  // picker is the answer to it — never a dead end telling them to go install
+  // something themselves.
+  const needsChoice = !s.available && s.agents.length > 0;
+  if (needsChoice) {
+    // From `wanted`, not `enabled`: the switch shows what they asked for while
+    // the setup step is outstanding.
+    toggle?.setAttribute("aria-checked", s.wanted ? "true" : "false");
+    if (toggle) toggle.disabled = false;
+    progress?.setAttribute("hidden", "");
+    renderAgentPicker(s, false);
+    // "Choose an agent" is the wrong thing to say when there is nothing to
+    // choose from — then the answer is which one to install.
+    const anyInstalled = s.agents.some((a) => a.installed);
+    setText(
+      "assist-desc",
+      anyInstalled ? t("assist.pickAgent") : (s.unavailable ?? t("assist.desc")),
+    );
+    return;
+  }
+
+  // Unavailable with nothing to pick — a product where the answer is
+  // elsewhere (sign in). Say what is missing rather than hiding the control.
+  if (!s.available) {
+    toggle?.setAttribute("aria-checked", "false");
+    if (toggle) toggle.disabled = true;
+    progress?.setAttribute("hidden", "");
+    renderAgentPicker(s, false);
+    setText("assist-desc", s.unavailable ?? t("assist.desc"));
+    return;
+  }
+
+  renderAgentPicker(s, false);
+  if (toggle) toggle.disabled = false;
+  const bar = $("assist-progress-bar");
+
+  // While the model downloads the switch reads as on (the user asked for it)
+  // but stays disabled — flipping it mid-download has nothing to act on.
+  const on = s.enabled || s.downloading;
+  toggle?.setAttribute("aria-checked", on ? "true" : "false");
+  if (toggle) toggle.disabled = s.downloading;
+
+  if (s.downloading) {
+    progress?.removeAttribute("hidden");
+    if (bar) bar.style.width = `${Math.min(100, Math.max(0, s.percent))}%`;
+    setText("assist-desc", t("assist.descDownloading", { pct: s.percent }));
+    return;
+  }
+  progress?.setAttribute("hidden", "");
+  // Back to the static description. It does not change with the switch: a
+  // label that rewrites itself as you flip it makes the control harder to
+  // read, not easier — the switch already says which way it is.
+  setText("assist-desc", t("assist.desc"));
+}
+
+/// The agent picker: one button per agent gilb knows, the current one marked,
+/// the ones this machine lacks disabled.
+///
+/// It stays after the choice is made. A first-run wizard that disappears
+/// leaves the user with a decision they cannot revisit — and this one is
+/// "whose model hears my meetings", which is exactly the decision people
+/// change their mind about. Switching re-installs and re-wires on the spot.
+function renderAgentPicker(s: AssistStatus, busy: boolean) {
+  const box = $("assist-agents");
+  if (!box) return;
+  if (s.agents.length === 0) {
+    box.hidden = true;
+    box.textContent = "";
+    return;
+  }
+  box.textContent = "";
+  for (const agent of s.agents) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "agent-option";
+    btn.textContent = agent.installed
+      ? agent.label
+      : t("assist.agentMissing", { agent: agent.label });
+    // Not installed is not "hidden": knowing Codex is an option you do not
+    // have is worth more than not knowing Codex is an option.
+    btn.disabled = busy || !agent.installed;
+    if (s.agent === agent.id) btn.classList.add("chosen");
+    btn.addEventListener("click", () => chooseAgent(agent.id));
+    box.appendChild(btn);
+  }
+  box.hidden = false;
+}
+
+async function chooseAgent(id: string) {
+  try {
+    await invoke("assist_choose_agent", { agent: id });
+  } catch (err) {
+    setMessage(t("assist.error", { error: String(err) }), "error");
+  }
+  refreshAssist();
+}
+
+async function refreshAssist() {
+  try {
+    renderAssist(await invoke<AssistStatus>("assist_status"));
+  } catch (err) {
+    // A shell without the assist commands (or before they're registered):
+    // keep the row hidden rather than showing a switch that does nothing.
+    console.warn("assist_status failed", err);
+    renderAssist(null);
+  }
+}
+
+// Turning on without the model starts its download; the backend pushes
+// progress and the final state back as `assist-status`.
+async function toggleAssist() {
+  const toggle = $<HTMLButtonElement>("toggle-assist");
+  const on = toggle?.getAttribute("aria-checked") === "true";
+  if (toggle) toggle.disabled = true;
+  try {
+    await invoke("assist_set_enabled", { on: !on });
+  } catch (err) {
+    setMessage(t("assist.error", { error: String(err) }), "error");
+  }
+  if (toggle) toggle.disabled = false;
+  refreshAssist();
 }
 
 async function connect() {
@@ -331,32 +519,25 @@ async function signOut() {
   refreshAuth();
 }
 
-// Pre-open snapshot of the meeting toggle, so Cancel can revert it without
-// persisting (Save is the only path that persists + applies).
-let settingsToggleSnapshot = false;
-
 // Settings open as a modal overlay inside the main window — no second OS
 // window. Open loads the persisted state fresh; Save persists, Cancel discards.
+// What is left in here is transcription: a model to download and a language to
+// pick, which is editing, not switching.
 async function openSettings() {
   const overlay = $("settings-overlay");
-  const toggle = $<HTMLButtonElement>("toggle-meeting");
   if (!overlay) return;
-  if (toggle) {
-    try {
-      const on = await invoke<boolean>("get_meeting_detection");
-      toggle.setAttribute("aria-checked", on ? "true" : "false");
-    } catch (e) {
-      console.warn("get_meeting_detection failed", e);
-    }
-  }
-  settingsToggleSnapshot = toggle?.getAttribute("aria-checked") === "true";
+  // Only edited values live in here — the capture switches are on the main
+  // window, where they apply on the spot.
   if (FEATURE_TRANSCRIPTION) await loadTranscription();
+  // Async on purpose: the first ask starts the agent, and the overlay should
+  // open now, not in three seconds.
+  if (FEATURE_ASSIST) void loadAssistOptions();
   overlay.hidden = false;
   $<HTMLButtonElement>("btn-settings-save")?.focus();
 }
 
-// Surface a specific screen when the tray asks (rodnik hide-UI emits
-// `tray-navigate`, RDK-25). The shell has already shown the window; we only pick
+// Surface a specific screen when the tray asks (`tray-navigate`, emitted by
+// shells whose UI lives in the tray). The shell has already shown the window; we only pick
 // the view. Any open settings overlay is closed first so it can't hide the
 // requested screen. Unknown targets are ignored.
 function navigateTray(target: string) {
@@ -385,15 +566,8 @@ function navigateTray(target: string) {
 
 async function closeSettings(save: boolean) {
   const overlay = $("settings-overlay");
-  const toggle = $<HTMLButtonElement>("toggle-meeting");
   const lang = $<HTMLSelectElement>("select-language");
   if (save) {
-    const enabled = toggle?.getAttribute("aria-checked") === "true";
-    try {
-      await invoke("set_meeting_detection", { enabled });
-    } catch (e) {
-      console.warn("set_meeting_detection failed", e);
-    }
     // The model download/delete are immediate; only the language is part of
     // Save/Cancel. Persist it only when it actually changed.
     if (lang && lang.value !== settingsLangSnapshot) {
@@ -403,12 +577,32 @@ async function closeSettings(save: boolean) {
         console.warn("set_transcription_language failed", e);
       }
     }
-  } else {
-    if (toggle) {
-      // Cancel: revert the toggle to its pre-open state (nothing persisted).
-      toggle.setAttribute("aria-checked", settingsToggleSnapshot ? "true" : "false");
+    const model = $<HTMLSelectElement>("select-assist-model");
+    const effort = $<HTMLSelectElement>("select-assist-effort");
+    for (const [el, key, configId] of [
+      [model, "model", "model"],
+      [effort, "effort", "effort"],
+    ] as const) {
+      // A disabled select is still the "Asking the agent…" placeholder (the
+      // load takes seconds) — its "" value is not a choice, so saving it
+      // would silently revert a previously picked model/effort to default.
+      if (el && !el.disabled && el.value !== assistOptSnapshot[key]) {
+        try {
+          await invoke("assist_set_session_option", {
+            configId,
+            value: el.value,
+          });
+        } catch (e) {
+          console.warn("assist_set_session_option failed", e);
+        }
+      }
     }
-    if (lang) lang.value = settingsLangSnapshot; // revert the language picker
+  } else {
+    if (lang) lang.value = settingsLangSnapshot; // Cancel: revert
+    const model = $<HTMLSelectElement>("select-assist-model");
+    const effort = $<HTMLSelectElement>("select-assist-effort");
+    if (model) model.value = assistOptSnapshot.model;
+    if (effort) effort.value = assistOptSnapshot.effort;
   }
   if (overlay) overlay.hidden = true;
 }
@@ -428,6 +622,124 @@ interface ModelProgress {
 }
 
 let settingsLangSnapshot = "auto";
+// Pre-open snapshot of the suggestion-session knobs ("" = agent default), so
+// Cancel reverts and Save only persists what actually changed.
+let assistOptSnapshot = { model: "", effort: "" };
+
+type SessionOptionsPayload = {
+  options: {
+    id: string;
+    name: string;
+    agent_default: string;
+    choices: { value: string; label: string }[];
+  }[];
+  model: string | null;
+  effort: string | null;
+};
+
+/// The Realtime Assistant section in Settings: what the suggestions run on,
+/// and who can see them.
+///
+/// Shown once the feature is available at all — before that there is no panel
+/// to configure and nothing the switch could govern. The model lines inside
+/// arrive later, when the agent has answered.
+function renderAssistSettings(s: AssistStatus | null) {
+  const row = $("assist-settings-row");
+  const toggle = $<HTMLButtonElement>("toggle-assist-capture");
+  if (!row || !toggle) return;
+  row.hidden = !s?.available;
+  if (s) toggle.setAttribute("aria-checked", s.visible_in_capture ? "true" : "false");
+}
+
+function initCaptureToggle() {
+  const toggle = $<HTMLButtonElement>("toggle-assist-capture");
+  if (!toggle) return;
+  toggle.addEventListener("click", async () => {
+    const was = toggle.getAttribute("aria-checked") === "true";
+    const on = !was;
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+    toggle.disabled = true;
+    try {
+      await invoke("assist_set_visible_in_capture", { on });
+    } catch (e) {
+      console.warn("assist_set_visible_in_capture failed", e);
+      // Put it back rather than lie about what the other side can see.
+      toggle.setAttribute("aria-checked", was ? "true" : "false");
+    } finally {
+      toggle.disabled = false;
+    }
+  });
+}
+
+/// The suggestions-model row in Settings. The list is the agent's own,
+/// fetched over ACP (and cached backend-side), so opening the screen is what
+/// asks the question — a row that guessed at model names would be wrong the
+/// day the agent updates.
+async function loadAssistOptions() {
+  const row = $("assist-settings-row");
+  const modelWrap = $("assist-model-wrap");
+  if (!row || !modelWrap) return;
+  // The first ask starts the agent — seconds, not milliseconds. An empty
+  // select for that long reads as broken, so say what is happening: the row
+  // shows immediately with a disabled "Asking the agent…" placeholder, and
+  // the real choices replace it when they land.
+  const placeholder = (selectId: string) => {
+    const select = $<HTMLSelectElement>(selectId);
+    if (!select) return;
+    select.textContent = "";
+    const el = document.createElement("option");
+    el.value = "";
+    el.textContent = t("assist.optionsLoading");
+    select.appendChild(el);
+    select.disabled = true;
+  };
+  placeholder("select-assist-model");
+  $("assist-effort-wrap")?.setAttribute("hidden", "");
+  row.setAttribute("aria-busy", "true");
+  modelWrap.hidden = false;
+  let payload: SessionOptionsPayload;
+  try {
+    payload = await invoke<SessionOptionsPayload>("assist_session_options");
+  } catch (e) {
+    // No agent set up (or it failed to answer): nothing to *choose*. The
+    // section itself stays — the visibility switch does not depend on an
+    // agent answering, and hiding it here would make it come and go.
+    console.warn("assist_session_options failed", e);
+    modelWrap.hidden = true;
+    row.removeAttribute("aria-busy");
+    return;
+  }
+  row.removeAttribute("aria-busy");
+  const fill = (
+    selectId: string,
+    optionId: string,
+    chosen: string | null,
+  ): boolean => {
+    const select = $<HTMLSelectElement>(selectId);
+    const option = payload.options.find((o) => o.id === optionId);
+    if (!select || !option || option.choices.length === 0) return false;
+    select.textContent = "";
+    const def = document.createElement("option");
+    def.value = "";
+    def.textContent = t("assist.agentDefault", { value: option.agent_default });
+    select.appendChild(def);
+    for (const c of option.choices) {
+      const el = document.createElement("option");
+      el.value = c.value;
+      el.textContent = c.label;
+      select.appendChild(el);
+    }
+    select.value = chosen ?? "";
+    select.disabled = false;
+    return true;
+  };
+  const hasModel = fill("select-assist-model", "model", payload.model);
+  const hasEffort = fill("select-assist-effort", "effort", payload.effort);
+  const effortWrap = $("assist-effort-wrap");
+  if (effortWrap) effortWrap.hidden = !hasEffort;
+  modelWrap.hidden = !hasModel;
+  assistOptSnapshot = { model: payload.model ?? "", effort: payload.effort ?? "" };
+}
 // Tracks an in-flight download so reopening Settings keeps showing progress
 // (the backend exposes no "downloading" status — only presence of the model).
 let modelDownloading = false;
@@ -514,13 +826,41 @@ async function deleteModel() {
 }
 
 // Flips the toggle's visual state; the value is persisted/applied on Save.
+/// Meeting detection: a switch on the main window, applied the moment it is
+/// flipped. No Save step — the effect (the detector starting or stopping) is
+/// immediate and visible, so a pending "unsaved" state would only be a way to
+/// be wrong about what the app is doing. If the backend refuses, the switch
+/// goes back where it was rather than lying about what is on.
 function initMeetingToggle() {
   const toggle = $<HTMLButtonElement>("toggle-meeting");
   if (!toggle) return;
-  toggle.addEventListener("click", () => {
-    const on = toggle.getAttribute("aria-checked") === "true";
-    toggle.setAttribute("aria-checked", on ? "false" : "true");
+  void refreshMeetingToggle();
+  toggle.addEventListener("click", async () => {
+    const was = toggle.getAttribute("aria-checked") === "true";
+    const enabled = !was;
+    toggle.setAttribute("aria-checked", enabled ? "true" : "false");
+    toggle.disabled = true;
+    try {
+      await invoke("set_meeting_detection", { enabled });
+    } catch (e) {
+      console.warn("set_meeting_detection failed", e);
+      toggle.setAttribute("aria-checked", was ? "true" : "false");
+      setMessage(t("settings.meetingFailed"), "error");
+    } finally {
+      toggle.disabled = false;
+    }
   });
+}
+
+async function refreshMeetingToggle() {
+  const toggle = $<HTMLButtonElement>("toggle-meeting");
+  if (!toggle) return;
+  try {
+    const on = await invoke<boolean>("get_meeting_detection");
+    toggle.setAttribute("aria-checked", on ? "true" : "false");
+  } catch (e) {
+    console.warn("get_meeting_detection failed", e);
+  }
 }
 
 async function openPrivacyPane(pane: PrivacyPane) {
@@ -562,21 +902,31 @@ async function persistPaused(paused: boolean) {
   }
 }
 
-// User Pause/Resume. Persists the choice so it survives restarts.
+// The activity-tracking switch. Persists the choice so it survives restarts —
+// a deliberate pause is never silently undone by the next launch. The switch
+// moves optimistically and `refresh()` has the final word: if the engine
+// refused to start or stop, the next status snapshot puts it back.
 async function toggleTracking() {
   const btn = $<HTMLButtonElement>("btn-track-toggle");
-  if (btn) btn.disabled = true;
-  if (tracking) {
-    if (await applyStop()) {
-      await persistPaused(true);
-      setMessage(t("capture.trackingPausedMsg"));
-    }
-  } else {
-    if (await applyStart()) {
-      await persistPaused(false);
-      setMessage(t("capture.trackingOnMsg"));
-    }
+  if (btn) {
+    btn.disabled = true;
+    btn.setAttribute("aria-checked", tracking ? "false" : "true");
   }
+  // No "…paused" / "…on" message: the switch and the line under it already
+  // say the state, and a status line that stays on screen for the rest of the
+  // session reads as a problem long after it stopped being news. Errors still
+  // speak up — those the user has not already seen.
+  let ok: boolean;
+  if (tracking) {
+    ok = await applyStop();
+    if (ok) await persistPaused(true);
+  } else {
+    ok = await applyStart();
+    if (ok) await persistPaused(false);
+  }
+  // Cleared only on success — on failure applyStop/applyStart already put the
+  // error in the message line, and clearing here would erase it the same tick.
+  if (ok) setMessage("");
   if (btn) btn.disabled = false;
   refresh();
 }
@@ -644,6 +994,11 @@ window.addEventListener("DOMContentLoaded", () => {
   $("btn-rec-stop")?.addEventListener("click", stopMeetingRecording);
   $("btn-connect")?.addEventListener("click", connect);
   $("btn-signout")?.addEventListener("click", signOut);
+  if (FEATURE_ASSIST) {
+    $("toggle-assist")?.addEventListener("click", toggleAssist);
+    // Model download progress, sign-in/out and the pipeline coming up or down.
+    listen<AssistStatus>("assist-status", (e) => renderAssist(e.payload));
+  }
   if (FEATURE_SETTINGS) {
     $("btn-settings")?.addEventListener("click", openSettings);
   }
@@ -659,6 +1014,7 @@ window.addEventListener("DOMContentLoaded", () => {
     }
   });
   initMeetingToggle();
+  initCaptureToggle();
 
   for (const btn of document.querySelectorAll<HTMLButtonElement>(".splash-btn")) {
     btn.addEventListener("click", () => {
@@ -673,12 +1029,13 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   }
 
-  // Backend proxies EventBus events here — permission/health messages
-  // trigger refresh() immediately. Permissions, recording state and
-  // session_id update via events; the slow 5-second poll is only a fallback
-  // for a missed broadcast.
-  listen("permission", () => refresh());
+  // Backend proxies EventBus events here — a health message refreshes the UI
+  // immediately instead of waiting for the poll. Permission grants change in
+  // System Settings, outside our process, so the backend polls the snapshot
+  // once a second while anything is missing and emits `permission` on change;
+  // after that the 5-second poll is the backstop.
   listen("health", () => refresh());
+  listen("permission", () => refresh());
   // Local model download progress + terminal state (driven by download_model).
   listen<ModelProgress>("model-download", (e) => {
     const p = e.payload;
@@ -713,7 +1070,7 @@ window.addEventListener("DOMContentLoaded", () => {
     setMessage(e.payload?.signed_in ? "" : t("auth.signInFailed"), "error");
     refreshAuth();
   });
-  // Tray items (rodnik hide-UI, RDK-25) ask to surface a specific screen.
+  // Tray items ask to surface a specific screen.
   listen<string>("tray-navigate", (e) => navigateTray(e.payload));
 
   // Register Gilb as a LaunchAgent on first run so it starts at login.

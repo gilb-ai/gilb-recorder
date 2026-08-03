@@ -1,203 +1,178 @@
-# Releasing gilb
+# Releasing Gilb
 
-This document is the runbook for the **maintainer** cutting a signed,
-notarized macOS build. It does not apply to development builds —
-`npm run tauri dev` and `cargo build` do not need anything below.
+Releases are built, signed, and published by `.github/workflows/release.yml`
+(macOS aarch64 + x86_64, Windows x64). The updater endpoint
+(`tauri.conf.json` → `plugins.updater.endpoints`) points at the GitHub
+Release's `latest.json`, so cutting a release is what ships an auto-update.
 
-Distribution today is manual: ship the resulting `.dmg` to recipients
-out of band. Auto-update via `tauri-plugin-updater` is planned for a
-later release, once the repo is public and GitHub Releases can serve
-as the update endpoint without baked-in tokens.
+Nothing here applies to development builds — `cargo build` and
+`npm run tauri dev` need none of it.
 
-## Prerequisites
+## Branching & releases
 
-One-time setup on the build machine:
+Trunk-based: work lands on `main` via PRs, releases are cut by tagging. There
+is **no long-lived release branch** — the auto-updater always points clients at
+the latest stable release, so we maintain a single line. `main` is branch-
+protected and kept green by CI (`.github/workflows/ci.yml` runs the Rust
+checks on every PR), so any commit on `main` is in principle shippable.
 
-- macOS 13 (Ventura) or later.
-- **Xcode Command Line Tools**: `xcode-select --install`.
-- **Rust** stable toolchain. `rustup show` should print a stable
-  channel; the workspace pins `edition = "2021"`.
-- **Node** 20+ and **npm**.
-- **Apple Developer ID Application certificate** installed in the
-  login Keychain. Verify with:
+A release branch would only earn its keep once we need to hotfix an already-
+shipped version while `main` holds unreleasable work, or maintain multiple
+version lines — neither applies yet. If that day comes, cut a short-lived
+`release/x.y` for stabilization, tag from it, then delete it.
 
-  ```sh
-  security find-identity -v -p codesigning
-  ```
+## When the release workflow runs
 
-  The output must include a line like:
+It triggers on exactly two things — nothing else (regular commits, branch
+pushes, and PRs do **not** run it):
 
-  ```
-  1) ABC… "Developer ID Application: Leonid Dinershtein (83856566PM)"
-  ```
+- **Pushing a `v*` tag** (e.g. `git push origin v1.0.1`) — the normal path.
+- **Manual dispatch**: *Actions → Release → Run workflow*, with a tag input.
 
-  This is the identity referenced by `signingIdentity` in
-  `apps/gilb-app-tauri/src-tauri/tauri.conf.json`.
-- **Apple ID app-specific password** generated at
-  <https://appleid.apple.com/account/manage> → Sign-In and Security →
-  App-Specific Passwords. This is *not* your iCloud password.
+The workflow file must exist in the tagged commit, so the tag has to point at a
+commit that already contains `.github/workflows/release.yml`.
 
-### One-time notarization profile
+## Cutting a release
 
-Store the notarization credentials in the Keychain once, so the build
-does not need them in plain env vars:
+1. Bump the version. It lives in **three** places — npm and the Tauri config do
+   not read Cargo, so all three move together:
+
+   - `Cargo.toml` → `[workspace.package] version`
+   - `apps/gilb-app-tauri/src-tauri/tauri.conf.json` → `version`
+   - `apps/gilb-app-tauri/package.json` → `version`
+
+   CI fails if they disagree (the *Versions in sync* step in `ci.yml`). The
+   Cargo one is not cosmetic: it is stamped into every recorded session row
+   (`gilb_db::sessions`) and reported as the MCP server's version, so a stale
+   value quietly mislabels data.
+
+2. Commit, then tag and push:
+
+   ```sh
+   git tag v1.0.5
+   git push origin v1.0.5
+   ```
+
+3. The workflow builds + signs all platforms and creates a **draft** GitHub
+   Release with the installers, the updater bundles (`*.app.tar.gz`,
+   `*-setup.exe`) + their `.sig`, and `latest.json`.
+
+4. Review the draft, then **publish** it. Once published, installed apps pick
+   up the update on their next check (launch / every 6h).
+
+## Beta / pre-release builds
+
+Tag with a semver pre-release suffix (e.g. `v1.1.0-beta.1`, `v1.2.0-rc.1`).
+The workflow marks that GitHub Release as **pre-release**, so
+`releases/latest` — the stable updater endpoint — **skips it**: stable users
+never auto-update onto a beta. Testers install the pre-release build manually
+from its release page. (No separate beta auto-update channel yet.)
+
+## Repo secrets
+
+Set under **Settings → Secrets and variables → Actions**. They are not stored
+in the repo, are not exposed by making it public, and are not given to fork
+PRs. Listed here for setup and rotation:
+
+| Secret | What |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | content of the updater private key (`~/.tauri/gilb-updater.key`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password (`""` if none) |
+| `APPLE_CERTIFICATE` | base64 of the Developer ID `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | `.p12` password |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: <name> (<team id>)` |
+| `APPLE_API_ISSUER` | App Store Connect API issuer id |
+| `APPLE_API_KEY` | App Store Connect API key id |
+| `APPLE_API_KEY_BASE64` | base64 of the `AuthKey_*.p8` |
+| `ES_USERNAME` | SSL.com eSigner username |
+| `ES_PASSWORD` | SSL.com eSigner password |
+| `ES_CREDENTIAL_ID` | eSigner signing credential id |
+| `ES_TOTP_SECRET` | eSigner TOTP secret (base32) |
+
+Windows is Authenticode-signed via SSL.com CodeSignTool (cloud/eSigner) —
+there is no local PFX. The release workflow downloads CodeSignTool and signs
+each artifact through `scripts/sign-windows.ps1`.
+
+`gh secret set NAME < file` (or `--body "value"`) is the quickest way.
+
+The updater key is the one secret with no recovery path: lose it and existing
+installs can never be updated again, because they only accept bundles signed by
+its public half (baked into `tauri.conf.json`). Keep the backup somewhere that
+survives the build machine.
+
+## Building signed locally
+
+Only needed to reproduce a release build outside CI — a one-off `.dmg` for a
+specific recipient, or debugging a signing failure. Requires a Developer ID
+Application certificate in the login Keychain (`security find-identity -v -p
+codesigning` must list it) and a notarization profile stored once:
 
 ```sh
 xcrun notarytool store-credentials gilb-notary \
   --apple-id  <your-apple-id-email> \
-  --team-id   83856566PM \
-  --password  <app-specific-password>
+  --team-id   <your-team-id> \
+  --password  <app-specific-password>   # appleid.apple.com, not your iCloud password
 ```
 
-The profile name `gilb-notary` is what we reference below as
-`@keychain:gilb-notary`.
-
-## Pre-release sanity checks
-
-Run from the repo root. All of these must be green before building:
+Then:
 
 ```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-```
-
-Frontend builds clean:
-
-```sh
-cd apps/gilb-app-tauri
-npm install
-npm run build      # tsc + vite, writes apps/gilb-app-tauri/dist/
-cd ../..
-```
-
-## Build
-
-Bump the version first if needed. The version lives in **three**
-independent places — npm and Tauri JSON do not read Cargo:
-
-- `Cargo.toml` → `[workspace.package] version = "..."`
-- `apps/gilb-app-tauri/src-tauri/tauri.conf.json` → `"version": "..."`
-- `apps/gilb-app-tauri/package.json` → `"version": "..."`
-
-After bumping, confirm there are no stale references:
-
-```sh
-grep -rn '"0\.1\.0"\|= "0\.1\.0"' . \
-  --include='*.toml' --include='*.json' \
-  --exclude-dir=node_modules --exclude-dir=target
-```
-
-Export the signing/notarization env vars and run the build:
-
-```sh
-export APPLE_SIGNING_IDENTITY="Developer ID Application: Leonid Dinershtein (83856566PM)"
+export APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team id>)"
 export APPLE_ID="<your-apple-id-email>"
-export APPLE_TEAM_ID="83856566PM"
+export APPLE_TEAM_ID="<your-team-id>"
 export APPLE_PASSWORD="@keychain:gilb-notary"
 
 cd apps/gilb-app-tauri
-npm install                # if not done already
+npm install
 npm run tauri build
 ```
 
-Tauri 2 will:
+`beforeBuildCommand` stages the sidecars (`scripts/build-sidecars.sh` builds
+`gilb-mcp` and `gilb-analyzer` in release mode as `binaries/<name>-<triple>`),
+then Tauri builds the workspace, embeds the frontend, bundles `.app` / `.dmg` /
+`.app.tar.gz`, codesigns the main binary *and* each sidecar with the hardened
+runtime + `entitlements.plist`, notarizes, and staples.
 
-1. Run `bash scripts/build-sidecars.sh` (wired in via
-   `beforeBuildCommand`). The script builds `gilb-mcp` in release
-   mode and stages it as `binaries/gilb-mcp-<host-triple>` so Tauri
-   can pick it up as an `externalBin` sidecar.
-2. Run `cargo build --release` for the workspace.
-3. Run `npm run build` (tsc + vite) and embed the frontend.
-4. Bundle `.app`, `.dmg`, and `.app.tar.gz`. The sidecar is copied
-   into `Gilb.app/Contents/MacOS/gilb-mcp`.
-5. Codesign the main binary *and* the sidecar with
-   `APPLE_SIGNING_IDENTITY` + hardened runtime + `entitlements.plist`.
-6. Submit the bundle to Apple via `notarytool submit --wait` using
-   `APPLE_ID` / `APPLE_PASSWORD` / `APPLE_TEAM_ID`.
-7. Staple the notarization ticket to the `.dmg` and `.app`.
+Artifacts land in `apps/gilb-app-tauri/src-tauri/target/release/bundle/`.
 
-Artifacts land in:
+## Verifying an artifact
 
-```
-apps/gilb-app-tauri/src-tauri/target/release/bundle/
-  ├── dmg/Gilb_<version>_<arch>.dmg
-  ├── macos/Gilb.app
-  │   └── Contents/MacOS/
-  │       ├── gilb            ← main binary
-  │       └── gilb-mcp        ← sidecar, signed + notarized with the .app
-  └── macos/Gilb.app.tar.gz
-```
-
-`<arch>` is `aarch64` on Apple Silicon, `x64` on Intel. We only ship
-the arch we built on; cross-arch builds are not configured.
-
-## Verify the artifact
-
-The DMG must pass all three checks before it leaves the machine:
+Before a locally built `.dmg` leaves the machine — all three must pass:
 
 ```sh
 DMG=apps/gilb-app-tauri/src-tauri/target/release/bundle/dmg/Gilb_*.dmg
-
-# Gatekeeper acceptance — must say "Notarized Developer ID".
-spctl -a -vvv -t install "$DMG"
-
-# Notarization ticket is stapled to the DMG.
-stapler validate "$DMG"
-
-# Inside the .app: signature chains to Apple, team ID is correct.
 APP=apps/gilb-app-tauri/src-tauri/target/release/bundle/macos/Gilb.app
-codesign -dv --verbose=4 "$APP"
+
+spctl -a -vvv -t install "$DMG"      # must say "Notarized Developer ID"
+stapler validate "$DMG"              # ticket is stapled
+codesign -dv --verbose=4 "$APP"      # authority chain ends at "Apple Root CA"
 codesign -dv --verbose=4 "$APP/Contents/MacOS/gilb-mcp"
-# Expect for both: TeamIdentifier=83856566PM, Authority chain ending
-# at "Apple Root CA".
-
-# Sidecar is a real Mach-O binary for this arch (gilb-mcp has no
-# --help; it goes straight to stdio MCP, so don't run it bare here).
-file "$APP/Contents/MacOS/gilb-mcp" | grep -q "Mach-O"
 ```
 
-If any check fails, the DMG is not safe to send. Fix the cause; do
-not ship a non-notarized build.
-
-## Tag the release
-
-Only after the artifact verifies cleanly:
-
-```sh
-git pull --rebase            # do not skip; the mac and dev box may have diverged
-git tag -a v<version> -m "release v<version>"
-git push origin v<version>
-```
-
-## Distribution
-
-For each recipient, send:
-
-1. The `.dmg` file directly (email, signed URL, whatever channel is
-   appropriate for that recipient).
-2. A link to [`INSTALL.md`](./INSTALL.md) — install steps, permission
-   prompts, and what data the app collects.
+A failure here means the build is not safe to distribute. Fix the cause rather
+than shipping an unnotarized build — Gatekeeper will refuse it on the far end
+anyway.
 
 ## Troubleshooting
 
 - **`notarytool` complains about credentials.** Re-run
-  `xcrun notarytool store-credentials gilb-notary …`. The profile
-  name in the Keychain must match what `APPLE_PASSWORD` references
-  (`@keychain:gilb-notary`).
-- **`spctl` says "source=Unnotarized Developer ID".** Notarization
-  did not run or did not staple. Re-check that the four `APPLE_*`
-  env vars were set in the same shell that ran `npm run tauri build`,
-  and inspect the Tauri build log for `notarytool submit` lines.
-- **`codesign` says "code object is not signed at all".** The signing
-  identity in `tauri.conf.json` does not match anything in your
-  Keychain. Verify with `security find-identity -v -p codesigning`;
-  rebuild after fixing the name.
-- **Build fails on a fresh checkout with linker errors against
-  `core-graphics` / `accessibility-sys`.** macOS SDK headers are
-  missing. Re-run `xcode-select --install` and reboot if needed.
-- **`tauri build` errors `resource path 'binaries/gilb-mcp-<triple>'
-  doesn't exist`.** The `beforeBuildCommand` did not run, or
-  `build-sidecars.sh` failed. Run it manually
-  (`bash apps/gilb-app-tauri/scripts/build-sidecars.sh`) and inspect
-  its output — typically a `cargo build -p gilb-mcp` failure.
+  `xcrun notarytool store-credentials gilb-notary …`; the profile name must
+  match what `APPLE_PASSWORD` references (`@keychain:gilb-notary`).
+- **`spctl` says "source=Unnotarized Developer ID".** Notarization did not run
+  or did not staple. Check that the `APPLE_*` vars were set in the same shell
+  that ran `npm run tauri build`, and look for `notarytool submit` in the log.
+- **`codesign` says "code object is not signed at all".** `APPLE_SIGNING_IDENTITY`
+  matches nothing in the Keychain — compare against
+  `security find-identity -v -p codesigning`.
+- **Fresh checkout fails to link `core-graphics` / `accessibility-sys`.** macOS
+  SDK headers are missing: `xcode-select --install`.
+- **`resource path 'binaries/gilb-mcp-<triple>' doesn't exist`.** The sidecar
+  step did not run or failed — run
+  `bash apps/gilb-app-tauri/scripts/build-sidecars.sh` and read its output.
+
+## Notes
+
+- macOS ships separate `aarch64` + `x86_64` builds; Windows ships `x64` only
+  (ARM64 Windows runs it under emulation — native ARM64 is a future addition).
+- The updater installs silently and relaunches; an active recording is stopped
+  cleanly first (see `apps/gilb-app-tauri/src/main.ts`).

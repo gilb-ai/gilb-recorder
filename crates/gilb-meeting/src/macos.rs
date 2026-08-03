@@ -14,8 +14,9 @@
 //! ([`parse_attribution_line`]) and the count state machine ([`Tracker`])
 //! are pure and unit-tested without the subprocess.
 //!
-//! Ported from the owner's rodnik app (`meetingDetection/macosLogStream.js`):
-//! the predicate, debounce window, and allowlist are reused verbatim.
+//! The predicate, the debounce window and the allowlist are the part that
+//! took real meetings to get right — change them against recorded log
+//! output, not by reasoning about what the OS ought to emit.
 
 use chrono::{DateTime, Utc};
 
@@ -39,8 +40,8 @@ pub fn parse_attribution_line(line: &str) -> Option<Vec<String>> {
     let rest = message.strip_prefix(EVENT_MESSAGE_PREFIX)?;
 
     // The prefix matched, so this is an attribution-change line. A
-    // missing or malformed payload is treated as "no mic apps" (mirrors
-    // rodnik, which still reports the change with an empty set).
+    // missing or malformed payload is treated as "no mic apps" — the
+    // change still gets reported, with an empty set.
     let mics = serde_json::from_str::<Vec<serde_json::Value>>(rest)
         .ok()
         .map(|attrs| {
@@ -125,7 +126,7 @@ mod detector {
     /// Coalesce changes arriving within this window into one update.
     const DEBOUNCE_MS: u64 = 2000;
 
-    /// rodnik's exact `log stream` predicate (a private Control Center
+    /// The `log stream` predicate, verbatim (a private Control Center
     /// interface; may break across macOS releases).
     const LOG_PREDICATE: &str = "subsystem == \"com.apple.controlcenter\" \
         AND category == \"sensor-indicators\" \

@@ -53,6 +53,12 @@ pub struct TrayConfig {
     /// Toggle label while recording (e.g. "Остановить запись").
     pub stop_label: String,
     pub quit_label: String,
+    /// Shown next to the toggle item, e.g. `"CmdOrCtrl+Shift+R"`. Display
+    /// only — a tray menu does not handle keys; the shell registers the real
+    /// global shortcut. It is here so the two cannot drift: the menu is where
+    /// a user looks for the action, and a hotkey nobody is told about may as
+    /// well not exist.
+    pub toggle_accelerator: Option<String>,
     pub icon_idle: &'static [u8],
     pub icon_recording: &'static [u8],
 }
@@ -126,7 +132,7 @@ fn build_menu(
         MENU_TOGGLE,
         toggle_label(config, recording),
         true,
-        None::<&str>,
+        config.toggle_accelerator.as_deref(),
     )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, &config.quit_label, true, None::<&str>)?;
 
@@ -325,6 +331,7 @@ mod tests {
             start_label: "Start recording".into(),
             stop_label: "Stop recording".into(),
             quit_label: "Quit".into(),
+            toggle_accelerator: None,
             icon_idle: &[],
             icon_recording: &[],
         }

@@ -36,6 +36,11 @@ pub mod macos_tap;
 #[cfg(target_os = "windows")]
 mod windows;
 
+mod aec;
+mod tap;
+pub use aec::{EchoCanceller, EchoCancellerConfig};
+pub use tap::{AudioChunk, AudioTap};
+
 /// Target sample rate of the audio sidecar — 16 kHz mono, the rate downstream
 /// transcription ([GILB-6]) consumes.
 pub const TARGET_SAMPLE_RATE: u32 = 16_000;
@@ -96,6 +101,11 @@ pub trait ScreenAudioCapturer: Send + Sync {
     ) -> Result<()>;
     /// Stop capture and finalize both files.
     fn stop(&self) -> Result<()>;
+
+    /// Install a live audio tap; chunks flow from the next `start` on. The
+    /// default ignores the tap — the no-op and test capturers have no audio
+    /// to offer, and consumers must treat the tap as best-effort anyway.
+    fn set_audio_tap(&self, _tap: Arc<AudioTap>) {}
 }
 
 /// No-op capturer for the non-macOS/non-Windows build and for tests. Writes
@@ -141,12 +151,18 @@ pub type PlatformCapturer = NoopCapturer;
 /// Best-effort: a file that cannot be removed is logged and the retry proceeds,
 /// where it will surface as the start error instead.
 fn clear_failed_attempt(video: &Path, audio: &Path) {
-    // The mic/system sidecars exist only on the abandoned-successful-start
-    // path, where the capturer's stop already wrote them; on plain start
-    // failures they are absent and skipped as NotFound.
+    // The mic/mic-raw/system sidecars exist only on the
+    // abandoned-successful-start path, where the capturer's stop already wrote
+    // them; on plain start failures they are absent and skipped as NotFound.
     let sidecars: Vec<PathBuf> = audio
         .parent()
-        .map(|d| vec![d.join("mic.wav"), d.join("system.wav")])
+        .map(|d| {
+            vec![
+                d.join("mic.wav"),
+                d.join("mic-raw.wav"),
+                d.join("system.wav"),
+            ]
+        })
         .unwrap_or_default();
     for path in [video, audio]
         .into_iter()
@@ -278,6 +294,91 @@ pub fn scale_bgra(src: &[u8], src_w: usize, src_h: usize, dst_w: usize, dst_h: u
     dst
 }
 
+/// Offline acoustic echo cancellation (speexdsp): clean the mic track against
+/// the system track, both mono `f32` at `sample_rate`. Without headphones the
+/// mic picks up the remote side from the speakers; uncancelled, the mic track
+/// double-attributes their speech (decision D11 in `docs/assist.md`). Runs
+/// as a batch at finalization — the live capture path is untouched. The tail
+/// past the last full 20 ms frame is passed through unprocessed.
+pub fn cancel_echo(mic: &[f32], system: &[f32], sample_rate: u32) -> Vec<f32> {
+    if mic.is_empty() || system.is_empty() {
+        return mic.to_vec();
+    }
+    let frame = (sample_rate / 50) as usize; // 20 ms
+    let mut aec = EchoCanceller::new(&EchoCancellerConfig {
+        sample_rate,
+        frame_size: frame,
+        tail_ms: 200, // covers speaker->mic delay
+        // Pure cancellation only: denoise would alter the recording's character.
+        enable_preprocess: false,
+    });
+
+    // Frame-wise interleave keeps the canceller's bounded far FIFO holding
+    // exactly the matching reference audio — larger blocks would overflow it
+    // and silently misalign the tracks.
+    let mut out = Vec::with_capacity(mic.len());
+    let mut pos = 0;
+    while pos < mic.len() {
+        let end = (pos + frame).min(mic.len());
+        let far_end = end.min(system.len());
+        if pos < far_end {
+            aec.push_far(&system[pos..far_end]);
+        }
+        out.extend(aec.push_near(&mic[pos..end]));
+        pos = end;
+    }
+    // The sub-frame remainder stays buffered inside the canceller; the track
+    // must keep its length, so pass those samples through untouched.
+    out.extend_from_slice(&mic[out.len()..]);
+    out
+}
+
+/// The finalized 16 kHz audio tracks of a meeting, ready for
+/// [`write_meeting_audio`]. `mic` is echo-cancelled; `mic_raw` is the
+/// uncancelled original, kept as the safety net (a filter misbehaving must
+/// never lose audio irrecoverably).
+pub struct MeetingAudioTracks {
+    pub mixed: Vec<i16>,
+    pub mic: Vec<i16>,
+    pub mic_raw: Vec<i16>,
+    pub system: Vec<i16>,
+}
+
+/// Resample both capture buffers to 16 kHz, echo-cancel the mic against the
+/// system audio, and produce all four tracks. Pure — host-tested; the platform
+/// `stop()` impls feed their buffers here and write the result.
+pub fn finalize_meeting_audio(
+    mic: &[f32],
+    mic_rate: u32,
+    system: &[f32],
+    system_rate: u32,
+) -> MeetingAudioTracks {
+    let mic_16 = resample_linear(mic, mic_rate, TARGET_SAMPLE_RATE);
+    let sys_16 = resample_linear(system, system_rate, TARGET_SAMPLE_RATE);
+    let clean_16 = cancel_echo(&mic_16, &sys_16, TARGET_SAMPLE_RATE);
+    MeetingAudioTracks {
+        mixed: mix_to_mono_16k_dual(&clean_16, TARGET_SAMPLE_RATE, &sys_16, TARGET_SAMPLE_RATE),
+        mic: mix_to_mono_16k_dual(&clean_16, TARGET_SAMPLE_RATE, &[], 1),
+        mic_raw: mix_to_mono_16k_dual(&mic_16, TARGET_SAMPLE_RATE, &[], 1),
+        system: mix_to_mono_16k_dual(&sys_16, TARGET_SAMPLE_RATE, &[], 1),
+    }
+}
+
+/// Write the meeting's audio files next to `audio_path` (the `audio.wav` mix):
+/// `mic.wav` (echo-cancelled), `mic-raw.wav` (uncancelled safety net) and
+/// `system.wav`.
+pub fn write_meeting_audio(audio_path: &Path, tracks: &MeetingAudioTracks) -> Result<()> {
+    let dir = audio_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
+    write_wav_16k_mono(audio_path, &tracks.mixed).context("write mixed meeting audio")?;
+    write_wav_16k_mono(&dir.join("mic.wav"), &tracks.mic).context("write mic track")?;
+    write_wav_16k_mono(&dir.join("mic-raw.wav"), &tracks.mic_raw).context("write raw mic track")?;
+    write_wav_16k_mono(&dir.join("system.wav"), &tracks.system).context("write system track")?;
+    Ok(())
+}
+
 /// Write `samples` as a 16 kHz mono 16-bit PCM WAV at `path`.
 pub fn write_wav_16k_mono(path: &Path, samples: &[i16]) -> Result<()> {
     let spec = hound::WavSpec {
@@ -332,6 +433,12 @@ impl<C: ScreenAudioCapturer> Recorder<C> {
             state: Mutex::new(State::default()),
             start_backoff: START_BACKOFF.to_vec(),
         }
+    }
+
+    /// Install a live audio tap on the underlying capturer (see [`AudioTap`]).
+    /// Takes effect on the next [`arm`](Self::arm).
+    pub fn set_audio_tap(&self, tap: Arc<AudioTap>) {
+        self.capturer.set_audio_tap(tap);
     }
 
     /// Replace the retry waits — a test hook, hidden from docs.
@@ -600,4 +707,71 @@ pub fn spawn_recorder(bus: EventBus, db: Db, data_dir: PathBuf) -> Arc<Recorder<
     let recorder = Arc::new(Recorder::new(db, data_dir, PlatformCapturer::default()));
     tokio::spawn(recorder.clone().run(bus));
     recorder
+}
+
+#[cfg(test)]
+mod finalize_tests {
+    use super::*;
+
+    /// Deterministic white noise in [-0.4, 0.4].
+    fn noise(len: usize, mut seed: u64) -> Vec<f32> {
+        (0..len)
+            .map(|_| {
+                seed = seed
+                    .wrapping_mul(6364136223846793005)
+                    .wrapping_add(1442695040888963407);
+                (((seed >> 33) as f32 / (1u64 << 31) as f32) - 0.5) * 0.8
+            })
+            .collect()
+    }
+
+    fn energy(samples: &[i16]) -> f64 {
+        samples.iter().map(|&s| f64::from(s) * f64::from(s)).sum()
+    }
+
+    /// Speaker-echo-only mic: after finalization the cleaned mic track must be
+    /// far quieter than the raw one, and all four tracks must line up.
+    #[test]
+    fn finalize_cancels_speaker_echo_and_keeps_raw() {
+        let secs = 5;
+        let system = noise(48_000 * secs, 7);
+        let delay = 48_000 * 40 / 1000;
+        // Mic hears only the speakers: delayed, attenuated system audio.
+        let mic: Vec<f32> = (0..system.len())
+            .map(|n| {
+                if n >= delay {
+                    system[n - delay] * 0.5
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+
+        let tracks = finalize_meeting_audio(&mic, 48_000, &system, 48_000);
+
+        assert_eq!(tracks.mic.len(), tracks.mic_raw.len());
+        assert_eq!(
+            tracks.mixed.len(),
+            tracks.system.len().max(tracks.mic.len())
+        );
+
+        // Judge the last second, after the adaptive filter has converged.
+        let tail = TARGET_SAMPLE_RATE as usize;
+        let raw = energy(&tracks.mic_raw[tracks.mic_raw.len() - tail..]);
+        let clean = energy(&tracks.mic[tracks.mic.len() - tail..]);
+        let erle = 10.0 * (raw / clean.max(1.0)).log10();
+        assert!(
+            erle > 10.0,
+            "expected > 10 dB echo attenuation, got {erle:.1} dB"
+        );
+    }
+
+    /// Without system audio the mic passes through the finalizer unchanged.
+    #[test]
+    fn finalize_without_system_audio_is_passthrough() {
+        let mic = noise(48_000, 42);
+        let tracks = finalize_meeting_audio(&mic, 48_000, &[], 48_000);
+        assert_eq!(tracks.mic, tracks.mic_raw);
+        assert!(tracks.system.is_empty());
+    }
 }

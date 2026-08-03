@@ -2,8 +2,8 @@
 //!
 //! Inserts 10K varied `Action`s one-by-one through `actions::insert_action` and
 //! reports the achieved rate. Establishes a baseline number for the
-//! single-row, unbatched path so future batched-writer work (Phase 3, see
-//! `tauri-plan.md`) has something concrete to defend its improvements against.
+//! single-row, unbatched path so a future batched writer has something
+//! concrete to defend its improvements against.
 //!
 //! Run:
 //!

@@ -1,0 +1,43 @@
+[package]
+name = "gilb-assist-audio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Realtime audio front-end for live meeting suggestions: streaming resample, acoustic echo cancellation of the mic against system audio (speexdsp), VAD segmentation and the STT worker feeding gilb-assist"
+
+[dependencies]
+anyhow = { workspace = true }
+rubato = "0.16"
+# The STT worker task; whisper itself comes in via the SegmentTranscriber
+# trait — either the app side or this crate's optional `whisper` feature.
+async-trait = "0.1"
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+# Silero VAD (D12): a tiny neural voice detector, far more robust than the
+# energy VAD against keyboards/music/quiet speech. Optional — it pulls in
+# onnxruntime via `ort` (native lib, downloaded by its build script), which
+# the release pipeline must account for.
+voice_activity_detector = { version = "0.2", optional = true }
+
+# The tap types the pipeline consumes, the shared assist engine it feeds, and
+# the recording bus that marks meeting boundaries.
+gilb-record = { workspace = true }
+gilb-events = { workspace = true }
+gilb-assist = { workspace = true }
+gilb-transcribe = { workspace = true, optional = true }
+
+[features]
+# Real whisper.cpp transcription (heavy C++/GPU build); off for host tests.
+whisper = ["dep:gilb-transcribe", "gilb-transcribe/local-whisper"]
+# Neural VAD for segmentation; falls back to the energy VAD when unavailable.
+silero = ["dep:voice_activity_detector"]
+
+[dev-dependencies]
+# test-util unlocks paused time for the idle-unload test.
+tokio = { workspace = true, features = ["test-util"] }
+# Reads the real-speech fixture in the silero tests.
+hound = "3"
+# The realtime-whisper test resolves the model the app downloaded.
+gilb-config = { workspace = true }

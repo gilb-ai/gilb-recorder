@@ -18,6 +18,23 @@ use crate::state::AppState;
 /// Bundle id recorded for recordings started by hand (no detected app).
 const MANUAL_BUNDLE_ID: &str = "manual";
 
+/// Start/stop a recording from anywhere, without finding the tray first —
+/// which is the point: the moment worth recording is usually one where the
+/// user is looking at the other app, not at us.
+///
+/// `Cmd/Ctrl+Shift+R` rather than the tidier `Cmd+R` or `Cmd+M`: a global
+/// shortcut is taken from *every* app on the machine, so it must not be a
+/// combination something else needs. `Cmd+R` reloads in every browser and
+/// editor; `Cmd+M` minimises windows on macOS. Adding Shift costs nothing and
+/// steals nothing anyone will miss.
+pub const RECORD_SHORTCUT: &str = "CmdOrCtrl+Shift+R";
+
+/// Bind [`RECORD_SHORTCUT`] to [`toggle`]. Best-effort: if another app already
+/// owns the combination the tray still works, and the shell logs why.
+pub fn register_shortcut(app: &AppHandle) {
+    gilb_shell_tauri::shortcut::register(app, RECORD_SHORTCUT, toggle);
+}
+
 /// An in-flight arm older than this is considered lost (e.g. the pipeline
 /// ignored it because another capture was already active) and stops blocking
 /// the toggle.

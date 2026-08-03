@@ -12,7 +12,6 @@
 
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -303,6 +302,3 @@ fn read_string_attr(element: AXUIElementRef, attr: CFString) -> Option<String> {
 // SAFETY: `AxWorker` only holds a `crossbeam` sender which is Send + Sync.
 unsafe impl Send for AxWorker {}
 unsafe impl Sync for AxWorker {}
-
-#[allow(dead_code)]
-struct _AssertSendSync(Arc<AxWorker>);

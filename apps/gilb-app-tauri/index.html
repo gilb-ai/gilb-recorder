@@ -67,27 +67,6 @@
         <h1 class="settings-title" id="settings-title" data-i18n="settings.title">Settings</h1>
 
         <div class="settings-body">
-          <div class="settings-row">
-            <div class="settings-row-text">
-              <span class="settings-row-label" id="meeting-label" data-i18n="settings.meetingLabel">
-                Enable meeting detection
-              </span>
-              <span class="settings-row-desc" data-i18n="settings.meetingDesc">
-                We'll catch the start of every call and offer to record.
-              </span>
-            </div>
-            <button
-              id="toggle-meeting"
-              class="toggle"
-              type="button"
-              role="switch"
-              aria-checked="false"
-              aria-labelledby="meeting-label"
-            >
-              <span class="toggle-knob" aria-hidden="true"></span>
-            </button>
-          </div>
-
           <div class="settings-row settings-row-stacked" id="transcription-row">
             <div class="settings-row-text">
               <span class="settings-row-label" data-i18n="settings.transcription">Transcription</span>
@@ -127,6 +106,57 @@
               </select>
             </label>
           </div>
+
+          <!-- One section for the assistant, because these are one
+               decision: what it runs on and who gets to see it. They were two
+               rows, which made the visibility switch read as a separate
+               feature rather than a property of the panel above it.
+
+               The model choices come from the agent itself over ACP, so the
+               model lines stay hidden until it has answered — the switch does
+               not wait for them. -->
+          <div class="settings-row settings-row-stacked" id="assist-settings-row" hidden>
+            <div class="settings-row-text">
+              <span class="settings-row-label" data-i18n="assist.settingsTitle">Realtime Assistant</span>
+              <span class="settings-row-desc" data-i18n="assist.settingsDesc">
+                Suggestions during a live call. Speed matters more than depth
+                here, so a fast model usually beats a clever one — this only
+                affects suggestions, your agent's own setup is untouched.
+              </span>
+            </div>
+
+            <label class="model-lang" id="assist-model-wrap" hidden>
+              <span class="settings-row-label" data-i18n="assist.model">Model</span>
+              <select id="select-assist-model" class="key-input"></select>
+            </label>
+            <label class="model-lang" id="assist-effort-wrap" hidden>
+              <span class="settings-row-label" data-i18n="assist.effort">Effort</span>
+              <select id="select-assist-effort" class="key-input"></select>
+            </label>
+
+            <div class="settings-subrow">
+              <div class="settings-row-text">
+                <span class="settings-row-label" id="assist-capture-label" data-i18n="assist.captureLabel">
+                  Visible on screen shares
+                </span>
+                <span class="settings-row-desc" data-i18n="assist.captureDesc">
+                  Off, the panel stays out of recordings and shared screens —
+                  only you see it. On, everyone you share with sees it, which
+                  is what you want when demoing the assistant itself.
+                </span>
+              </div>
+              <button
+                id="toggle-assist-capture"
+                class="toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="assist-capture-label"
+              >
+                <span class="toggle-knob" aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <div class="settings-actions">
@@ -163,17 +193,97 @@
           </span>
         </div>
 
-        <div class="track" id="track-row">
-          <span class="track-state">
-            <span class="track-dot" id="track-dot" aria-hidden="true"></span>
-            <span id="track-label" data-i18n="capture.trackingLabel">Activity tracking</span>
-          </span>
-          <button id="btn-track-toggle" class="track-btn" type="button" data-i18n="capture.pause">
-            Pause
-          </button>
-        </div>
-
         <p id="message" class="message" role="status" aria-live="polite"></p>
+      </section>
+
+      <!-- The switches are their own card: the one above answers "what is
+           happening right now", this one "what is turned on". Two questions,
+           two boxes — a single card made the live indicator and the settings
+           read as one list (docs/ui-design.md).
+
+           No caption. Three switches, each already labelled with what it does,
+           do not need a heading to announce that they are switches — and each
+           was boxed in its own outline inside the card, which made them read
+           as items in a list rather than as the controls this card is for. -->
+      <section class="card card-switches">
+        <div class="card-toggles">
+          <div class="settings-row" id="track-row">
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="track-label-row">
+                <span class="track-dot" id="track-dot" aria-hidden="true"></span>
+                <span data-i18n="capture.trackingLabel">Activity tracking</span>
+              </span>
+              <span class="settings-row-desc" data-i18n="capture.trackingDesc">
+                Windows you open, keys you type, clicks, scrolling and the clipboard —
+                recorded to this Mac.
+              </span>
+            </div>
+            <button
+              id="btn-track-toggle"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="track-label-row"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <div class="settings-row">
+            <div class="settings-row-text">
+              <span class="settings-row-label" id="meeting-label" data-i18n="settings.meetingLabel">
+                Meeting detection
+              </span>
+              <span class="settings-row-desc" data-i18n="settings.meetingDesc">
+                We'll notice when a call starts and offer to record it.
+              </span>
+            </div>
+            <button
+              id="toggle-meeting"
+              class="toggle"
+              type="button"
+              role="switch"
+              aria-checked="false"
+              aria-labelledby="meeting-label"
+            >
+              <span class="toggle-knob" aria-hidden="true"></span>
+            </button>
+          </div>
+
+          <!-- Hidden until the backend reports the feature can run at all
+               (assist_status.available) — in gilb, that the agent CLI is
+               installed. -->
+          <div class="settings-row settings-row-stacked assist-row" id="assist-row" hidden>
+            <div class="assist-row-main">
+              <div class="settings-row-text">
+                <span class="settings-row-label" id="assist-label" data-i18n="assist.label">
+                  Realtime Assistant
+                </span>
+                <span class="settings-row-desc" id="assist-desc" data-i18n="assist.desc">
+                  During a meeting, suggestions appear over the other windows.
+                </span>
+                <!-- Shown once the switch is on and no agent is chosen yet.
+                     Buttons rather than a <select>: with two or three options
+                     the choice is the whole screen, and a dropdown hides it. -->
+                <div class="agent-picker" id="assist-agents" hidden></div>
+              </div>
+              <button
+                id="toggle-assist"
+                class="toggle"
+                type="button"
+                role="switch"
+                aria-checked="false"
+                aria-labelledby="assist-label"
+              >
+                <span class="toggle-knob" aria-hidden="true"></span>
+              </button>
+            </div>
+            <div id="assist-progress" class="model-progress" hidden>
+              <div id="assist-progress-bar" class="model-progress-bar"></div>
+            </div>
+          </div>
+        </div>
       </section>
 
       <section class="card auth" id="auth-card">

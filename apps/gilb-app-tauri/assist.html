@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- assist-root: the overlay is a transparent window, so the root element must
+     not paint the app background :root sets for every other page. -->
+<html lang="en" class="assist-root">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="stylesheet" href="/src/styles.css" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Assist</title>
+    <script type="module" src="/src/assist.ts" defer></script>
+  </head>
+  <body class="assist-window">
+    <main class="assist" id="assist-panel">
+      <!-- "deep": dragging works anywhere in the bar; the shim still lets
+           clicks through to buttons and inputs, which block dragging. -->
+      <header class="assist-bar" id="assist-bar-region" data-tauri-drag-region="deep">
+        <span class="assist-dot" id="assist-dot" aria-hidden="true"></span>
+        <span class="assist-title" data-i18n="assist.title">Realtime Assistant</span>
+        <span class="assist-nav" id="assist-nav" hidden>
+          <button id="assist-prev" type="button" title="Previous" data-i18n-title="assist.prev">‹</button>
+          <span id="assist-pos"></span>
+          <button id="assist-next" type="button" title="Next" data-i18n-title="assist.next">›</button>
+        </span>
+        <button id="assist-hide" type="button" data-i18n="assist.hide">Hide</button>
+      </header>
+
+      <section class="assist-content" id="assist-content">
+        <p class="assist-empty" id="assist-empty" data-i18n="assist.idle">
+          Not recording — start one (⌘⇧R) and I'll listen.
+        </p>
+      </section>
+
+      <p class="assist-error" id="assist-error" hidden></p>
+
+      <form class="assist-ask" id="assist-form">
+        <input
+          id="assist-input"
+          type="text"
+          autocomplete="off"
+          data-i18n-placeholder="assist.askPlaceholder"
+          placeholder="Ask about the conversation… (Enter)"
+        />
+      </form>
+    </main>
+  </body>
+</html>

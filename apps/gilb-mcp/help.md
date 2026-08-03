@@ -35,8 +35,11 @@ The main table is `actions`. One row per atomic user action:
 Other tables:
 
 - `sessions` — Start → Stop boundaries.
-- `health_events` — capture diagnostics (dropped events, sleep/wake, AX
-  timeouts).
+- `health_events` — capture diagnostics (dropped events, capture
+  start/stop). **Currently always empty**: the capture pipeline broadcasts
+  these to the app UI live and nothing persists them yet. An empty result
+  therefore means "not recorded", *not* "nothing went wrong" — do not
+  conclude from it that no events were dropped.
 - `tree_snapshots` — one row per focused-window change that the
   snapshotter decided was substantively different (SimHash-deduped) from
   the previous one. Captures the AX tree of the focused window as a JSON
@@ -102,7 +105,7 @@ Units: `s`/`m`/`h`/`d`/`w`. If unset, each tool picks a sensible default
 | `gilb_activity_summary` | per-range aggregate: totals, per-kind, top apps, top text snippets |
 | `gilb_list_tree_snapshots` | a11y tree snapshots metadata (id, app, window, browser_url, simhash, json_bytes) |
 | `gilb_get_tree_snapshot` | full AX tree (parsed JSON) for one snapshot id |
-| `gilb_list_health_events` | diagnostic events (drops, sleep/wake) |
+| `gilb_list_health_events` | diagnostic events (drops, start/stop) — not yet persisted, always empty |
 | `gilb_list_meetings` | recorded meetings, newest first, with has_transcript flag |
 | `gilb_get_transcript` | one meeting's transcript: text + speaker-tagged (Me/Others) segments |
 

@@ -42,11 +42,3 @@ pub async fn stop_session(db: &Db, session_id: SessionId, reason: impl AsRef<str
         .await?;
     Ok(())
 }
-
-/// Count of sessions that are still recording (no `stopped_at`).
-pub async fn active_session_count(db: &Db) -> Result<i64> {
-    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM sessions WHERE stopped_at IS NULL")
-        .fetch_one(db)
-        .await?;
-    Ok(row.0)
-}

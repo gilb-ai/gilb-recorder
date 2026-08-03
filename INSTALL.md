@@ -1,7 +1,9 @@
 # Installing gilb
 
-This guide is for people receiving a signed `gilb.dmg` and installing
-it on their own Mac. For build instructions, see
+This guide covers installing the signed macOS build (`.dmg`) from a
+GitHub Release. Windows ships an NSIS installer from the same release;
+the permissions section below is macOS-specific, the rest applies to
+both. For build and release instructions, see
 [`RELEASING.md`](./RELEASING.md).
 
 ## What gilb does
@@ -9,13 +11,22 @@ it on their own Mac. For build instructions, see
 gilb is a macOS desktop app that records your on-screen activity —
 clicks, typed text, navigation keys, scrolls, clipboard, focus
 changes — through the macOS Accessibility API. Each event is written
-to a local SQLite database at `~/.gilb/db.sqlite`.
+to a local SQLite database at `~/Documents/Gilb/db.sqlite`.
 
-Everything stays on your machine. gilb makes no network calls, sends
-no telemetry, and uploads nothing. The `.app` also ships a
-read-only MCP server (`gilb-mcp`) bundled inside it — see the
-"Querying recorded activity" section below for how to point an LLM
-client at it.
+It also records meetings: when a video-conference app starts a call,
+gilb captures the screen and audio to `~/Documents/Gilb/meetings/` and, once
+the call ends, transcribes it on your own machine.
+
+Your recordings stay on your machine — nothing is uploaded, and there
+is no telemetry. gilb does make three network calls, all of them
+optional or visible: it checks GitHub for a new version (at launch and
+every 6 hours), downloads the speech model if you enable transcription,
+and, if you turn on real-time suggestions, sends the live conversation
+to the agent you configured.
+
+The `.app` also ships a read-only MCP server (`gilb-mcp`) bundled
+inside it — see "Querying recorded activity" below for how to point an
+LLM client at it.
 
 After the first launch, gilb registers itself as a macOS Login Item
 and starts at every login. When both permissions are granted it
@@ -116,7 +127,7 @@ The `.app` bundle ships a read-only MCP server, `gilb-mcp`, at:
 /Applications/Gilb.app/Contents/MacOS/gilb-mcp
 ```
 
-It reads `~/.gilb/db.sqlite` directly over stdio MCP transport. It
+It reads `~/Documents/Gilb/db.sqlite` directly over stdio MCP transport. It
 does not need `Gilb.app` itself to be running. To wire it into
 Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
@@ -135,18 +146,32 @@ binary. Restart the client after editing the config.
 
 ## Where your data lives
 
-| Path                            | What it is                                  |
-|---------------------------------|---------------------------------------------|
-| `~/.gilb/db.sqlite`             | All recorded actions and sessions (SQLite). |
-| `~/.gilb/db.sqlite-wal`, `-shm` | SQLite write-ahead-log companion files.     |
+Everything is in **one visible folder** you can open, back up or delete
+like any other — `~/Documents/Gilb` on macOS,
+`%USERPROFILE%\Documents\Gilb` on Windows (wherever Windows actually
+puts your Documents, including a OneDrive-redirected one):
 
-Nothing is written outside `~/.gilb/` and nothing leaves your machine
-unless you explicitly export it. Release builds intentionally do not
-write a log file; if you need verbose diagnostics, the build can be
-re-cut from source as a dev build.
+| Path                     | What it is                                        |
+|--------------------------|---------------------------------------------------|
+| `db.sqlite`              | All recorded actions, sessions and transcripts.   |
+| `db.sqlite-wal`, `-shm`  | SQLite write-ahead-log companion files.           |
+| `meetings/<timestamp>/`  | One folder per meeting: `video.mp4`, `audio.wav`. |
+| `models/`                | The speech model, if you enabled transcription.   |
+| `prompts/`               | `realtime_assist.md` — the suggestions prompt.    |
+| `logs/`                  | Daily-rotated app log.                            |
+| `prefs.json`             | Your settings.                                    |
 
-To wipe the recording history, quit `Gilb` and delete `~/.gilb/`.
-A new database is created on next launch.
+Nothing is written outside that folder, and nothing leaves your machine
+except as described under "What gilb does" above.
+
+Earlier versions kept all of this in a hidden `~/.gilb`. The first launch
+after updating moves it into Documents for you — nothing is copied or
+re-downloaded, and if the move cannot be made the old folder is left
+untouched and the app says so in its log.
+
+To wipe everything, quit `Gilb` and delete the folder; a new database is
+created on next launch. The meeting folders are the bulky part — video,
+at meeting length.
 
 ## Storage format caveat
 
@@ -166,7 +191,7 @@ before upgrading.
    ```
    (Or System Settings → General → Login Items → uncheck `Gilb`.)
 3. Drag `Gilb.app` from `/Applications` to the Trash.
-4. Optionally, remove `~/.gilb/` to delete all recorded data.
+4. Optionally, remove `~/Documents/Gilb/` to delete all recorded data.
 5. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
    removed).

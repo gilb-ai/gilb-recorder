@@ -1,6 +1,6 @@
 # gilb-mcp
 
-Stdio MCP server exposing the user's recorded activity (`~/.gilb/db.sqlite`)
+Stdio MCP server exposing the user's recorded activity (`<Documents>/Gilb/db.sqlite`)
 to Claude Code / any MCP-aware client.
 
 This crate is read-only — the writer is `gilb-app-tauri`. SQLite WAL mode
@@ -26,7 +26,7 @@ Or hand-edit `~/.claude.json` / project-level `.mcp.json`:
 {
   "mcpServers": {
     "gilb": {
-      "command": "/Users/leonid/src/gilb/target/release/gilb-mcp",
+      "command": "/path/to/gilb-recorder/target/release/gilb-mcp",
       "args": [],
       "env": {}
     }
@@ -47,7 +47,7 @@ Or hand-edit `~/.claude.json` / project-level `.mcp.json`:
 }
 ```
 
-By default the binary opens `$HOME/.gilb/db.sqlite` (same path as the Tauri
+By default the binary opens `<Documents>/Gilb/db.sqlite` (same path as the Tauri
 app).
 
 ## Quick smoke test
@@ -77,7 +77,7 @@ For interactive exploration: `npx @modelcontextprotocol/inspector
 | `gilb_activity_summary` | Aggregated overview for a range |
 | `gilb_list_tree_snapshots` | a11y tree snapshot metadata (id, app, browser_url, simhash, json_bytes) |
 | `gilb_get_tree_snapshot` | Full AX tree (parsed JSON) for one snapshot id |
-| `gilb_list_health_events` | Capture diagnostics |
+| `gilb_list_health_events` | Capture diagnostics (not yet persisted — always empty) |
 
 See `help.md` for query examples and the `range` parameter format.
 
@@ -85,7 +85,7 @@ See `help.md` for query examples and the `range` parameter format.
 
 Errors and `tracing` output go to **stderr** — stdout is reserved for the
 JSON-RPC framing. Set `RUST_LOG=debug` to crank verbosity. The Tauri app
-already writes its own log to `~/.gilb/logs/`; `gilb-mcp` doesn't open that
+already writes its own log to the data folder's `logs/`; `gilb-mcp` doesn't open that
 file.
 
 ## What's not in v0

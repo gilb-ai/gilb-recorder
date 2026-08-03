@@ -11,7 +11,7 @@ use gilb_db::open_db;
 use gilb_db::transcripts::get_transcript;
 use gilb_transcribe::{
     suppress_mic_echoes, transcribe_meeting, voiced_fraction, voiced_mask, voiced_secs, Channel,
-    Segment, Transcriber, Utterance, MODEL,
+    Segment, Transcriber, Utterance, MIN_VOICED_SECS, MODEL,
 };
 use uuid::Uuid;
 
@@ -46,6 +46,46 @@ fn voiced_mask_marks_silence_unvoiced() {
     let mask = voiced_mask(&silence);
     assert!(mask.iter().all(|&v| !v), "pure silence must be unvoiced");
     assert_eq!(voiced_secs(&mask), 0.0);
+}
+
+#[test]
+fn voiced_mask_hears_speech_that_is_a_sliver_of_the_recording() {
+    // The shape that used to be thrown away whole: a 60 s recording holding
+    // 1 s of speech. Every percentile up to the 95th is room tone, so a
+    // short-circuit that asked one of them declared the file silent and
+    // returned nothing — which is what a real 2-minute meeting did, its
+    // 1.1 s of speech being 0.89% of the frames.
+    let mut s = vec![0.0_f32; 16_000 * 60];
+    for (i, sample) in s.iter_mut().take(16_000).enumerate() {
+        *sample = if i % 2 == 0 { 0.4 } else { -0.4 };
+    }
+    let mask = voiced_mask(&s);
+    let secs = voiced_secs(&mask);
+    assert!(
+        (0.8..1.2).contains(&secs),
+        "the one voiced second must survive, got {secs}"
+    );
+    assert!(
+        secs >= MIN_VOICED_SECS,
+        "and clear the bar for transcribing the channel at all"
+    );
+}
+
+#[test]
+fn voiced_mask_still_declines_a_lone_click_in_silence() {
+    // The other side of that trade: an impulse is loud enough to pass the
+    // "any speech at all" question, and must still not buy a Whisper pass —
+    // silence plus a door slam is where the "Thank you." hallucinations come
+    // from. The voiced-time floor is what declines it.
+    let mut s = vec![0.0_f32; 16_000 * 60];
+    for (i, sample) in s.iter_mut().skip(16_000).take(160).enumerate() {
+        *sample = if i % 2 == 0 { 0.8 } else { -0.8 };
+    }
+    let secs = voiced_secs(&voiced_mask(&s));
+    assert!(
+        secs < MIN_VOICED_SECS,
+        "10 ms of click must not qualify as speech, got {secs}"
+    );
 }
 
 #[test]

@@ -7,11 +7,13 @@ use std::ffi::c_void;
 // CoreGraphics Input Monitoring access. `CGPreflightListenEventAccess`
 // returns true when the process is approved for Accessibility OR Input
 // Monitoring — which is exactly the signal our recorder needs (the
-// underlying `CGEventTap` honours both grants).
+// underlying `CGEventTap` honours both grants). There is no `CGRequest…`
+// counterpart here on purpose: the splash screen sends the user to the
+// System Settings pane instead, because the OS shows its own prompt at
+// most once and a user who dismissed it would have no way back.
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     pub fn CGPreflightListenEventAccess() -> bool;
-    pub fn CGRequestListenEventAccess() -> bool;
 
     // Screen Recording access (macOS 10.15+). `CGPreflight…` is a
     // polling-safe status probe; `CGRequest…` registers the process with

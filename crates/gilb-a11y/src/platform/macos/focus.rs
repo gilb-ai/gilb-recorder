@@ -16,8 +16,7 @@ use accessibility_sys::{
 use core_foundation::array::{CFArray, CFArrayRef};
 use core_foundation::base::{CFGetTypeID, CFRelease, CFTypeRef, TCFType};
 use core_foundation::string::{CFString, CFStringRef};
-use objc2::rc::Retained;
-use objc2_app_kit::{NSRunningApplication, NSWorkspace};
+use objc2_app_kit::NSWorkspace;
 use objc2_foundation::NSString;
 
 use gilb_core::AppInfo;
@@ -259,11 +258,6 @@ fn read_string_attr(element: AXUIElementRef, attr: &str) -> Option<String> {
         None
     };
     s.filter(|t| !t.is_empty())
-}
-
-#[allow(dead_code)]
-fn first_running_app() -> Option<Retained<NSRunningApplication>> {
-    NSWorkspace::sharedWorkspace().frontmostApplication()
 }
 
 fn ns_string_to_rust(s: Option<&NSString>) -> Option<String> {

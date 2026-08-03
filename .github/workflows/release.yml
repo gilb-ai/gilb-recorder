@@ -11,7 +11,7 @@ name: Release
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD   its password ("" if none)
 #   APPLE_CERTIFICATE                    base64 of the Developer ID .p12
 #   APPLE_CERTIFICATE_PASSWORD           .p12 password
-#   APPLE_SIGNING_IDENTITY               e.g. "Developer ID Application: … (83856566PM)"
+#   APPLE_SIGNING_IDENTITY               e.g. "Developer ID Application: NAME (TEAMID)"
 #   APPLE_API_ISSUER                     App Store Connect API issuer id
 #   APPLE_API_KEY                        App Store Connect API key id
 #   APPLE_API_KEY_BASE64                 base64 of the AuthKey_*.p8

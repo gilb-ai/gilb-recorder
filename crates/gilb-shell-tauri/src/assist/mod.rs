@@ -1,0 +1,784 @@
+//! Real-time meeting suggestions, host side: the overlay window, its commands
+//! and hotkey, the user-facing switch, the whisper-model gate with its
+//! download, and the wiring of the audio pipeline into webview events.
+//!
+//! Everything here is the same for any product that ships the feature, which is
+//! why it lives in the shell rather than in an app. What differs is small and
+//! arrives through [`AssistHost`]: whether the feature is available at all
+//! (gilb needs the agent binary; a hosted product needs a signed-in
+//! workspace), which [`AssistConfig`]/[`AssistBackend`] pair to run, and the
+//! strings a user sees.
+//!
+//! ## Contract with the webview
+//!
+//! The overlay (`assist.html`, shared frontend behind `VITE_FEATURE_ASSIST`)
+//! listens for:
+//!
+//! ```text
+//! assist://update    { text }      markdown, ready to render
+//! assist://state     { loading }
+//! assist://error     { message }
+//! assist://listening { on }        whether a recording is feeding it
+//! ```
+//!
+//! and the main window listens for `assist-status` ([`AssistStatus`]), which is
+//! pushed on every transition so a settings card follows sign-in, download
+//! progress and teardown without polling.
+//!
+//! The window is created hidden at wiring time so those listeners are
+//! registered before the first suggestion, and surfaces when a recording
+//! arms: someone who just started a call should see that something is
+//! listening, not have to remember a hotkey. Between meetings it stays out
+//! of the way, and an explicit hide is remembered until the next one.
+
+mod download;
+mod journal;
+mod window;
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use download::{start_model_download, ModelDownload};
+use journal::{close_journal, journal, open_journal, Journal, Kind};
+use window::{
+    apply_capture_visibility, auto_show_suppressed, emit_listening, ensure_window,
+    register_shortcut, set_auto_show_suppressed, show_window, visible_in_capture,
+};
+
+use anyhow::Result;
+use gilb_assist::{AssistBackend, AssistConfig, AssistEvent, AssistHandle, EngineParams};
+use gilb_assist_audio::{
+    spawn_assist_pipeline, AssistPipeline, AssistPipelineConfig, LocalTranscriber, SharedModel,
+    WhisperTranscriber,
+};
+use tauri::{AppHandle, Emitter, Manager};
+use tracing::{info, warn};
+
+use crate::AudioTapHandle;
+
+pub const ASSIST_WINDOW: &str = "assist";
+
+/// The whisper build both products ship, from gilb-config so transcription and
+/// suggestions cannot drift apart. Gating the feature on a ~570 MB download
+/// rather than bundling it keeps the installer light (D9).
+pub const DEFAULT_MODEL_URL: &str = gilb_config::TRANSCRIBE_MODEL_URL;
+
+/// What the product brings to the shared machinery.
+pub trait AssistHost: Send + Sync + 'static {
+    /// Can the feature run at all right now? Gilb answers "the agent binary is
+    /// installed"; a product whose prompt and model endpoint come from a
+    /// server answers "signed in". A `false` here hides the feature in the
+    /// UI and refuses to wire it, without touching the user's preference.
+    fn available(&self) -> bool {
+        true
+    }
+
+    /// The two halves of the engine. Called on every wiring, so a product may
+    /// rebuild them when its own state changed (a new session, a new agent).
+    fn engine(&self) -> Result<(Box<dyn AssistConfig>, Box<dyn AssistBackend>)>;
+
+    /// Language passed to the local transcriber. `"auto"` costs an extra probe
+    /// pass per buffer, so name the language when you know it.
+    fn language(&self) -> String {
+        "auto".to_string()
+    }
+
+    /// Where the whisper model is fetched from when the user turns the feature
+    /// on without it.
+    fn model_url(&self) -> String {
+        DEFAULT_MODEL_URL.to_string()
+    }
+
+    /// The process-wide whisper model, when the product already has one.
+    ///
+    /// Post-meeting transcription and realtime suggestions want the same ~570 MB
+    /// file, and a meeting ending while the panel is warm is exactly when both
+    /// are live. Returning the product's [`SharedModel`] makes that one load;
+    /// the default builds a private one, which is right for a product that
+    /// transcribes nowhere else.
+    fn shared_model(&self) -> Option<Arc<SharedModel<LocalTranscriber>>> {
+        None
+    }
+
+    /// The agents this product can run on, and whether each is installed.
+    ///
+    /// Empty — the default — means "no choice to make": the product decides,
+    /// and the UI shows no picker. gilb returns the coding CLIs it knows how
+    /// to reach, because on a machine with two of them the choice is whose
+    /// model sees the meeting, and that is the user's to make.
+    fn agents(&self) -> Vec<AgentChoice> {
+        Vec::new()
+    }
+
+    /// Do whatever "install" means for `agent_id`, blocking until it is
+    /// usable. Called off the UI thread when the user picks one.
+    ///
+    /// For gilb this warms (and thereby downloads) the ACP adapter and proves
+    /// it answers — install and verification in one, because an adapter that
+    /// downloaded but does not speak the protocol is not installed in any
+    /// sense the user cares about.
+    fn prepare(&self, _agent_id: &str) -> Result<()> {
+        Ok(())
+    }
+
+    /// The session knobs the current agent advertises (model, effort), for a
+    /// settings screen. Costs an agent start, so the shell caches the answer;
+    /// the default says "nothing to configure".
+    fn session_options(&self) -> Result<Vec<SessionOptionInfo>> {
+        Ok(Vec::new())
+    }
+
+    /// The folder to file this meeting's questions and suggestions in — its
+    /// own folder, alongside the recording. `None` — the default — keeps no
+    /// record.
+    ///
+    /// Called on the first entry, not when the recording arms: at arming the
+    /// meeting exists but its folder may not be recorded yet.
+    fn journal_dir(&self, _meeting_id: i64) -> Option<PathBuf> {
+        None
+    }
+
+    /// User-visible text. Kept out of the shared code because it carries the
+    /// product's name and voice.
+    fn strings(&self) -> AssistStrings;
+}
+
+/// A session knob and its choices, as a settings screen renders them.
+#[derive(Clone, serde::Serialize)]
+pub struct SessionOptionInfo {
+    /// ACP `configId` (`"model"`, `"effort"`). Persisted; never shown.
+    pub id: String,
+    /// The agent's own name for it.
+    pub name: String,
+    /// The agent's default, shown as what "Agent default" currently means.
+    pub agent_default: String,
+    pub choices: Vec<SessionChoiceInfo>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct SessionChoiceInfo {
+    pub value: String,
+    pub label: String,
+}
+
+/// One agent a user can pick, as the picker shows it.
+#[derive(Clone, serde::Serialize)]
+pub struct AgentChoice {
+    /// Stable id, persisted in prefs. Not shown.
+    pub id: String,
+    /// What to call it in the UI.
+    pub label: String,
+    /// Whether its CLI is on this machine. A missing one is still listed —
+    /// "Codex (not installed)" tells the user what their options are, which an
+    /// absence cannot.
+    pub installed: bool,
+}
+
+/// The few strings the shared glue has to show.
+#[derive(Clone)]
+pub struct AssistStrings {
+    /// Overlay window title (invisible with `decorations(false)`, but it is
+    /// what the OS window list shows).
+    pub window_title: String,
+    /// Notification title.
+    pub app_name: String,
+    pub model_downloaded: String,
+    pub model_failed: String,
+    /// Refusal returned to the webview when the switch is flipped on while the
+    /// feature is unavailable.
+    pub unavailable: String,
+}
+
+/// The wired stack. Lives in a slot so the switch can tear it down (dropping
+/// the pipeline aborts its tasks and, once every handle is gone, ends the
+/// engine) and build it back up without a restart.
+pub struct AssistState {
+    host: Box<dyn AssistHost>,
+    wired: parking_lot::Mutex<Option<Wired>>,
+    shortcut_registered: AtomicBool,
+    /// The user hid the panel by hand. Suggestions keep arriving into it, but
+    /// it stops popping itself back up — until they reopen it or the next
+    /// meeting starts. Fighting an explicit close is worse than a missed
+    /// suggestion.
+    auto_show_suppressed: AtomicBool,
+    download: ModelDownload,
+    /// An agent install is in flight. Kept here rather than in the frontend so
+    /// a reopened window sees it, and so two clicks cannot start two installs.
+    preparing: AtomicBool,
+    /// Cached [`AssistHost::session_options`] — probing costs an agent start.
+    /// Cleared when the agent changes; the knobs belong to the agent.
+    session_options: parking_lot::Mutex<Option<Vec<SessionOptionInfo>>>,
+    /// This meeting's record of questions and suggestions. Armed with the
+    /// meeting when a recording starts, emptied when it ends.
+    journal: parking_lot::Mutex<Journal>,
+}
+
+struct Wired {
+    handle: AssistHandle,
+    _pipeline: AssistPipeline,
+    /// The meeting-boundary listener. Held so it dies with the stack it
+    /// belongs to: it loops on a broadcast receiver that never closes, so a
+    /// rewire would otherwise leave the previous one running and every
+    /// meeting would be opened, announced and journalled twice over.
+    boundary: tauri::async_runtime::JoinHandle<()>,
+}
+
+impl Drop for Wired {
+    fn drop(&mut self) {
+        self.boundary.abort();
+    }
+}
+
+/// What a settings card renders: whether the feature is available at all, what
+/// it is still missing, and whether it is actually running.
+#[derive(Clone, serde::Serialize)]
+pub struct AssistStatus {
+    /// Product-level availability ([`AssistHost::available`]). `false` hides
+    /// the whole control: there is nothing to turn on.
+    pub available: bool,
+    pub model_ready: bool,
+    pub downloading: bool,
+    /// Download progress; meaningless unless `downloading`.
+    pub percent: u8,
+    /// Effective state: on only when everything it needs is in place, so a
+    /// stale "on" preference never renders as a working feature.
+    pub enabled: bool,
+    /// What the user asked for, whatever the feature can currently do. The
+    /// switch renders from this while something is still missing — flipping it
+    /// on and watching it spring back to off, because an agent is not chosen
+    /// yet, reads as the app refusing rather than as a step remaining.
+    pub wanted: bool,
+    /// Agents the user can pick from ([`AssistHost::agents`]). Empty when the
+    /// product makes the choice itself.
+    pub agents: Vec<AgentChoice>,
+    /// The id they picked, if any. `None` with a non-empty `agents` is the
+    /// state that asks the question.
+    pub agent: Option<String>,
+    /// An agent is being installed right now — the switch is on, the feature
+    /// is not usable yet, and neither fact is an error.
+    pub preparing: bool,
+    /// Whether the panel is allowed to appear in screen recordings and shares.
+    pub visible_in_capture: bool,
+    /// Why it cannot run, in the product's words, when `available` is false.
+    /// Sent so the UI can say what is missing instead of hiding the control:
+    /// a feature that vanishes teaches the user nothing, and "where did the
+    /// suggestions go" has no answer they can act on.
+    pub unavailable: Option<String>,
+}
+
+fn state(app: &AppHandle) -> Option<tauri::State<'_, AssistState>> {
+    app.try_state::<AssistState>()
+}
+
+fn model_ready() -> bool {
+    gilb_config::transcribe_model_path()
+        .map(|p| p.exists())
+        .unwrap_or(false)
+}
+
+/// Whether the user-level switch is on (persisted in gilb-config prefs, so it
+/// survives restarts and is shared with any other surface that shows it).
+fn is_enabled() -> bool {
+    gilb_config::load_preferences().assist_enabled
+}
+
+pub fn status(app: &AppHandle) -> AssistStatus {
+    let Some(state) = state(app) else {
+        return AssistStatus {
+            available: false,
+            model_ready: model_ready(),
+            downloading: false,
+            percent: 0,
+            enabled: false,
+            wanted: false,
+            agents: Vec::new(),
+            agent: None,
+            preparing: false,
+            visible_in_capture: visible_in_capture(),
+            unavailable: None,
+        };
+    };
+    let available = state.host.available();
+    let downloading = state.download.active.load(Ordering::SeqCst);
+    AssistStatus {
+        available,
+        model_ready: model_ready(),
+        downloading,
+        percent: if downloading {
+            state.download.percent.load(Ordering::SeqCst)
+        } else {
+            0
+        },
+        enabled: available && model_ready() && is_enabled(),
+        wanted: is_enabled(),
+        agents: state.host.agents(),
+        agent: gilb_config::load_preferences().assist_agent,
+        preparing: state.preparing.load(Ordering::SeqCst),
+        visible_in_capture: visible_in_capture(),
+        unavailable: (!available).then(|| state.host.strings().unavailable),
+    }
+}
+
+/// Push the current state to the main window. Every transition goes through
+/// here so a settings card follows progress without polling.
+fn emit_status(app: &AppHandle) {
+    let _ = app.emit_to("main", "assist-status", status(app));
+}
+
+/// Set up the shared slots and, when the switch and the gates allow, wire the
+/// stack. Call once from the Tauri setup hook.
+pub fn init(app: &AppHandle, host: impl AssistHost) {
+    if state(app).is_none() {
+        app.manage(AssistState {
+            host: Box::new(host),
+            wired: parking_lot::Mutex::new(None),
+            shortcut_registered: AtomicBool::new(false),
+            auto_show_suppressed: AtomicBool::new(false),
+            download: ModelDownload::default(),
+            preparing: AtomicBool::new(false),
+            session_options: parking_lot::Mutex::new(None),
+            journal: parking_lot::Mutex::new(Journal::default()),
+        });
+    }
+    if is_enabled() {
+        wire(app);
+    } else {
+        info!("assist off: disabled by user preference");
+    }
+    emit_status(app);
+}
+
+/// Product-level availability changed — a sign-in, an agent CLI appearing.
+/// Wires or tears down without touching the user's preference.
+pub fn refresh(app: &AppHandle) {
+    let available = state(app).is_some_and(|s| s.host.available());
+    if available && is_enabled() {
+        wire(app);
+    } else {
+        cancel_download(app);
+        teardown(app);
+    }
+    emit_status(app);
+}
+
+/// The choice the stack was built from just changed — a different agent, a
+/// different model. Drop it and build a new one.
+///
+/// [`refresh`] alone cannot do this: it calls [`wire`], which returns early
+/// when a stack is already running, so a new agent or model was only picked up
+/// after a restart. The change lands on the next session; a meeting in
+/// progress simply starts a fresh conversation on the new settings.
+fn rewire(app: &AppHandle) {
+    teardown(app);
+    refresh(app);
+}
+
+/// Flip the user-level switch: persist it, then wire or tear down. Switching on
+/// without the model starts its download and wiring follows when it lands, so
+/// the UI needs no separate "download" button.
+fn set_enabled(app: &AppHandle, on: bool) {
+    if let Err(err) = gilb_config::update_preferences(|p| p.assist_enabled = on) {
+        warn!(error = %err, "failed to persist assist toggle");
+    }
+    if on {
+        if model_ready() {
+            wire(app);
+        } else {
+            start_model_download(app);
+        }
+    } else {
+        // Stop paying for a model the user just declined.
+        cancel_download(app);
+        teardown(app);
+    }
+    emit_status(app);
+}
+
+fn cancel_download(app: &AppHandle) {
+    if let Some(state) = state(app) {
+        state.download.cancel.store(true, Ordering::SeqCst);
+    }
+}
+
+/// Drop the pipeline (its tasks abort with it) and hide the overlay. The
+/// preference is untouched — losing availability uses this too.
+fn teardown(app: &AppHandle) {
+    if let Some(state) = state(app) {
+        if state.wired.lock().take().is_some() {
+            info!("assist pipeline torn down");
+        }
+    }
+    if let Some(window) = app.get_webview_window(ASSIST_WINDOW) {
+        let _ = window.hide();
+    }
+}
+
+/// Wire the stack. Quietly does nothing while the product says the feature is
+/// unavailable or the whisper model is missing — those are the two gates, and
+/// the status the UI renders explains both.
+fn wire(app: &AppHandle) {
+    let Some(state) = state(app) else { return };
+    if !state.host.available() {
+        info!("assist off: unavailable for this product state");
+        return;
+    }
+    let mut wired = state.wired.lock();
+    if wired.is_some() {
+        return; // already running
+    }
+    let model = match gilb_config::transcribe_model_path() {
+        Ok(path) if path.exists() => path,
+        Ok(path) => {
+            info!(model = %path.display(), "assist off: whisper model not downloaded");
+            return;
+        }
+        Err(err) => {
+            warn!(error = %err, "assist off: cannot resolve model path");
+            return;
+        }
+    };
+    let (config, backend) = match state.host.engine() {
+        Ok(halves) => halves,
+        Err(err) => {
+            warn!(error = %err, "assist off: product could not build the engine");
+            return;
+        }
+    };
+
+    // Everything below starts tokio tasks with a bare `tokio::spawn` (the
+    // engine, the audio pipeline, the STT worker), and wire() is called from
+    // places that are NOT inside the runtime: the Tauri setup hook, a
+    // synchronous command, an auth callback. Without entering the runtime here
+    // the first spawn aborts the process with "there is no reactor running".
+    let runtime = tauri::async_runtime::handle();
+    let _runtime_guard = runtime.inner().enter();
+
+    let (assist, mut events) = gilb_assist::spawn(config, backend, EngineParams::default());
+
+    let Some(tap) = app.try_state::<AudioTapHandle>() else {
+        // Same degrade-don't-panic rule as shortcut.rs: this crate is reused
+        // by shells whose setup ordering may not manage the pipeline's state.
+        warn!("assist off: no audio tap managed; meeting pipeline not spawned");
+        return;
+    };
+    // The recording bus marks meeting boundaries: each new meeting starts a
+    // fresh conversation (and a fresh stream clock, echo canceller and voice
+    // detector) instead of inheriting the previous client's context.
+    let Some(bus) = app.try_state::<gilb_events::EventBus>() else {
+        warn!("assist off: no event bus managed; meeting pipeline not spawned");
+        return;
+    };
+    let bus = (*bus).clone();
+    let bus_for_boundary = bus.clone();
+    let pipeline = spawn_assist_pipeline(
+        &tap.0,
+        match state.host.shared_model() {
+            Some(shared) => WhisperTranscriber::with_shared(model, state.host.language(), shared),
+            None => WhisperTranscriber::new(model, state.host.language()),
+        },
+        assist.clone(),
+        AssistPipelineConfig::default(),
+        Some(bus),
+    );
+
+    ensure_window(app);
+    emit_listening(app, false);
+    // Mark registered only on success: a transient failure (another app
+    // holding the key right now) must not kill the hotkey until a restart —
+    // the next wire() retries it.
+    if !state.shortcut_registered.load(Ordering::SeqCst) {
+        state
+            .shortcut_registered
+            .store(register_shortcut(app), Ordering::SeqCst);
+    }
+
+    // A new meeting is a fresh start for the panel too: a hide from the
+    // previous call should not silence this one.
+    let boundary = {
+        let app = app.clone();
+        let mut rx = bus_for_boundary.subscribe_recording();
+        tauri::async_runtime::spawn(async move {
+            while let Ok(msg) = rx.recv().await {
+                match msg.payload {
+                    gilb_events::RecordingEvent::Armed { meeting_id } => {
+                        set_auto_show_suppressed(&app, false);
+                        emit_listening(&app, true);
+                        // Up before the first suggestion, not after it. A
+                        // prompter you have to summon is one you forget you
+                        // have — and the empty panel is not empty here, it
+                        // says it is listening, which is the one thing
+                        // someone starting a call wants to know. It still
+                        // never steals focus, and ⌘\ still puts it away.
+                        show_window(&app);
+                        // File this meeting's suggestions next to its video
+                        // and audio. The id is what arming gives us; the
+                        // folder is looked up on the first entry.
+                        open_journal(&app, meeting_id);
+                    }
+                    gilb_events::RecordingEvent::Cancelled { .. } => {
+                        emit_listening(&app, false);
+                        close_journal(&app);
+                    }
+                }
+            }
+        })
+    };
+
+    *wired = Some(Wired {
+        handle: assist,
+        _pipeline: pipeline,
+        boundary,
+    });
+    drop(wired);
+
+    // Engine events → overlay webview. A suggestion surfaces the window;
+    // loading/error only update it.
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        while let Some(event) = events.recv().await {
+            match event {
+                AssistEvent::Loading(loading) => {
+                    let _ = app.emit_to(
+                        ASSIST_WINDOW,
+                        "assist://state",
+                        serde_json::json!({ "loading": loading }),
+                    );
+                }
+                AssistEvent::Update(text) => {
+                    journal(&app, Kind::Suggestion, &text);
+                    // Always delivered, so a reopened panel has the full
+                    // history; only the pop-up respects an explicit hide.
+                    if !auto_show_suppressed(&app) {
+                        show_window(&app);
+                    }
+                    let _ = app.emit_to(
+                        ASSIST_WINDOW,
+                        "assist://update",
+                        serde_json::json!({ "text": text }),
+                    );
+                }
+                AssistEvent::Error(message) => {
+                    let _ = app.emit_to(
+                        ASSIST_WINDOW,
+                        "assist://error",
+                        serde_json::json!({ "message": message }),
+                    );
+                }
+            }
+        }
+    });
+    info!("assist pipeline wired");
+}
+
+// ---------------------------------------------------------------------------
+// Commands — register them in the product's invoke_handler
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub fn assist_status(app: AppHandle) -> AssistStatus {
+    status(&app)
+}
+
+/// The switch. Turning it on while the product says the feature is unavailable
+/// is refused rather than silently persisting a preference that cannot take
+/// effect.
+#[tauri::command]
+pub fn assist_set_enabled(app: AppHandle, on: bool) -> Result<(), String> {
+    let Some(state) = state(&app) else {
+        return Err("assist is not set up".into());
+    };
+    // Turning it on while something is still missing is not an error when the
+    // user can finish the job from here: with agents to choose from, "on" is
+    // intent, and the picker is the next step. Refusing it — as this did —
+    // makes the switch spring back with a message, which is the app arguing
+    // with someone who is trying to set it up.
+    //
+    // Refuse only when there is nothing they could do about it: a product
+    // whose availability turns on something else entirely, like a sign-in.
+    if on && !state.host.available() && state.host.agents().is_empty() {
+        return Err(state.host.strings().unavailable);
+    }
+    set_enabled(&app, on);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn assist_ask(app: AppHandle, question: String) -> Result<(), String> {
+    let handle = state(&app).and_then(|s| s.wired.lock().as_ref().map(|w| w.handle.clone()));
+    match handle {
+        Some(handle) => {
+            // Recorded before sending: the question is the user's own words,
+            // and it belongs in the record whatever the model answers.
+            journal(&app, Kind::Question, &question);
+            handle.ask(question);
+            Ok(())
+        }
+        None => Err("assist is not active".into()),
+    }
+}
+
+// No click-through command: a window with ignore_cursor_events(true) also
+// ignores the control that would turn it off, so the overlay stayed inert until
+// the app restarted. The panel simply takes the mouse; the hotkey hides it.
+
+/// Pick the agent the suggestions run on, and install it if it needs
+/// installing.
+///
+/// The install is the point. Telling a user to go run an npm command is how a
+/// feature stays off forever; the flow that works is the one Zed and
+/// block/buzz use — show what is on the machine, let them pick, fetch the
+/// adapter yourself. [`AssistHost::prepare`] does the fetching and proves the
+/// result answers before we call it done.
+///
+/// Runs off the UI thread and reports through `assist-status`, because the
+/// first install downloads a package over the network.
+#[tauri::command]
+pub fn assist_choose_agent(app: AppHandle, agent: String) -> Result<(), String> {
+    let Some(shared) = state(&app) else {
+        return Err("assist is not set up".into());
+    };
+    // One install at a time: the second click would race the first for the
+    // same npx cache entry.
+    if shared.preparing.swap(true, Ordering::SeqCst) {
+        return Err("already installing".into());
+    }
+    if let Err(err) = gilb_config::update_preferences(|p| p.assist_agent = Some(agent.clone())) {
+        shared.preparing.store(false, Ordering::SeqCst);
+        return Err(format!("could not save the choice: {err}"));
+    }
+    // The knobs belong to the agent: a new agent means a new set, and a model
+    // chosen for the old one may not even exist on this one.
+    *shared.session_options.lock() = None;
+    if let Err(err) =
+        gilb_config::update_preferences(|p| (p.assist_model, p.assist_effort) = (None, None))
+    {
+        warn!(error = %err, "could not clear the session options");
+    }
+    emit_status(&app);
+
+    let app_bg = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let prepared = {
+            let app = app_bg.clone();
+            let agent = agent.clone();
+            // `prepare` spawns a process and waits on it — off the async
+            // runtime's shoulders.
+            tauri::async_runtime::spawn_blocking(move || {
+                state(&app)
+                    .map(|shared| shared.host.prepare(&agent))
+                    .unwrap_or(Ok(()))
+            })
+            .await
+        };
+        if let Some(shared) = state(&app_bg) {
+            shared.preparing.store(false, Ordering::SeqCst);
+        }
+        match prepared {
+            Ok(Ok(())) => {
+                info!(%agent, "assist agent ready");
+                // The agent changed, so anything already wired was built on
+                // the old one — rebuild rather than leave the meeting running
+                // on the agent the user just replaced.
+                rewire(&app_bg);
+            }
+            Ok(Err(err)) => {
+                warn!(error = %err, %agent, "assist agent install failed");
+                let _ = app_bg.emit_to(
+                    "main",
+                    "assist-error",
+                    serde_json::json!({ "message": err.to_string() }),
+                );
+                emit_status(&app_bg);
+            }
+            Err(err) => {
+                warn!(error = %err, %agent, "assist agent install task failed");
+                emit_status(&app_bg);
+            }
+        }
+    });
+    Ok(())
+}
+
+/// What the current agent lets a session configure, plus what the user chose.
+/// The probe starts the agent once; the answer is cached until the agent
+/// changes.
+#[derive(serde::Serialize)]
+pub struct SessionOptionsPayload {
+    pub options: Vec<SessionOptionInfo>,
+    /// The persisted choices (`None` = agent default).
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+#[tauri::command]
+pub async fn assist_session_options(app: AppHandle) -> Result<SessionOptionsPayload, String> {
+    let cached = state(&app).and_then(|s| s.session_options.lock().clone());
+    let options = match cached {
+        Some(options) => options,
+        None => {
+            let probe_app = app.clone();
+            let options = tauri::async_runtime::spawn_blocking(move || {
+                state(&probe_app)
+                    .map(|s| s.host.session_options())
+                    .unwrap_or_else(|| Ok(Vec::new()))
+            })
+            .await
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+            if let Some(s) = state(&app) {
+                *s.session_options.lock() = Some(options.clone());
+            }
+            options
+        }
+    };
+    let prefs = gilb_config::load_preferences();
+    Ok(SessionOptionsPayload {
+        options,
+        model: prefs.assist_model,
+        effort: prefs.assist_effort,
+    })
+}
+
+/// Persist a session knob and rebuild the pipeline so the *next* session runs
+/// on it. Empty value = back to the agent's default.
+#[tauri::command]
+pub fn assist_set_session_option(
+    app: AppHandle,
+    config_id: String,
+    value: String,
+) -> Result<(), String> {
+    let value = Some(value).filter(|v| !v.trim().is_empty());
+    let applied = match config_id.as_str() {
+        "model" => gilb_config::update_preferences(|p| p.assist_model = value),
+        "effort" => gilb_config::update_preferences(|p| p.assist_effort = value),
+        other => return Err(format!("unknown session option `{other}`")),
+    };
+    applied.map_err(|e| e.to_string())?;
+    // The knobs are read when the backend is built, so the stack has to be
+    // rebuilt for a new one to take effect.
+    rewire(&app);
+    Ok(())
+}
+
+/// Let the panel be seen in screen recordings and shares, or hide it again.
+///
+/// Off by default: the panel is a prompter and its content is for the person
+/// reading it. On is for demoing the assistant itself, where the whole point
+/// is that the other side sees it.
+#[tauri::command]
+pub fn assist_set_visible_in_capture(app: AppHandle, on: bool) -> Result<(), String> {
+    gilb_config::update_preferences(|p| p.assist_visible_in_capture = on)
+        .map_err(|err| err.to_string())?;
+    // Applied to the live window too: a switch that only took effect on the
+    // next panel would be flipped mid-demo and appear broken.
+    apply_capture_visibility(&app);
+    emit_status(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn assist_hide(app: AppHandle, window: tauri::WebviewWindow) {
+    let _ = window.hide();
+    set_auto_show_suppressed(&app, true);
+}

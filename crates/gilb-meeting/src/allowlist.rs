@@ -1,10 +1,9 @@
 //! Meeting-app allowlist.
 //!
 //! Maps bundle IDs of known meeting/telephony apps to a display name.
-//! Ported verbatim from the owner's rodnik app
-//! (`meetingDetection/allowlist.js`, `MEETING_APP_ALLOWLIST`). Shared
-//! between the macOS unified-log detector here and the Windows detector
-//! (GILB-30), so changes belong in this one place.
+//! Shared between the macOS unified-log detector and the Windows one, so
+//! an app added for one platform is recognised by both — changes belong
+//! in this one place.
 //!
 //! Browsers are intentionally omitted — they produce too many false
 //! positives from voice search and similar in-page audio.
@@ -38,9 +37,9 @@ const ALLOWLIST: &[(&str, &str)] = &[
 ];
 
 /// `(process_exe, bundle_id)` pairs mapping a Windows process to the
-/// bundle ID of the same meeting app. Ported verbatim from rodnik's
-/// `WINDOWS_PROCESS_MAP`; the keys are lowercase exe basenames (the
-/// match is case-insensitive — see [`bundle_id_from_process_name`]).
+/// bundle ID of the same meeting app. The keys are lowercase exe
+/// basenames (the match is case-insensitive — see
+/// [`bundle_id_from_process_name`]).
 ///
 /// WASAPI reports a session's process, not a bundle ID, so the Windows
 /// detector maps through here before reusing the shared allowlist.
@@ -73,8 +72,7 @@ const WINDOWS_PROCESS_MAP: &[(&str, &str)] = &[
 
 /// Bundle ID for a Windows process, or `None` if it is not a known
 /// meeting app. `process_name` may be a full path or a bare exe name;
-/// only the basename is matched, case-insensitively (port of rodnik
-/// `getBundleIdFromProcessName`).
+/// only the basename is matched, case-insensitively.
 pub fn bundle_id_from_process_name(process_name: &str) -> Option<&'static str> {
     let basename = process_name
         .rsplit(['\\', '/'])
