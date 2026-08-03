@@ -19,9 +19,9 @@
 //! adapter-shaped processes: this machine's owner runs `claude` and `codex`
 //! themselves, and a reaper that matched on names would kill the terminal
 //! session they are sitting in. Only groups this app started are recorded, and
-//! a recorded group is killed only if the live process still looks like what
-//! was recorded — a pid is reused eventually, and the thing wearing it next is
-//! not ours to kill.
+//! a recorded group is killed only if a live process in it still looks like
+//! what was recorded — a pid is reused eventually, and the thing wearing it
+//! next is not ours to kill.
 
 use std::path::Path;
 
@@ -67,7 +67,13 @@ fn write(path: &Path, entries: &[Entry]) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(err) = std::fs::write(path, format!("{value:#}\n")) {
+    // Temp file in the same directory + rename: a crash mid-write must not
+    // leave a truncated registry that `read` would then silently forget.
+    let tmp = path.with_extension("tmp");
+    let result =
+        std::fs::write(&tmp, format!("{value:#}\n")).and_then(|()| std::fs::rename(&tmp, path));
+    if let Err(err) = result {
+        let _ = std::fs::remove_file(&tmp);
         warn!(error = %err, path = %path.display(), "assist: could not record the agent group");
     }
 }
@@ -93,27 +99,33 @@ pub(crate) fn unregister(path: &Path, pgid: i32) {
     }
 }
 
-/// The command line of a running process, or `None` if it is gone.
+/// Command lines of every live process in the group (empty when it is gone).
 #[cfg(unix)]
-fn live_command(pid: i32) -> Option<String> {
-    let out = std::process::Command::new("ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
+fn group_commands(pgid: i32) -> Vec<String> {
+    let Ok(out) = std::process::Command::new("ps")
+        .args(["-eo", "pgid=,command="])
         .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    (!text.is_empty()).then_some(text)
+    else {
+        return Vec::new();
+    };
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| {
+            let (group, cmd) = line.trim_start().split_once(char::is_whitespace)?;
+            (group.parse::<i32>().ok()? == pgid).then(|| cmd.trim().to_string())
+        })
+        .collect()
 }
 
-/// Does the process wearing `pgid` still look like the agent we recorded?
+/// Does the recorded group still hold a process that looks like the agent we
+/// wrote down? ANY member counts: the npx wrapper we spawned may be long dead
+/// while the agent it started lives on in the same group.
 ///
 /// Compared on the binary's file name rather than the whole command: `npx`
 /// rewrites what it execs, so the recorded and live strings differ in ways
 /// that say nothing about identity, while the adapter's name survives.
 #[cfg(unix)]
 fn still_ours(pgid: i32, recorded: &str) -> bool {
-    let Some(live) = live_command(pgid) else {
-        return false;
-    };
     let marker = recorded
         .split_whitespace()
         .next_back()
@@ -121,14 +133,19 @@ fn still_ours(pgid: i32, recorded: &str) -> bool {
         .rsplit('/')
         .next()
         .unwrap_or(recorded);
-    !marker.is_empty() && live.contains(marker)
+    !marker.is_empty()
+        && group_commands(pgid)
+            .iter()
+            .any(|live| live.contains(marker))
 }
 
 /// Kill agent groups left behind by a previous run. Call once at startup,
 /// before anything spawns an agent of its own.
 ///
-/// Returns how many groups were signalled — a number worth logging, because a
-/// non-zero one means the last exit was not a clean one.
+/// Returns how many groups were confirmed dead — a number worth logging,
+/// because a non-zero one means the last exit was not a clean one. A group
+/// that resists (the signal refused, or SIGTERM ignored) stays written down
+/// for the next launch instead of being forgotten.
 #[cfg(unix)]
 pub fn reap(path: &Path) -> usize {
     let entries = read(path);
@@ -136,22 +153,45 @@ pub fn reap(path: &Path) -> usize {
         return 0;
     }
     let mut killed = 0;
-    for entry in &entries {
+    let mut survivors = Vec::new();
+    for entry in entries {
         if !still_ours(entry.pgid, &entry.cmd) {
             debug!(pgid = entry.pgid, "assist: recorded agent is gone already");
             continue;
         }
         // SAFETY: a signal to a process group id we recorded ourselves, whose
-        // leader was just confirmed to still be the agent we started.
+        // members were just confirmed to still include the agent we started.
         let sent = unsafe { libc::killpg(entry.pgid, libc::SIGTERM) };
-        if sent == 0 {
+        if sent != 0 {
+            warn!(pgid = entry.pgid, cmd = %entry.cmd, "assist: could not signal the recorded agent group");
+            survivors.push(entry);
+            continue;
+        }
+        // SIGTERM is a request, and its delivery says nothing about
+        // compliance: only a group that is actually gone leaves the list.
+        let mut gone = false;
+        for _ in 0..10 {
+            if group_commands(entry.pgid).is_empty() {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if gone {
             info!(pgid = entry.pgid, cmd = %entry.cmd, "assist: killed an agent left by a previous run");
             killed += 1;
+        } else {
+            warn!(pgid = entry.pgid, cmd = %entry.cmd, "assist: recorded agent ignored SIGTERM; keeping it on the list");
+            survivors.push(entry);
         }
     }
-    // The file has served its purpose either way: everything in it is dead or
-    // was not ours. Keeping stale entries would only slow down every launch.
-    let _ = std::fs::remove_file(path);
+    if survivors.is_empty() {
+        // The file has served its purpose: everything in it is dead or was
+        // not ours. Keeping stale entries would only slow down every launch.
+        let _ = std::fs::remove_file(path);
+    } else {
+        write(path, &survivors);
+    }
     killed
 }
 
@@ -213,19 +253,23 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_pid_wearing_someone_elses_command_is_not_ours() {
+        use std::os::unix::process::CommandExt;
         let mut child = std::process::Command::new("sleep")
             .arg("30")
+            // Its own group, the way real agents are spawned: the check looks
+            // at the group, and this pid is nobody's leader otherwise.
+            .process_group(0)
             .spawn()
             .expect("spawn sleep");
-        let pid = child.id() as i32;
+        let pgid = child.id() as i32;
 
         assert!(
-            !still_ours(pid, "npx claude-agent-acp"),
+            !still_ours(pgid, "npx claude-agent-acp"),
             "a `sleep` is not the agent we wrote down"
         );
         assert!(
-            still_ours(pid, "/usr/bin/sleep"),
-            "and the same pid running what we recorded is"
+            still_ours(pgid, "/usr/bin/sleep"),
+            "and the same group running what we recorded is"
         );
         let _ = child.kill();
         let _ = child.wait();
@@ -240,5 +284,73 @@ mod tests {
         register(&path, 999_999, "npx claude-agent-acp");
         assert_eq!(reap(&path), 0);
         assert!(!path.exists(), "the registry is cleared after a reap");
+    }
+
+    /// The registry goes through a temp file and a rename, so a crash
+    /// mid-write can never leave a half file for the next launch to read.
+    /// What must not survive the write is the temp file itself.
+    #[test]
+    fn writes_are_atomic_and_leave_no_temp_file() {
+        let path = temp();
+        register(&path, 42, "npx claude-agent-acp");
+        assert!(path.exists());
+        assert!(
+            !path.with_extension("tmp").exists(),
+            "the temp file must be renamed away"
+        );
+    }
+
+    /// The npx-wrapper shape: the leader we spawned is dead, the agent it
+    /// started lives on in the same group. The reaper must still recognize
+    /// the group as ours and take it down.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_is_alive_while_any_member_matches() {
+        use std::os::unix::process::CommandExt;
+        let path = temp();
+        // The leader backgrounds a stand-in agent and exits, leaving the
+        // grandchild holding the group.
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "sleep 60 & exit 0"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn sh");
+        let pgid = child.id() as i32;
+        let _ = child.wait(); // the leader dies, the group lives on
+
+        register(&path, pgid, "sleep");
+        assert_eq!(
+            reap(&path),
+            1,
+            "a live grandchild keeps the group on the reaper's list"
+        );
+        assert!(!path.exists(), "a reaped group is struck from the registry");
+    }
+
+    /// A group that shrugs off SIGTERM must not be forgotten: it stays
+    /// written down for the next launch instead of being declared dead.
+    #[cfg(unix)]
+    #[test]
+    fn a_group_that_ignores_sigterm_stays_on_the_list() {
+        use std::os::unix::process::CommandExt;
+        let path = temp();
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", "trap '' TERM; sleep 60 & wait"])
+            .process_group(0)
+            .spawn()
+            .expect("spawn sh");
+        let pgid = child.id() as i32;
+        // Give the shell a moment to install the trap before the reap fires.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        register(&path, pgid, "sh");
+        assert_eq!(reap(&path), 0, "nothing was confirmed dead");
+        let left = read(&path);
+        assert_eq!(left.len(), 1, "the stubborn group stays written down");
+        assert_eq!(left[0].pgid, pgid);
+
+        // Teardown: SIGKILL does not take no for an answer.
+        unsafe { libc::killpg(pgid, libc::SIGKILL) };
+        let _ = child.wait();
     }
 }

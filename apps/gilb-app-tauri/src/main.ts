@@ -348,6 +348,9 @@ type AssistStatus = {
 function renderAssist(s: AssistStatus | null) {
   const row = $("assist-row");
   if (!row) return;
+  // The Settings section mirrors availability in every branch: shown once the
+  // feature can run at all, hidden while there is no panel to configure.
+  renderAssistSettings(s);
   // No status at all — a shell that does not ship the feature. Nothing to say.
   if (!s) {
     row.hidden = true;
@@ -383,7 +386,6 @@ function renderAssist(s: AssistStatus | null) {
     if (toggle) toggle.disabled = false;
     progress?.setAttribute("hidden", "");
     renderAgentPicker(s, false);
-  renderAssistSettings(s);
     // "Choose an agent" is the wrong thing to say when there is nothing to
     // choose from — then the answer is which one to install.
     const anyInstalled = s.agents.some((a) => a.installed);
@@ -581,7 +583,10 @@ async function closeSettings(save: boolean) {
       [model, "model", "model"],
       [effort, "effort", "effort"],
     ] as const) {
-      if (el && el.value !== assistOptSnapshot[key]) {
+      // A disabled select is still the "Asking the agent…" placeholder (the
+      // load takes seconds) — its "" value is not a choice, so saving it
+      // would silently revert a previously picked model/effort to default.
+      if (el && !el.disabled && el.value !== assistOptSnapshot[key]) {
         try {
           await invoke("assist_set_session_option", {
             configId,
@@ -638,12 +643,12 @@ type SessionOptionsPayload = {
 /// Shown once the feature is available at all — before that there is no panel
 /// to configure and nothing the switch could govern. The model lines inside
 /// arrive later, when the agent has answered.
-function renderAssistSettings(s: AssistStatus) {
+function renderAssistSettings(s: AssistStatus | null) {
   const row = $("assist-settings-row");
   const toggle = $<HTMLButtonElement>("toggle-assist-capture");
   if (!row || !toggle) return;
-  row.hidden = !s.available;
-  toggle.setAttribute("aria-checked", s.visible_in_capture ? "true" : "false");
+  row.hidden = !s?.available;
+  if (s) toggle.setAttribute("aria-checked", s.visible_in_capture ? "true" : "false");
 }
 
 function initCaptureToggle() {
@@ -911,12 +916,17 @@ async function toggleTracking() {
   // say the state, and a status line that stays on screen for the rest of the
   // session reads as a problem long after it stopped being news. Errors still
   // speak up — those the user has not already seen.
+  let ok: boolean;
   if (tracking) {
-    if (await applyStop()) await persistPaused(true);
+    ok = await applyStop();
+    if (ok) await persistPaused(true);
   } else {
-    if (await applyStart()) await persistPaused(false);
+    ok = await applyStart();
+    if (ok) await persistPaused(false);
   }
-  setMessage("");
+  // Cleared only on success — on failure applyStop/applyStart already put the
+  // error in the message line, and clearing here would erase it the same tick.
+  if (ok) setMessage("");
   if (btn) btn.disabled = false;
   refresh();
 }
@@ -1020,10 +1030,12 @@ window.addEventListener("DOMContentLoaded", () => {
   }
 
   // Backend proxies EventBus events here — a health message refreshes the UI
-  // immediately instead of waiting for the poll. Permission grants have no
-  // event: they change in System Settings, outside our process, so the
-  // 5-second poll is what notices them.
+  // immediately instead of waiting for the poll. Permission grants change in
+  // System Settings, outside our process, so the backend polls the snapshot
+  // once a second while anything is missing and emits `permission` on change;
+  // after that the 5-second poll is the backstop.
   listen("health", () => refresh());
+  listen("permission", () => refresh());
   // Local model download progress + terminal state (driven by download_model).
   listen<ModelProgress>("model-download", (e) => {
     const p = e.payload;

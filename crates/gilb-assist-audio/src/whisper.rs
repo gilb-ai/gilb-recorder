@@ -47,8 +47,11 @@ impl WhisperTranscriber {
     async fn model(&mut self) -> Result<Arc<LocalTranscriber>> {
         let path = self.model_path.clone();
         let language = self.language.clone();
+        // The language keys the shared cache: a model loaded for another
+        // consumer's language must never serve these segments.
+        let key = language.clone();
         self.shared
-            .get(move || {
+            .get(&key, move || {
                 info!(model = %path.display(), "loading whisper model");
                 LocalTranscriber::new(&path, language).context("load whisper model")
             })

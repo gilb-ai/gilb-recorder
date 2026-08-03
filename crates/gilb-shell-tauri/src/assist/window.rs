@@ -121,6 +121,6 @@ pub(super) fn toggle_window(app: &AppHandle) {
     }
 }
 
-pub(super) fn register_shortcut(app: &AppHandle) {
-    crate::shortcut::register(app, ASSIST_SHORTCUT, toggle_window);
+pub(super) fn register_shortcut(app: &AppHandle) -> bool {
+    crate::shortcut::register(app, ASSIST_SHORTCUT, toggle_window)
 }

@@ -41,6 +41,10 @@ pub struct AssistPipelineConfig {
 pub struct AssistPipeline {
     audio_task: JoinHandle<()>,
     turns_task: JoinHandle<()>,
+    /// The STT worker's task: aborted on drop so it stops promptly instead of
+    /// draining a queue nobody reads — possibly through a cold ~570 MB model
+    /// load for segments that would be discarded.
+    stt_task: JoinHandle<()>,
     /// Watches the recording bus for meeting boundaries; `None` when no bus
     /// was supplied (tests, and any host that has no meeting lifecycle).
     boundary_task: Option<JoinHandle<()>>,
@@ -50,10 +54,24 @@ impl Drop for AssistPipeline {
     fn drop(&mut self) {
         self.audio_task.abort();
         self.turns_task.abort();
+        self.stt_task.abort();
         if let Some(task) = &self.boundary_task {
             task.abort();
         }
     }
+}
+
+/// What a recording-bus event asks the audio task to do with the carried
+/// stream state.
+#[derive(Debug, Clone, Copy)]
+enum Boundary {
+    /// A new meeting started: drop everything learned from the previous
+    /// stream (echo canceller, open segments, resamplers, the stream clock).
+    Reset,
+    /// The recording stream ended: close the still-open segments so the tail
+    /// utterance — the last pause shorter than the close threshold — is
+    /// transcribed too, instead of silently dropped.
+    Flush,
 }
 
 /// Wire the tap through resample → AEC → segmentation → STT into the assist
@@ -72,11 +90,11 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
     config: AssistPipelineConfig,
     bus: Option<EventBus>,
 ) -> AssistPipeline {
-    let (worker, mut utterances) = spawn_stt_worker(transcriber, config.worker);
+    let (worker, mut utterances, stt_task) = spawn_stt_worker(transcriber, config.worker);
 
     // Capacity 1 is enough: several boundaries in a row mean the same thing as
     // one, and a full channel is a reset already on its way.
-    let (reset_tx, reset_rx) = mpsc::channel::<()>(1);
+    let (boundary_tx, boundary_rx) = mpsc::channel::<Boundary>(1);
     let boundary_task = bus.map(|bus| {
         let assist = assist.clone();
         let worker = worker.clone();
@@ -88,11 +106,21 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
                         RecordingEvent::Armed { meeting_id } => {
                             info!(meeting_id, "assist: new meeting, resetting state");
                             assist.reset();
-                            let _ = reset_tx.try_send(());
+                            // Segments queued or mid-inference belong to the
+                            // previous meeting's conversation and stream clock;
+                            // they must not surface in the fresh one.
+                            worker.reset();
+                            let _ = boundary_tx.try_send(Boundary::Reset);
                             // Pauses inside a meeting must not cost a reload.
                             worker.hold_model(true);
                         }
-                        RecordingEvent::Cancelled { .. } => worker.hold_model(false),
+                        RecordingEvent::Cancelled { .. } => {
+                            // The stream is over: flush first, so the tail
+                            // utterance is transcribed, then let the model idle
+                            // out.
+                            let _ = boundary_tx.try_send(Boundary::Flush);
+                            worker.hold_model(false);
+                        }
                     },
                     // A lagged boundary is still a boundary; the next recv
                     // delivers whatever is current.
@@ -111,7 +139,7 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
         config.aec,
         config.segmenter,
         worker,
-        reset_rx,
+        boundary_rx,
     ));
 
     let turns_task = tokio::spawn(async move {
@@ -147,6 +175,7 @@ pub fn spawn_assist_pipeline<T: SegmentTranscriber>(
     AssistPipeline {
         audio_task,
         turns_task,
+        stt_task,
         boundary_task,
     }
 }
@@ -217,7 +246,7 @@ async fn audio_loop(
     aec_config: EchoCancellerConfig,
     seg_config: SegmenterConfig,
     worker: SttWorkerHandle,
-    mut reset_rx: mpsc::Receiver<()>,
+    mut boundary_rx: mpsc::Receiver<Boundary>,
 ) {
     let mut aec = EchoCanceller::new(&aec_config);
     let mut seg_mic = build_segmenter(seg_config.clone());
@@ -229,13 +258,25 @@ async fn audio_loop(
         tokio::select! {
             // A meeting boundary: drop the carried stream state. The detectors
             // keep their loaded models — only what they learned is cleared.
-            Some(()) = reset_rx.recv() => {
-                aec.reset();
-                seg_mic.reset();
-                seg_sys.reset();
-                // Rebuilt from the next chunk, which carries its device rate.
-                mic_rs = None;
-                sys_rs = None;
+            Some(boundary) = boundary_rx.recv() => match boundary {
+                Boundary::Reset => {
+                    aec.reset();
+                    seg_mic.reset();
+                    seg_sys.reset();
+                    // Rebuilt from the next chunk, which carries its device rate.
+                    mic_rs = None;
+                    sys_rs = None;
+                }
+                Boundary::Flush => {
+                    // End of the stream: close whatever is still open, so the
+                    // last utterance is transcribed rather than dropped.
+                    if let Some(segment) = seg_mic.flush() {
+                        worker.push(SttChannel::Mic, segment);
+                    }
+                    if let Some(segment) = seg_sys.flush() {
+                        worker.push(SttChannel::System, segment);
+                    }
+                }
             },
             chunk = mic_rx.recv() => match chunk {
                 Ok(chunk) => {
@@ -360,6 +401,72 @@ mod tests {
         })
         .await
         .expect("no suggestion within 5 s");
+
+        assert!(
+            event.contains("them: ["),
+            "expected a them-turn, got: {event}"
+        );
+    }
+
+    /// A meeting that ends while the last utterance is still open (no closing
+    /// pause yet) must not lose it: `Cancelled` flushes the segmenter, and the
+    /// tail is transcribed like any other segment.
+    #[tokio::test]
+    async fn cancelled_flushes_the_open_segment() {
+        let tap = AudioTap::new(1024);
+        let (assist, mut events) = gilb_assist::spawn(
+            StaticConfig::default(),
+            EchoBackend,
+            EngineParams {
+                min_analysis_interval: Duration::from_millis(1),
+            },
+        );
+        let bus = EventBus::new();
+        let _pipeline = spawn_assist_pipeline(
+            &tap,
+            StubStt,
+            assist,
+            AssistPipelineConfig::default(),
+            Some(bus.clone()),
+        );
+        tokio::task::yield_now().await; // let the tasks subscribe
+
+        // Speech with NO trailing silence: the segment is still open when the
+        // meeting ends, so only the flush can close it.
+        let stream = speech_samples();
+        for chunk in stream.chunks(1_600) {
+            tap.send_system(chunk, 16_000);
+            tokio::task::yield_now().await;
+        }
+
+        // Nothing may have closed on its own yet — otherwise this test passes
+        // vacuously on a naturally closed segment.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), async {
+                loop {
+                    match events.recv().await.expect("assist engine closed") {
+                        AssistEvent::Update(_) => break,
+                        _ => continue,
+                    }
+                }
+            })
+            .await
+            .is_err(),
+            "a segment closed before the flush; the fixture must not contain a closing pause"
+        );
+
+        bus.publish_recording(RecordingEvent::Cancelled { meeting_id: 1 });
+
+        let event = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match events.recv().await.expect("assist engine closed") {
+                    AssistEvent::Update(text) => break text,
+                    _ => continue,
+                }
+            }
+        })
+        .await
+        .expect("the tail utterance must be transcribed within 5 s");
 
         assert!(
             event.contains("them: ["),

@@ -35,6 +35,8 @@ pub enum TranscriptionJob {
     /// Re-scan the DB and enqueue every meeting still needing a transcript.
     Sweep,
     /// Drop the warm model so the next job reloads it (e.g. language changed).
+    /// Drops the shared cache entry too — otherwise the next job would get the
+    /// old model right back from the realtime side's cache.
     ReloadModel,
 }
 
@@ -68,8 +70,11 @@ async fn load_model() -> Option<Arc<LocalTranscriber>> {
         return None;
     }
     let language = load_preferences().transcription_language;
+    // The language keys the shared cache: after a language change the next
+    // job gets a fresh model, not the realtime side's instance (or vice versa).
+    let key = language.clone();
     match shared_model()
-        .get(move || LocalTranscriber::new(&path, language))
+        .get(&key, move || LocalTranscriber::new(&path, language))
         .await
     {
         Ok(model) => Some(model),
@@ -108,6 +113,10 @@ async fn run_worker(
         match job {
             TranscriptionJob::ReloadModel => {
                 model = None;
+                // The worker's borrow is gone; evict the shared cache entry
+                // too so the next job reloads with the new configuration now,
+                // not after both consumers have idled out.
+                shared_model().invalidate();
             }
             TranscriptionJob::Sweep => match pending_transcriptions(&db).await {
                 Ok(ids) => {

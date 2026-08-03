@@ -45,8 +45,8 @@ pub async fn get_transcription_status() -> TranscriptionStatus {
 }
 
 /// Persist the transcription language. Rejects anything but `auto`/`ru`/`en`.
-/// Signals the worker to drop its warm model so the next meeting reloads with
-/// the new language.
+/// Signals the worker to drop the warm model — its borrow and the shared
+/// cache entry — so the next meeting reloads with the new language.
 #[tauri::command]
 pub async fn set_transcription_language(
     tx: State<'_, TranscribeTx>,

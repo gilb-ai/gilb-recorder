@@ -8,6 +8,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use tokio::io::AsyncWriteExt;
@@ -15,6 +16,14 @@ use tokio::io::AsyncWriteExt;
 /// Progress is reported at most this often, in bytes downloaded. A UI cannot
 /// use more than that and every event crosses the webview boundary.
 const REPORT_EVERY_BYTES: u64 = 4_000_000;
+
+/// A stuck connection must error out, not hang: with no timeout a stalled
+/// socket leaves the download task alive forever, and the cancel flag — only
+/// checked between chunks — never gets read, so the feature cannot even be
+/// toggled off. The read timeout bounds each socket read, not the whole
+/// transfer, so a slow-but-moving 570 MB download still finishes.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub enum Downloaded {
     /// Bytes written; the file is in place.
@@ -35,7 +44,16 @@ pub async fn download(
 ) -> Result<Downloaded> {
     let part_path = final_path.with_extension("part");
     let result: Result<Downloaded> = async {
-        let mut resp = reqwest::get(url).await.context("start model download")?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .build()
+            .context("build model download client")?;
+        let mut resp = client
+            .get(url)
+            .send()
+            .await
+            .context("start model download")?;
         if !resp.status().is_success() {
             bail!("model download failed: HTTP {}", resp.status());
         }

@@ -13,6 +13,7 @@ use crate::{AssistBackend, AssistEvent, AssistSession, EngineParams, Speaker, Tu
 /// `None` in the script = reply with `[NO_RESP]`; an exhausted script echoes.
 struct ScriptedBackend {
     begins: Arc<AtomicUsize>,
+    sends: Arc<AtomicUsize>,
     inputs: Arc<Mutex<Vec<String>>>,
     script: Arc<Mutex<Vec<Option<String>>>>,
     fail_sends: Arc<AtomicUsize>,
@@ -22,6 +23,7 @@ impl ScriptedBackend {
     fn new() -> Self {
         Self {
             begins: Arc::new(AtomicUsize::new(0)),
+            sends: Arc::new(AtomicUsize::new(0)),
             inputs: Arc::new(Mutex::new(Vec::new())),
             script: Arc::new(Mutex::new(Vec::new())),
             fail_sends: Arc::new(AtomicUsize::new(0)),
@@ -34,6 +36,7 @@ impl AssistBackend for ScriptedBackend {
     async fn begin(&self, _system_prompt: &str) -> Result<Box<dyn AssistSession>> {
         self.begins.fetch_add(1, Ordering::SeqCst);
         Ok(Box::new(ScriptedSession {
+            sends: self.sends.clone(),
             inputs: self.inputs.clone(),
             script: self.script.clone(),
             fail_sends: self.fail_sends.clone(),
@@ -42,6 +45,7 @@ impl AssistBackend for ScriptedBackend {
 }
 
 struct ScriptedSession {
+    sends: Arc<AtomicUsize>,
     inputs: Arc<Mutex<Vec<String>>>,
     script: Arc<Mutex<Vec<Option<String>>>>,
     fail_sends: Arc<AtomicUsize>,
@@ -50,6 +54,7 @@ struct ScriptedSession {
 #[async_trait]
 impl AssistSession for ScriptedSession {
     async fn send(&mut self, input: &str) -> Result<Option<String>> {
+        self.sends.fetch_add(1, Ordering::SeqCst);
         if self.fail_sends.load(Ordering::SeqCst) > 0 {
             self.fail_sends.fetch_sub(1, Ordering::SeqCst);
             anyhow::bail!("model unreachable");
@@ -360,13 +365,73 @@ async fn failed_analysis_reports_and_retries_with_kept_turns() {
         "failure must surface as an error event: {events:?}"
     );
 
-    // The throttle deadline retries the kept turn on its own — no new turn
-    // needed, nothing lost.
-    tokio::time::advance(Duration::from_secs(31)).await;
+    // The retry backs off (here: double the 30 s throttle), then the deadline
+    // retries the kept turn on its own — no new turn needed, nothing lost.
+    tokio::time::advance(Duration::from_secs(61)).await;
     let events = drain(&mut rx).await;
     assert!(
         events.contains(&AssistEvent::Update("echo: me: важная реплика".into())),
-        "kept turn must be retried after the interval: {events:?}"
+        "kept turn must be retried after the backoff: {events:?}"
     );
     assert_eq!(inputs.lock().unwrap().as_slice(), ["me: важная реплика"]);
+}
+
+/// A backend that stays down used to be retried every throttle interval, the
+/// same red line pushed to the panel every time — and each retry of a failing
+/// `begin` respawns the agent behind it. Retries now back off exponentially,
+/// and an unchanged failure is reported once.
+#[tokio::test(start_paused = true)]
+async fn repeated_failures_back_off_and_report_once() {
+    let backend = ScriptedBackend::new();
+    let sends = backend.sends.clone();
+    backend.fail_sends.store(2, Ordering::SeqCst);
+    let (handle, mut rx) = crate::spawn(StaticConfig::default(), backend, params());
+
+    handle.push_turn(turn(Speaker::Me, "важная реплика"));
+    let events = drain(&mut rx).await;
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| matches!(e, AssistEvent::Error(_)))
+            .count(),
+        1,
+        "the failure is reported exactly once: {events:?}"
+    );
+
+    // Backoff doubled past the plain interval: 31 s in, no retry yet.
+    tokio::time::advance(Duration::from_secs(31)).await;
+    let events = drain(&mut rx).await;
+    assert!(
+        events.is_empty(),
+        "backoff must hold the retry past the plain interval: {events:?}"
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+
+    // Past the doubled wait the retry fires and fails the same way — the
+    // panel is not told again.
+    tokio::time::advance(Duration::from_secs(30)).await;
+    let events = drain(&mut rx).await;
+    assert_eq!(sends.load(Ordering::SeqCst), 2, "the retry must fire");
+    assert!(
+        events.iter().all(|e| !matches!(e, AssistEvent::Error(_))),
+        "an unchanged failure must not be re-reported: {events:?}"
+    );
+
+    // The backend recovers: the next retry delivers the kept turn, and the
+    // backoff resets to the plain interval.
+    tokio::time::advance(Duration::from_secs(61)).await;
+    let events = drain(&mut rx).await;
+    assert!(
+        events.contains(&AssistEvent::Update("echo: me: важная реплика".into())),
+        "recovery must deliver the kept turn: {events:?}"
+    );
+
+    handle.push_turn(turn(Speaker::Them, "ещё реплика"));
+    tokio::time::advance(Duration::from_secs(31)).await;
+    let events = drain(&mut rx).await;
+    assert!(
+        events.contains(&AssistEvent::Update("echo: them: ещё реплика".into())),
+        "after a success the plain throttle applies again: {events:?}"
+    );
 }

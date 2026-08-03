@@ -140,6 +140,50 @@ pub fn voiced_fraction(mask: &[bool], t0: f32, t1: f32) -> f32 {
     voiced as f32 / (hi - lo) as f32
 }
 
+/// The `windows` most speech-dense, non-overlapping windows of `win_secs`, in
+/// recording order, as `(start, end)` sample offsets. Fewer if the audio is
+/// shorter than that.
+///
+/// Sample offsets follow the mask's own frame size — the batch energy VAD
+/// emits [`VAD_FRAME`]-sample frames, the realtime Silero path 512-sample
+/// ones. Assuming one for the other lands the probe windows at a fraction of
+/// the intended offset (a 320-assumption over a 512-mask reads at 0.625× of
+/// the real position).
+///
+/// Lives at the crate root (not next to its only caller, the feature-gated
+/// whisper module) so the geometry is testable without a whisper build.
+#[cfg(any(feature = "local-whisper", test))]
+fn dense_voiced_windows(
+    samples: &[f32],
+    mask: &VoicedMask,
+    win_secs: f32,
+    windows: usize,
+) -> Vec<(usize, usize)> {
+    let win_len = (win_secs * 16_000.0) as usize;
+    if samples.len() <= win_len || win_len == 0 {
+        return vec![(0, samples.len())];
+    }
+    let frames_per_win = (win_len / mask.frame_size).max(1);
+    let stride = frames_per_win * mask.frame_size;
+    // Score every candidate start on a window-sized stride: cheap, and
+    // non-overlapping by construction.
+    let mut scored: Vec<(usize, usize)> = mask
+        .frames
+        .chunks(frames_per_win)
+        .enumerate()
+        .map(|(i, frames)| (frames.iter().filter(|&&v| v).count(), i * stride))
+        .filter(|&(_, start)| start + win_len <= samples.len())
+        .collect();
+    scored.sort_by_key(|&(voiced, _)| std::cmp::Reverse(voiced));
+    let mut picked: Vec<usize> = scored
+        .into_iter()
+        .take(windows)
+        .map(|(_, start)| start)
+        .collect();
+    picked.sort_unstable();
+    picked.into_iter().map(|s| (s, s + win_len)).collect()
+}
+
 // ---------------------------------------------------------------------------
 // Transcriber trait + merged segment model
 // ---------------------------------------------------------------------------
@@ -510,7 +554,7 @@ mod local {
 
             let ctx = self.ctx.clone();
             let language = self.language.clone();
-            let probe_mask = mask.frames.clone();
+            let probe_mask = mask.clone();
             let raw = tokio::task::spawn_blocking(move || {
                 // Pin "auto" to a concrete language before the real pass, so the
                 // decoder can't switch languages — or start translating —
@@ -556,37 +600,6 @@ mod local {
     /// language, or thirty seconds of hold music.
     const LANG_PROBE_WINDOWS: usize = 3;
 
-    /// The `LANG_PROBE_WINDOWS` most speech-dense, non-overlapping windows of
-    /// `win_secs`, in recording order. Fewer if the audio is shorter than that.
-    fn dense_voiced_windows(
-        samples: &[f32],
-        mask: &[bool],
-        win_secs: f32,
-        windows: usize,
-    ) -> Vec<(usize, usize)> {
-        let win_len = (win_secs * 16_000.0) as usize;
-        if samples.len() <= win_len || win_len == 0 {
-            return vec![(0, samples.len())];
-        }
-        let frames_per_win = (win_len / crate::VAD_FRAME).max(1);
-        // Score every candidate start on a window-sized stride: cheap, and
-        // non-overlapping by construction.
-        let mut scored: Vec<(usize, usize)> = mask
-            .chunks(frames_per_win)
-            .enumerate()
-            .map(|(i, frames)| (frames.iter().filter(|&&v| v).count(), i * win_len))
-            .filter(|&(_, start)| start + win_len <= samples.len())
-            .collect();
-        scored.sort_by_key(|&(voiced, _)| std::cmp::Reverse(voiced));
-        let mut picked: Vec<usize> = scored
-            .into_iter()
-            .take(windows)
-            .map(|(_, start)| start)
-            .collect();
-        picked.sort_unstable();
-        picked.into_iter().map(|s| (s, s + win_len)).collect()
-    }
-
     /// Resolve `"auto"` to one concrete language for the whole recording.
     ///
     /// Left on `"auto"`, whisper.cpp re-runs detection per 30-second window, and
@@ -600,9 +613,10 @@ mod local {
     ///
     /// Returns `None` if detection fails; the caller then keeps `"auto"`, since a
     /// drifting transcript still beats no transcript.
-    fn pin_language(ctx: &WhisperContext, samples: &[f32], mask: &[bool]) -> Option<String> {
+    fn pin_language(ctx: &WhisperContext, samples: &[f32], mask: &VoicedMask) -> Option<String> {
         let mut votes: Vec<(String, usize)> = Vec::new();
-        for (start, end) in dense_voiced_windows(samples, mask, LANG_PROBE_SECS, LANG_PROBE_WINDOWS)
+        for (start, end) in
+            crate::dense_voiced_windows(samples, mask, LANG_PROBE_SECS, LANG_PROBE_WINDOWS)
         {
             let Ok(mut state) = ctx.create_state() else {
                 continue;
@@ -684,3 +698,52 @@ mod local {
 
 #[cfg(feature = "local-whisper")]
 pub use local::LocalTranscriber;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Probe windows must honor the mask's frame size: a 512-sample Silero
+    /// mask over the same audio must land the window inside the voiced span
+    /// just like the 320-sample energy mask — not at 0.625× of the offset.
+    #[test]
+    fn dense_windows_follow_the_mask_frame_size() {
+        const WIN_SECS: f32 = 30.0;
+        let win_len = (WIN_SECS * 16_000.0) as usize;
+        // Three minutes; only the second one is voiced.
+        let samples = vec![0.0f32; 180 * 16_000];
+        let voiced = 60 * 16_000..120 * 16_000;
+
+        let mask = |frame_size: usize| VoicedMask {
+            frame_size,
+            frames: (0..samples.len() / frame_size)
+                .map(|i| voiced.contains(&(i * frame_size)))
+                .collect(),
+        };
+
+        for frame_size in [VAD_FRAME, 512] {
+            let windows = dense_voiced_windows(&samples, &mask(frame_size), WIN_SECS, 1);
+            assert_eq!(windows.len(), 1, "frame_size {frame_size}");
+            let (start, end) = windows[0];
+            assert_eq!(end - start, win_len, "frame_size {frame_size}");
+            assert!(
+                voiced.contains(&start),
+                "frame_size {frame_size}: window starts at {start}, outside the voiced minute"
+            );
+        }
+    }
+
+    /// Audio shorter than one window is probed whole, whatever the mask says.
+    #[test]
+    fn dense_windows_short_audio_is_one_window() {
+        let samples = vec![0.0f32; 16_000];
+        let mask = VoicedMask {
+            frame_size: 512,
+            frames: vec![true; 50],
+        };
+        assert_eq!(
+            dense_voiced_windows(&samples, &mask, 30.0, 3),
+            vec![(0, samples.len())]
+        );
+    }
+}

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tauri::{AppHandle, Manager};
 use tracing::{info, warn};
 
-use super::{emit_status, is_enabled, state, wire, AssistState};
+use super::{emit_status, is_enabled, model_ready, state, wire, AssistState};
 
 #[derive(Default)]
 pub(super) struct ModelDownload {
@@ -59,7 +59,18 @@ pub(super) fn start_model_download(app: &AppHandle) {
             state.download.active.store(false, Ordering::SeqCst);
         }
         match result {
-            Ok(crate::model::Downloaded::Cancelled) => info!("assist model download cancelled"),
+            Ok(crate::model::Downloaded::Cancelled) => {
+                info!("assist model download cancelled");
+                // Toggling the switch back on while this download was still
+                // running hit the `active` early return in
+                // `start_model_download`, so its cancel-flag reset never ran.
+                // Without a restart here the end state is wanted=true, no
+                // model, and nothing left that would ever fetch it.
+                if is_enabled() && !model_ready() {
+                    info!("assist re-enabled during the cancelled download; restarting it");
+                    start_model_download(&app);
+                }
+            }
             Ok(crate::model::Downloaded::Completed(_)) => {
                 info!("assist model downloaded");
                 let _ = app

@@ -353,3 +353,113 @@ sleep 5
         "the agent must run with the PATH it was given, got {path}"
     );
 }
+
+/// An agent that never answers `session/set_config_option` must not wedge
+/// the session: the knob is best-effort, the startup deadline applies to it
+/// the same as to the handshake, and the meeting goes on without it.
+#[tokio::test]
+async fn a_silent_config_option_does_not_wedge_the_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_agent(
+        &dir,
+        r#"
+read_line() { IFS= read -r line; }
+read_line   # initialize
+printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}\n'
+read_line   # session/new
+printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1"}}\n'
+read_line   # session/set_config_option — never answered
+read_line   # session/prompt
+printf '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"без настроек"}}}}\n'
+printf '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}\n'
+sleep 5
+"#,
+    );
+
+    let mut cfg = config(bin);
+    cfg.startup_timeout = Duration::from_secs(2);
+    cfg.config_options = vec![("model".to_string(), "haiku".to_string())];
+    let backend = AcpBackend::new(cfg);
+    let mut session = tokio::time::timeout(Duration::from_secs(5), backend.begin(""))
+        .await
+        .expect("an unanswered config option must not wedge startup")
+        .unwrap();
+
+    let reply = session.send("them: дорого").await.unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("без настроек"),
+        "the meeting carried on"
+    );
+}
+
+/// A request whose write fails must not leave its response slot behind —
+/// otherwise every dead-agent turn piles a corpse into the pending map until
+/// the connection dies.
+#[tokio::test]
+async fn a_failed_write_leaves_no_pending_request() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_agent(
+        &dir,
+        r#"
+IFS= read -r line
+printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}\n'
+IFS= read -r line
+printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1"}}\n'
+exit 0
+"#,
+    );
+
+    let mut session = AcpSession::start(config(bin), String::new()).await.unwrap();
+    // Let the agent's exit settle so the write below is what fails.
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    assert!(session.send("them: дорого").await.is_err());
+    assert!(
+        session.conn.pending.lock().await.is_empty(),
+        "a request that could not be written must not stay pending"
+    );
+}
+
+/// A turn that times out keeps streaming on the agent's side: its late chunks
+/// must not land in the NEXT turn's suggestion. The fake agent answers the
+/// first prompt a full second past the deadline; passing means the second
+/// turn contains only its own words.
+#[tokio::test]
+async fn late_chunks_do_not_leak_into_the_next_turn() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = fake_agent(
+        &dir,
+        &format!(
+            r#"{HANDSHAKE}
+sleep 1
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"поздняя"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
+read_line   # session/cancel for the timed-out turn
+read_line   # session/prompt #2
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"свежая"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
+sleep 5
+"#
+        ),
+    );
+
+    let mut cfg = config(bin);
+    // Long enough that turn #2 (answered as soon as the agent's sleep ends)
+    // still fits, short enough that turn #1 is abandoned mid-sleep.
+    cfg.turn_timeout = Duration::from_millis(700);
+    let backend = AcpBackend::new(cfg);
+    let mut session = backend.begin("").await.unwrap();
+
+    assert_eq!(
+        session.send("them: раз").await.unwrap(),
+        None,
+        "the slow turn is abandoned"
+    );
+    let reply = session.send("them: два").await.unwrap();
+    assert_eq!(
+        reply.as_deref(),
+        Some("свежая"),
+        "no words from the dead turn may leak in"
+    );
+}

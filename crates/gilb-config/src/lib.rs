@@ -625,6 +625,7 @@ pub fn update_preferences(update: impl FnOnce(&mut Preferences)) -> Result<Prefe
 /// a bare `claude` is not findable there. Both the analyzer (`claude -p`) and
 /// the assist backend (ACP) hit this, which is why the probe lives here rather
 /// than in whichever crate needed it first.
+#[cfg(unix)]
 pub fn agent_bin_dirs() -> Vec<String> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut dirs = vec![
@@ -661,11 +662,20 @@ pub fn agent_bin_dirs() -> Vec<String> {
     dirs
 }
 
+/// The known-dir list above is all unix paths (`$HOME/...`, `/opt/homebrew`,
+/// nvm/fnm layouts). On Windows an agent's installer puts its bin dir on PATH
+/// itself, so there is nothing to add and the inherited PATH is the answer.
+#[cfg(not(unix))]
+pub fn agent_bin_dirs() -> Vec<String> {
+    Vec::new()
+}
+
 /// `bin/` of every installed nvm/fnm node version, newest first.
 ///
 /// Newest first because a binary installed globally under an old runtime is
 /// usually a leftover, and running it under that old node is how you get an
 /// error from inside the agent rather than from us.
+#[cfg(unix)]
 fn node_version_dirs(home: &str) -> Vec<String> {
     let roots = [
         format!("{home}/.nvm/versions/node"),
@@ -691,6 +701,7 @@ fn node_version_dirs(home: &str) -> Vec<String> {
     found
 }
 
+#[cfg(unix)]
 fn version_key(name: &str) -> Vec<u32> {
     name.trim_start_matches('v')
         .split('.')
@@ -718,14 +729,18 @@ pub fn resolve_agent_bin(name: &str, env_override: &str) -> String {
 
 /// PATH for a spawned agent: the known bin dirs prepended to the inherited
 /// PATH, so an npm-installed CLI can find its `node` even from a bundle.
+/// Joined with the OS separator — a hand-joined ":" would mangle PATH on
+/// Windows into one long nonsense entry.
 pub fn agent_path_env() -> String {
-    let mut parts = agent_bin_dirs();
-    if let Ok(current) = std::env::var("PATH") {
+    let mut parts: Vec<std::path::PathBuf> = agent_bin_dirs().into_iter().map(Into::into).collect();
+    if let Some(current) = std::env::var_os("PATH") {
         if !current.is_empty() {
-            parts.push(current);
+            parts.extend(std::env::split_paths(&current));
         }
     }
-    parts.join(":")
+    std::env::join_paths(parts)
+        .map(|joined| joined.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -735,6 +750,7 @@ mod tests {
     /// app will never learn from PATH: it is handed the launchd environment,
     /// not a login shell's. Every one of these has cost a user their agent at
     /// some point — the list is a record of that, not a guess.
+    #[cfg(unix)]
     #[test]
     fn agent_search_covers_the_documented_install_locations() {
         let home = std::env::var("HOME").unwrap_or_default();
@@ -755,6 +771,7 @@ mod tests {
 
     /// `$OPENCODE_INSTALL_DIR` and `$XDG_BIN_DIR` are the user's own answer to
     /// where binaries go, so they are read rather than assumed.
+    #[cfg(unix)]
     #[test]
     fn a_configured_install_dir_is_searched() {
         // SAFETY: single-threaded test process; the variable is read back
@@ -763,6 +780,31 @@ mod tests {
         let dirs = agent_bin_dirs();
         unsafe { std::env::remove_var("OPENCODE_INSTALL_DIR") };
         assert!(dirs.iter().any(|d| d == "/tmp/gilb-test-agent-dir"));
+    }
+
+    /// The spawned agent's PATH must survive a split back into entries —
+    /// entries joined by hand with ":" parse as one mangled entry on Windows.
+    /// (On non-unix there are no known dirs; the inherited PATH still has to
+    /// round-trip.)
+    #[test]
+    fn agent_path_env_round_trips_through_split_paths() {
+        let joined = agent_path_env();
+        let parts: Vec<std::path::PathBuf> = std::env::split_paths(&joined).collect();
+        for dir in agent_bin_dirs() {
+            assert!(
+                parts.iter().any(|p| p.as_os_str() == dir.as_str()),
+                "{dir} did not survive the join/split round trip"
+            );
+        }
+        if let Some(current) = std::env::var_os("PATH") {
+            for entry in std::env::split_paths(&current) {
+                assert!(
+                    parts.contains(&entry),
+                    "inherited PATH entry {} was lost",
+                    entry.display()
+                );
+            }
+        }
     }
 
     use super::*;

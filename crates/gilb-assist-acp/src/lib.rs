@@ -386,23 +386,35 @@ impl AcpSession {
                 );
                 continue;
             }
-            let result = boot
-                .conn
-                .request(
+            let result = tokio::time::timeout(
+                config.startup_timeout,
+                boot.conn.request(
                     "session/set_config_option",
                     json!({ "sessionId": boot.session_id, "configId": config_id, "value": value }),
-                )
-                .await;
+                ),
+            )
+            .await;
             match result {
-                Ok(reply) => {
+                Ok(Ok(reply)) => {
                     debug!(config_id, value, "session option set");
                     let next = option_ids(&reply);
                     if !next.is_empty() {
                         offered = next;
                     }
                 }
-                Err(err) => {
+                Ok(Err(err)) => {
                     warn!(error = %err, config_id, value, "session option not applied")
+                }
+                // The handshake's deadline applies here too: an agent that
+                // never answers must not wedge the session start — the knob
+                // is best-effort by design.
+                Err(_) => {
+                    warn!(
+                        config_id,
+                        value,
+                        timeout = ?config.startup_timeout,
+                        "session option not applied: the agent did not answer in time"
+                    )
                 }
             }
         }
@@ -428,11 +440,14 @@ impl AcpSession {
         let (chunks_tx, mut chunks_rx) = mpsc::unbounded_channel();
         self.conn.set_chunk_sink(Some(chunks_tx)).await;
 
-        let outcome = tokio::time::timeout(
-            self.turn_timeout,
-            self.conn.request("session/prompt", params),
-        )
-        .await;
+        let (id, rx) = match self.conn.send_request("session/prompt", params).await {
+            Ok(pair) => pair,
+            Err(err) => {
+                self.conn.set_chunk_sink(None).await;
+                return Err(err);
+            }
+        };
+        let outcome = tokio::time::timeout(self.turn_timeout, rx).await;
         self.conn.set_chunk_sink(None).await;
 
         let mut text = String::new();
@@ -441,12 +456,17 @@ impl AcpSession {
         }
 
         match outcome {
-            Ok(Ok(_)) => Ok(Some(text).filter(|t| !t.trim().is_empty())),
-            Ok(Err(err)) => Err(err),
+            Ok(Ok(Ok(_))) => Ok(Some(text).filter(|t| !t.trim().is_empty())),
+            Ok(Ok(Err(err))) => Err(err),
+            Ok(Err(_)) => Err(anyhow!("agent dropped the request")),
             // Silence beats a stale suggestion, and the engine keeps the turns
             // buffered for the next attempt either way.
             Err(_) => {
                 warn!(timeout = ?self.turn_timeout, "agent turn timed out; staying silent");
+                // Whatever the agent still streams belongs to the dead turn:
+                // quarantine it until its response arrives, or the tail of
+                // this answer lands in the NEXT turn's suggestion.
+                self.conn.mark_turn_stale(id).await;
                 let _ = self
                     .conn
                     .notify("session/cancel", json!({ "sessionId": self.session_id }))
@@ -505,12 +525,22 @@ impl Drop for ChildGuard {
 // JSON-RPC over the agent's stdio
 // ---------------------------------------------------------------------------
 
+/// Where streamed text goes while a turn is in flight, plus the bookkeeping
+/// that keeps a timed-out turn's late chunks out of the next one.
+#[derive(Default)]
+struct ChunkRouting {
+    sink: Option<mpsc::UnboundedSender<String>>,
+    /// Responses we stopped waiting for (their turns timed out). Until such
+    /// a response arrives the agent is still finishing the old turn, so its
+    /// chunks are dropped rather than appended to the next suggestion.
+    stale: Vec<u64>,
+}
+
 struct Connection {
     stdin: Mutex<ChildStdin>,
     next_id: std::sync::atomic::AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value>>>>,
-    /// Where streamed text goes while a turn is in flight.
-    chunks: Mutex<Option<mpsc::UnboundedSender<String>>>,
+    chunks: Mutex<ChunkRouting>,
 }
 
 impl Connection {
@@ -519,7 +549,7 @@ impl Connection {
             stdin: Mutex::new(stdin),
             next_id: std::sync::atomic::AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
-            chunks: Mutex::new(None),
+            chunks: Mutex::new(ChunkRouting::default()),
         });
 
         let reader_conn = conn.clone();
@@ -554,6 +584,9 @@ impl Connection {
                     None => Ok(msg.get("result").cloned().unwrap_or(Value::Null)),
                 };
                 if let Some(tx) = self.pending.lock().await.remove(&id) {
+                    // A reply to a timed-out turn also ends the quarantine on
+                    // its chunks — the old turn is over for real now.
+                    self.chunks.lock().await.stale.retain(|&s| s != id);
                     let _ = tx.send(result);
                 }
                 return;
@@ -592,25 +625,55 @@ impl Connection {
             if text.is_empty() {
                 return;
             }
-            if let Some(sink) = self.chunks.lock().await.as_ref() {
+            let chunks = self.chunks.lock().await;
+            if !chunks.stale.is_empty() {
+                debug!("dropping a chunk from a timed-out turn");
+                return;
+            }
+            if let Some(sink) = chunks.sink.as_ref() {
                 let _ = sink.send(text.to_string());
             }
         }
     }
 
     async fn set_chunk_sink(&self, sink: Option<mpsc::UnboundedSender<String>>) {
-        *self.chunks.lock().await = sink;
+        self.chunks.lock().await.sink = sink;
+    }
+
+    /// Stop trusting chunks until the response to `id` arrives: its turn
+    /// timed out, so whatever streams in now is that turn's tail.
+    async fn mark_turn_stale(&self, id: u64) {
+        self.chunks.lock().await.stale.push(id);
     }
 
     async fn request(&self, method: &str, params: Value) -> Result<Value> {
+        let (_id, rx) = self.send_request(method, params).await?;
+        rx.await.map_err(|_| anyhow!("agent dropped the request"))?
+    }
+
+    /// Register the response slot and write the request. The id comes back
+    /// with the receiver so a caller that stops waiting (a timed-out turn)
+    /// can name the response it is no longer listening for.
+    async fn send_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<(u64, oneshot::Receiver<Result<Value>>)> {
         let id = self
             .next_id
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let (tx, rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
-        self.write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
-            .await?;
-        rx.await.map_err(|_| anyhow!("agent dropped the request"))?
+        // A failed write means no response is coming: take the slot back
+        // rather than leave it in the map until the connection dies.
+        if let Err(err) = self
+            .write(json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))
+            .await
+        {
+            self.pending.lock().await.remove(&id);
+            return Err(err);
+        }
+        Ok((id, rx))
     }
 
     async fn notify(&self, method: &str, params: Value) -> Result<()> {

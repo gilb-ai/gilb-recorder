@@ -130,8 +130,9 @@ impl Harness {
     fn first_installed(names: &[&str]) -> Option<PathBuf> {
         names
             .iter()
-            .map(|name| resolve(name))
-            .find(|bin| agent_available(bin))
+            .map(|name| (*name, resolve(name)))
+            .find(|(name, bin)| agent_available(bin) && name_verified(name, bin))
+            .map(|(_, bin)| bin)
     }
 }
 
@@ -279,6 +280,42 @@ fn resolve(name: &str) -> PathBuf {
     PathBuf::from(gilb_config::resolve_agent_bin(name, AGENT_BIN_ENV))
 }
 
+/// Guard against a binary that merely shares a name with the one we want.
+/// `agent` is generic enough to belong to something else entirely — Grok's
+/// CLI installs the same name into the same `~/.local/bin`, and file
+/// existence (all `agent_available` checks) cannot tell the two apart.
+/// Asking the binary proves nothing either: `agent --version` prints a bare
+/// date, and an unrelated tool would only error on the `acp` subcommand we
+/// hand it later, once a meeting is already running.
+///
+/// What does identify Cursor's CLI is where it really lives: the official
+/// installer keeps the binary under `~/.local/share/cursor-agent/versions/…`
+/// and symlinks `agent` to it, and the Homebrew cask links into the
+/// `cursor-cli` caskroom. So the bare `agent` name is only believed when the
+/// real file behind it sits in a cursor-named path. Every other name is
+/// specific enough to take at face value.
+fn name_verified(name: &str, bin: &std::path::Path) -> bool {
+    if name != "agent" {
+        return true;
+    }
+    real_path(bin).is_some_and(|real| real.to_string_lossy().to_lowercase().contains("cursor"))
+}
+
+/// The real file behind a resolved binary, following the symlinks an
+/// installer leaves (`~/.local/bin/agent` → `…/cursor-agent/versions/…/agent`).
+/// A bare name is looked up on PATH first, mirroring `agent_available`.
+fn real_path(bin: &std::path::Path) -> Option<PathBuf> {
+    if bin.is_absolute() {
+        return std::fs::canonicalize(bin).ok();
+    }
+    std::env::var_os("PATH").and_then(|path| {
+        std::env::split_paths(&path)
+            .map(|dir| dir.join(bin))
+            .find(|candidate| candidate.is_file())
+            .and_then(|candidate| std::fs::canonicalize(candidate).ok())
+    })
+}
+
 impl Agent {
     /// The one way this app talks to its agent. Everything varies by agent
     /// (binary, args, deadline for a possibly-downloading first start); what
@@ -363,6 +400,36 @@ mod tests {
         for h in HARNESSES {
             assert!(seen.insert(h.id), "duplicate harness id `{}`", h.id);
         }
+    }
+
+    /// The bare `agent` name is only believed when the file behind it really
+    /// is Cursor's CLI (see `name_verified`) — a same-named stranger (Grok's
+    /// CLI installs `agent` into the very same `~/.local/bin`) must not mark
+    /// Cursor as installed.
+    #[cfg(unix)]
+    #[test]
+    fn a_bare_agent_must_resolve_to_a_cursor_path() {
+        let root = std::env::temp_dir().join(format!("gilb-harness-test-{}", std::process::id()));
+        let versions = root.join("cursor-agent/versions/1.0.0");
+        std::fs::create_dir_all(&versions).unwrap();
+        let real_agent = versions.join("agent");
+        std::fs::write(&real_agent, b"#!/bin/sh\n").unwrap();
+
+        // The official installer's shape: a symlink named `agent` pointing
+        // into the cursor-agent versions dir.
+        let link = root.join("agent-link");
+        std::os::unix::fs::symlink(&real_agent, &link).unwrap();
+        assert!(name_verified("agent", &link));
+
+        // A regular file that merely shares the name is not Cursor's CLI.
+        let stranger = root.join("agent-stranger");
+        std::fs::write(&stranger, b"#!/bin/sh\n").unwrap();
+        assert!(!name_verified("agent", &stranger));
+
+        // Specific names are taken at face value — existence is enough.
+        assert!(name_verified("cursor-agent", &stranger));
+
+        std::fs::remove_dir_all(&root).ok();
     }
 
     use gilb_assist_acp::{SessionChoice, SessionOption};

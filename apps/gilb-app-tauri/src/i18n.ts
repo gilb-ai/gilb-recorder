@@ -65,6 +65,8 @@ const en = {
   "assist.thinking": "Thinking…",
   "assist.askPlaceholder": "Ask about the conversation… (Enter)",
   "assist.hide": "Hide",
+  "assist.prev": "Previous",
+  "assist.next": "Next",
   "assist.error": "Assist error: {error}",
 
   // The switch in the signed-in workspace card. The first turn-on downloads
@@ -167,6 +169,8 @@ const ru: typeof en = {
   "assist.thinking": "Думаю…",
   "assist.askPlaceholder": "Спросить о разговоре… (Enter)",
   "assist.hide": "Скрыть",
+  "assist.prev": "Предыдущая",
+  "assist.next": "Следующая",
   "assist.error": "Ошибка подсказок: {error}",
 
   "assist.label": "Ассистент реального времени",
@@ -233,8 +237,10 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
 
 /**
  * Replace the text of every `[data-i18n="key"]` element with its translation
- * and set the window title to the brand name. Call once on DOMContentLoaded;
- * markup keeps its English text as the fallback for missing keys.
+ * and set the window title to the brand name. Attribute variants follow the
+ * same pattern: `data-i18n-title` sets `title`, `data-i18n-placeholder` sets
+ * `placeholder`. Call once on DOMContentLoaded; markup keeps its English text
+ * as the fallback for missing keys.
  */
 export function applyI18n(): void {
   document.documentElement.lang = LOCALE;
@@ -242,5 +248,11 @@ export function applyI18n(): void {
   for (const el of document.querySelectorAll<HTMLElement>("[data-i18n]")) {
     const key = el.dataset.i18n as MessageKey | undefined;
     if (key && STRINGS[key] !== undefined) el.textContent = t(key);
+  }
+  for (const attr of ["title", "placeholder"] as const) {
+    for (const el of document.querySelectorAll<HTMLElement>(`[data-i18n-${attr}]`)) {
+      const key = el.getAttribute(`data-i18n-${attr}`) as MessageKey | null;
+      if (key && STRINGS[key] !== undefined) el.setAttribute(attr, t(key));
+    }
   }
 }

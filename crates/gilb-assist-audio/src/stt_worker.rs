@@ -8,13 +8,14 @@
 //! `gilb_transcribe::LocalTranscriber::transcribe_buffer` and frees the model
 //! in `unload` (~570 MB) when no meeting is feeding segments.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
 use async_trait::async_trait;
 use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tracing::warn;
 
 use crate::segment::Segment;
@@ -69,13 +70,18 @@ impl Default for SttWorkerConfig {
 /// the worker once its queue drains.
 #[derive(Clone)]
 pub struct SttWorkerHandle {
-    tx: mpsc::UnboundedSender<(SttChannel, Segment)>,
+    tx: mpsc::UnboundedSender<(u64, SttChannel, Segment)>,
     keep_model: Arc<AtomicBool>,
+    /// Bumped by [`reset`](Self::reset); segments tagged with an older epoch
+    /// are dropped by the worker instead of transcribed.
+    epoch: Arc<AtomicU64>,
 }
 
 impl SttWorkerHandle {
     pub fn push(&self, channel: SttChannel, segment: Segment) {
-        let _ = self.tx.send((channel, segment));
+        let _ = self
+            .tx
+            .send((self.epoch.load(Ordering::SeqCst), channel, segment));
     }
 
     /// Hold the model in memory regardless of the idle timer. Set while a
@@ -85,32 +91,62 @@ impl SttWorkerHandle {
     pub fn hold_model(&self, hold: bool) {
         self.keep_model.store(hold, Ordering::SeqCst);
     }
+
+    /// Drop every queued segment and the result of any in-flight
+    /// transcription. Called at a meeting boundary: stale work belongs to the
+    /// previous conversation (and its stream clock), not the one just
+    /// starting — and the conversation it would have landed in is already
+    /// reset by then.
+    pub fn reset(&self) {
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 /// Spawn the worker task; recognized utterances arrive on the returned
-/// receiver in processing order.
+/// receiver in processing order. The returned [`JoinHandle`] lets the owner
+/// abort the worker promptly (without it the task outlives its handles,
+/// draining a queue nobody reads — possibly through a cold ~570 MB model
+/// load).
 pub fn spawn_stt_worker<T: SegmentTranscriber>(
     transcriber: T,
     config: SttWorkerConfig,
 ) -> (
     SttWorkerHandle,
     mpsc::UnboundedReceiver<RecognizedUtterance>,
+    JoinHandle<()>,
 ) {
     let (tx, rx) = mpsc::unbounded_channel();
     let (out_tx, out_rx) = mpsc::unbounded_channel();
     let keep_model = Arc::new(AtomicBool::new(false));
-    tokio::spawn(run(transcriber, config, rx, out_tx, keep_model.clone()));
-    (SttWorkerHandle { tx, keep_model }, out_rx)
+    let epoch = Arc::new(AtomicU64::new(0));
+    let task = tokio::spawn(run(
+        transcriber,
+        config,
+        rx,
+        out_tx,
+        keep_model.clone(),
+        epoch.clone(),
+    ));
+    (
+        SttWorkerHandle {
+            tx,
+            keep_model,
+            epoch,
+        },
+        out_rx,
+        task,
+    )
 }
 
 async fn run<T: SegmentTranscriber>(
     mut transcriber: T,
     config: SttWorkerConfig,
-    mut rx: mpsc::UnboundedReceiver<(SttChannel, Segment)>,
+    mut rx: mpsc::UnboundedReceiver<(u64, SttChannel, Segment)>,
     out: mpsc::UnboundedSender<RecognizedUtterance>,
     keep_model: Arc<AtomicBool>,
+    epoch: Arc<AtomicU64>,
 ) {
-    let mut queue: std::collections::VecDeque<(SttChannel, Segment)> =
+    let mut queue: std::collections::VecDeque<(u64, SttChannel, Segment)> =
         std::collections::VecDeque::new();
     loop {
         // Take everything already waiting, so the drop-oldest policy sees the
@@ -124,16 +160,23 @@ async fn run<T: SegmentTranscriber>(
             warn!(dropped, "stt backlog: dropped oldest segments");
         }
 
-        if let Some((channel, segment)) = queue.pop_front() {
+        if let Some((seg_epoch, channel, segment)) = queue.pop_front() {
+            if seg_epoch != epoch.load(Ordering::SeqCst) {
+                continue; // reset while it sat in the queue — stale
+            }
             let (start_secs, end_secs) = (segment.start_secs, segment.end_secs);
             match transcriber.transcribe(segment).await {
+                // A reset during the inference retires the result too: it
+                // belongs to the previous meeting's conversation and clock.
                 Ok(text) if !text.trim().is_empty() => {
-                    let _ = out.send(RecognizedUtterance {
-                        channel,
-                        text,
-                        start_secs,
-                        end_secs,
-                    });
+                    if seg_epoch == epoch.load(Ordering::SeqCst) {
+                        let _ = out.send(RecognizedUtterance {
+                            channel,
+                            text,
+                            start_secs,
+                            end_secs,
+                        });
+                    }
                 }
                 Ok(_) => {} // silence / filtered out
                 Err(e) => warn!(error = %e, "stt segment failed; skipping"),
@@ -200,7 +243,7 @@ mod tests {
             gate,
             unloaded: Arc::new(AtomicBool::new(false)),
         };
-        let (handle, mut rx) = spawn_stt_worker(mock, SttWorkerConfig::default());
+        let (handle, mut rx, _task) = spawn_stt_worker(mock, SttWorkerConfig::default());
 
         handle.push(SttChannel::Mic, seg(1));
         handle.push(SttChannel::System, seg(2));
@@ -230,7 +273,7 @@ mod tests {
             max_queue: 2,
             ..Default::default()
         };
-        let (handle, mut rx) = spawn_stt_worker(mock, config);
+        let (handle, mut rx, _task) = spawn_stt_worker(mock, config);
 
         handle.push(SttChannel::Mic, seg(1));
         tokio::task::yield_now().await; // worker takes seg1, blocks on the gate
@@ -262,7 +305,7 @@ mod tests {
             idle_unload: Duration::from_secs(300),
             ..Default::default()
         };
-        let (handle, mut rx) = spawn_stt_worker(mock, config);
+        let (handle, mut rx, _task) = spawn_stt_worker(mock, config);
 
         handle.push(SttChannel::Mic, seg(1));
         assert_eq!(rx.recv().await.unwrap().text, "seg1");
@@ -286,7 +329,7 @@ mod tests {
             gate: Arc::new(Semaphore::new(100)),
             unloaded: unloaded.clone(),
         };
-        let (handle, mut rx) = spawn_stt_worker(mock, SttWorkerConfig::default());
+        let (handle, mut rx, _task) = spawn_stt_worker(mock, SttWorkerConfig::default());
         handle.hold_model(true);
 
         handle.push(SttChannel::Mic, seg(1));
@@ -309,5 +352,63 @@ mod tests {
             "released model must unload when idle"
         );
         drop(handle);
+    }
+
+    /// A meeting boundary retires everything from the previous stream: the
+    /// queued backlog and the result of the segment mid-inference. Only work
+    /// pushed after the reset may reach the (freshly reset) conversation.
+    #[tokio::test(start_paused = true)]
+    async fn reset_drops_queued_and_in_flight() {
+        let gate = Arc::new(Semaphore::new(0)); // seg1 blocks mid-inference
+        let mock = GatedMock {
+            gate: gate.clone(),
+            unloaded: Arc::new(AtomicBool::new(false)),
+        };
+        let (handle, mut rx, _task) = spawn_stt_worker(mock, SttWorkerConfig::default());
+
+        handle.push(SttChannel::Mic, seg(1));
+        tokio::task::yield_now().await; // worker takes seg1, blocks on the gate
+        handle.push(SttChannel::System, seg(2));
+
+        handle.reset();
+        gate.add_permits(100); // seg1's inference now finishes — into the void
+        handle.push(SttChannel::Mic, seg(3));
+        drop(handle);
+
+        let mut texts = Vec::new();
+        while let Some(u) = rx.recv().await {
+            texts.push(u.text);
+        }
+        assert_eq!(
+            texts,
+            ["seg3"],
+            "pre-reset work, queued or in flight, must not surface"
+        );
+    }
+
+    /// Aborting the returned task handle stops the worker at once — it must
+    /// not keep transcribing a backlog nobody will read.
+    #[tokio::test(start_paused = true)]
+    async fn aborting_the_task_stops_the_worker() {
+        let gate = Arc::new(Semaphore::new(0)); // nothing may proceed
+        let mock = GatedMock {
+            gate: gate.clone(),
+            unloaded: Arc::new(AtomicBool::new(false)),
+        };
+        let (handle, mut rx, task) = spawn_stt_worker(mock, SttWorkerConfig::default());
+
+        handle.push(SttChannel::Mic, seg(1));
+        task.abort();
+        assert!(
+            task.await.unwrap_err().is_cancelled(),
+            "the worker must stop with its aborted task"
+        );
+        drop(handle);
+        assert!(rx.recv().await.is_none(), "no output after the abort");
+        assert_eq!(
+            gate.available_permits(),
+            0,
+            "no inference may start after the abort"
+        );
     }
 }

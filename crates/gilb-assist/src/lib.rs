@@ -37,6 +37,13 @@ const NO_ANSWER: &str = "_No answer — try rephrasing._";
 /// gets a few minutes of conversation rather than the whole hour.
 const MAX_PENDING: usize = 60;
 
+/// Longest wait between two analysis retries while the backend keeps
+/// failing. The wait starts at `min_analysis_interval` and doubles per
+/// failure; the cap matters because a retry can be expensive — when it is
+/// `begin` that fails, each attempt respawns the agent and blocks the
+/// engine loop until the handshake answers or times out.
+const MAX_RETRY_BACKOFF: Duration = Duration::from_secs(60);
+
 /// Who said a turn. Formatted as `me:`/`them:` in the model input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Speaker {
@@ -270,6 +277,11 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
         let mut session: Option<Box<dyn AssistSession>> = None;
         let mut pending: Vec<Turn> = Vec::new();
         let mut last_analysis: Option<Instant> = None;
+        // Effective wait before the next analysis: the plain throttle while
+        // things work, an escalating backoff while they fail.
+        let mut backoff = self.params.min_analysis_interval;
+        // The failure last shown in the panel, to not re-show it every retry.
+        let mut last_error: Option<String> = None;
 
         loop {
             // When turns are buffered but the throttle is still cooling down,
@@ -277,9 +289,7 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             // Only a deadline that is genuinely in the future arms the timer —
             // an expired one would fire instantly on every loop iteration.
             let deadline = match last_analysis {
-                Some(t) if !pending.is_empty() => {
-                    Some(t + self.params.min_analysis_interval).filter(|&d| d > Instant::now())
-                }
+                Some(t) if !pending.is_empty() => Some(t + backoff).filter(|&d| d > Instant::now()),
                 _ => None,
             };
             let cmd = match deadline {
@@ -302,11 +312,22 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
                     session = None;
                     pending.clear();
                     last_analysis = None;
+                    backoff = self.params.min_analysis_interval;
+                    last_error = None;
                     info!("assist session reset (new meeting)");
                     continue;
                 }
                 Some(Cmd::Ask(question)) => {
-                    self.ask(&mut session, &mut pending, &question).await;
+                    // A typed question is a fresh user action: its outcome is
+                    // always shown, even if the same failure was reported a
+                    // moment ago.
+                    last_error = None;
+                    if self
+                        .ask(&mut session, &mut pending, &question, &mut last_error)
+                        .await
+                    {
+                        backoff = self.params.min_analysis_interval;
+                    }
                     last_analysis = Some(Instant::now());
                 }
                 Some(Cmd::Turn(turn)) => {
@@ -321,8 +342,14 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
                 None => {}
             }
 
-            self.maybe_analyze(&mut session, &mut pending, &mut last_analysis)
-                .await;
+            self.maybe_analyze(
+                &mut session,
+                &mut pending,
+                &mut last_analysis,
+                &mut backoff,
+                &mut last_error,
+            )
+            .await;
         }
     }
 
@@ -331,6 +358,8 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
         session: &mut Option<Box<dyn AssistSession>>,
         pending: &mut Vec<Turn>,
         last_analysis: &mut Option<Instant>,
+        backoff: &mut Duration,
+        last_error: &mut Option<String>,
     ) {
         if pending.is_empty() || !self.config.enabled().await {
             return;
@@ -340,54 +369,66 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
             return;
         }
         if let Some(t) = *last_analysis {
-            if t.elapsed() < self.params.min_analysis_interval {
+            if t.elapsed() < *backoff {
                 return; // the deadline in run() will bring us back
             }
         }
 
         let input = format_turns(pending);
         *last_analysis = Some(Instant::now());
-        if self.converse(session, Input::Turns(&input)).await {
+        if self
+            .converse(session, Input::Turns(&input), last_error)
+            .await
+        {
             pending.clear();
+            *backoff = self.params.min_analysis_interval;
+        } else {
+            // The turns stay buffered and the next trigger retries them — but
+            // not at the steady-state pace. A backend that keeps failing (an
+            // agent that never answers `begin` costs a process spawn and a
+            // handshake wait per attempt) is poked less and less often.
+            *backoff = (*backoff * 2).min(MAX_RETRY_BACKOFF);
         }
-        // On failure turns stay buffered; the next trigger retries them.
     }
 
     /// A user question (Ask). The turns still sitting below the analysis
     /// threshold go in with it: "what do I answer?" is about what was *just*
     /// said, and without them the model would answer about the previous
     /// minute. Delivered turns are then dropped so the next analysis does not
-    /// repeat them.
+    /// repeat them. Returns whether the question was delivered.
     async fn ask(
         &self,
         session: &mut Option<Box<dyn AssistSession>>,
         pending: &mut Vec<Turn>,
         question: &str,
-    ) {
+        last_error: &mut Option<String>,
+    ) -> bool {
         if !self.config.enabled().await {
             // The user typed and pressed Enter — silence would read as a bug.
             let _ = self.events.send(AssistEvent::Error(
                 "the assistant is disabled for this workspace".into(),
             ));
-            return;
+            return false;
         }
         let turns = if pending.is_empty() {
             String::new()
         } else {
             format_turns(pending)
         };
-        if self
+        let ok = self
             .converse(
                 session,
                 Input::Ask {
                     turns: &turns,
                     question,
                 },
+                last_error,
             )
-            .await
-        {
+            .await;
+        if ok {
             pending.clear();
         }
+        ok
     }
 
     /// One round-trip to the model: open the session if needed, send, apply
@@ -396,13 +437,23 @@ impl<C: AssistConfig, B: AssistBackend> Engine<C, B> {
         &self,
         session: &mut Option<Box<dyn AssistSession>>,
         input: Input<'_>,
+        last_error: &mut Option<String>,
     ) -> bool {
         let _ = self.events.send(AssistEvent::Loading(true));
         let ok = self.converse_inner(session, input).await;
         let _ = self.events.send(AssistEvent::Loading(false));
-        if let Err(e) = &ok {
-            warn!(error = %e, "assist analysis failed");
-            let _ = self.events.send(AssistEvent::Error(e.to_string()));
+        match &ok {
+            Ok(()) => *last_error = None,
+            Err(e) => {
+                warn!(error = %e, "assist analysis failed");
+                // A backend that stays down fails every retry with the same
+                // message; the panel needs the news once, not per attempt.
+                let msg = e.to_string();
+                if last_error.as_deref() != Some(msg.as_str()) {
+                    let _ = self.events.send(AssistEvent::Error(msg.clone()));
+                }
+                *last_error = Some(msg);
+            }
         }
         ok.is_ok()
     }

@@ -456,11 +456,20 @@ fn wire(app: &AppHandle) {
 
     let (assist, mut events) = gilb_assist::spawn(config, backend, EngineParams::default());
 
-    let tap = app.state::<AudioTapHandle>();
+    let Some(tap) = app.try_state::<AudioTapHandle>() else {
+        // Same degrade-don't-panic rule as shortcut.rs: this crate is reused
+        // by shells whose setup ordering may not manage the pipeline's state.
+        warn!("assist off: no audio tap managed; meeting pipeline not spawned");
+        return;
+    };
     // The recording bus marks meeting boundaries: each new meeting starts a
     // fresh conversation (and a fresh stream clock, echo canceller and voice
     // detector) instead of inheriting the previous client's context.
-    let bus = (*app.state::<gilb_events::EventBus>()).clone();
+    let Some(bus) = app.try_state::<gilb_events::EventBus>() else {
+        warn!("assist off: no event bus managed; meeting pipeline not spawned");
+        return;
+    };
+    let bus = (*bus).clone();
     let bus_for_boundary = bus.clone();
     let pipeline = spawn_assist_pipeline(
         &tap.0,
@@ -475,8 +484,13 @@ fn wire(app: &AppHandle) {
 
     ensure_window(app);
     emit_listening(app, false);
-    if !state.shortcut_registered.swap(true, Ordering::SeqCst) {
-        register_shortcut(app);
+    // Mark registered only on success: a transient failure (another app
+    // holding the key right now) must not kill the hotkey until a restart —
+    // the next wire() retries it.
+    if !state.shortcut_registered.load(Ordering::SeqCst) {
+        state
+            .shortcut_registered
+            .store(register_shortcut(app), Ordering::SeqCst);
     }
 
     // A new meeting is a fresh start for the panel too: a hide from the

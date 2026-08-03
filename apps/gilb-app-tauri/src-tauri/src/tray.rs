@@ -116,6 +116,9 @@ fn show_main_window(app: &AppHandle) {
     match tauri::WebviewWindowBuilder::from_config(app, &config) {
         Ok(builder) => match builder.build() {
             Ok(win) => {
+                // The rebuilt window needs the same close-to-hide handler as
+                // the original, or the next red dot destroys it for good.
+                crate::install_close_to_hide(app, &win);
                 let _ = win.show();
                 let _ = win.set_focus();
                 info!("main window rebuilt after it was destroyed");
