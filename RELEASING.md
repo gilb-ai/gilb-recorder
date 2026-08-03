@@ -120,11 +120,30 @@ Then:
 export APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team id>)"
 export APPLE_ID="<your-apple-id-email>"
 export APPLE_TEAM_ID="<your-team-id>"
-export APPLE_PASSWORD="@keychain:gilb-notary"
+export APPLE_PASSWORD="<app-specific-password>"   # the same one as in the profile
 
 cd apps/gilb-app-tauri
 npm install
 npm run tauri build
+```
+
+Note: `APPLE_PASSWORD="@keychain:gilb-notary"` does **not** work — tauri-cli
+passes the value as a literal password and notarization fails with 401. If
+you'd rather not put the app-specific password in the environment, build with
+`APPLE_PASSWORD` unset (bundling fails at the notarize step, after signing)
+and finish by hand:
+
+```sh
+cd target/release/bundle/macos
+ditto -c -k --keepParent Gilb.app Gilb.zip
+xcrun notarytool submit Gilb.zip --keychain-profile gilb-notary --wait
+xcrun stapler staple Gilb.app
+hdiutil create -volname Gilb -srcfolder Gilb.app -ov -format UDZO \
+  ../dmg/Gilb_<version>_aarch64.dmg
+codesign --sign "$APPLE_SIGNING_IDENTITY" ../dmg/Gilb_<version>_aarch64.dmg
+xcrun notarytool submit ../dmg/Gilb_<version>_aarch64.dmg \
+  --keychain-profile gilb-notary --wait
+xcrun stapler staple ../dmg/Gilb_<version>_aarch64.dmg
 ```
 
 `beforeBuildCommand` stages the sidecars (`scripts/build-sidecars.sh` builds
@@ -140,8 +159,8 @@ Artifacts land in `apps/gilb-app-tauri/src-tauri/target/release/bundle/`.
 Before a locally built `.dmg` leaves the machine — all three must pass:
 
 ```sh
-DMG=apps/gilb-app-tauri/src-tauri/target/release/bundle/dmg/Gilb_*.dmg
-APP=apps/gilb-app-tauri/src-tauri/target/release/bundle/macos/Gilb.app
+DMG=target/release/bundle/dmg/Gilb_*.dmg
+APP=target/release/bundle/macos/Gilb.app
 
 spctl -a -vvv -t install "$DMG"      # must say "Notarized Developer ID"
 stapler validate "$DMG"              # ticket is stapled
@@ -155,9 +174,15 @@ anyway.
 
 ## Troubleshooting
 
-- **`notarytool` complains about credentials.** Re-run
-  `xcrun notarytool store-credentials gilb-notary …`; the profile name must
-  match what `APPLE_PASSWORD` references (`@keychain:gilb-notary`).
+- **`notarytool` complains about credentials, or notarization fails with 401
+  "Invalid credentials".** `APPLE_PASSWORD` must be the app-specific password
+  itself — tauri-cli does not resolve the `@keychain:` syntax. Either put the
+  password in `APPLE_PASSWORD` or finish notarization by hand with
+  `--keychain-profile gilb-notary` (see above). If the profile itself is
+  broken, re-run `xcrun notarytool store-credentials gilb-notary …`.
+- **A hand-built `.dmg` says "source=Unnotarized Developer ID" while the
+  `.app` inside is accepted.** The signed `.dmg` needs its own notarization
+  ticket: submit the `.dmg` to `notarytool` and staple it too.
 - **`spctl` says "source=Unnotarized Developer ID".** Notarization did not run
   or did not staple. Check that the `APPLE_*` vars were set in the same shell
   that ran `npm run tauri build`, and look for `notarytool submit` in the log.
