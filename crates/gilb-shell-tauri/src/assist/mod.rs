@@ -66,7 +66,7 @@ pub const DEFAULT_MODEL_URL: &str = gilb_config::TRANSCRIBE_MODEL_URL;
 
 /// What the product brings to the shared machinery.
 pub trait AssistHost: Send + Sync + 'static {
-    /// Can the feature run at all right now? Gilb answers "the agent binary is
+    /// Can the feature run at all right now? WorkScreen answers "the agent binary is
     /// installed"; a product whose prompt and model endpoint come from a
     /// server answers "signed in". A `false` here hides the feature in the
     /// UI and refuses to wire it, without touching the user's preference.

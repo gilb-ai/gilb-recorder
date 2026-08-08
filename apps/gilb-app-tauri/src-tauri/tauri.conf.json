@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Gilb",
+  "productName": "WorkScreen",
   "version": "2.1.0",
   "identifier": "app.farol.gilb",
   "build": {
@@ -13,7 +13,7 @@
     "withGlobalTauri": false,
     "windows": [
       {
-        "title": "Gilb.ai",
+        "title": "WorkScreen",
         "width": 480,
         "height": 700,
         "resizable": true,
@@ -34,7 +34,7 @@
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCMDdGNURGNkMzRTQwNQpSV1FGNU1QMlhYK3dCc29MMGNZSmZualBZcWIrNHpRMUdqMFlUOFB0ZWRpQ3ZFMDNTSUFUb2d2Zwo=",
       "endpoints": [
-        "https://github.com/gilb-ai/gilb-recorder/releases/latest/download/latest.json"
+        "https://github.com/farol-team/workscreen/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"

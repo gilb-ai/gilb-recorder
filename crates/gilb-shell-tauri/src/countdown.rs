@@ -26,7 +26,7 @@ const STOP_COUNTDOWN_HTML: &str = "stop-countdown.html";
 
 /// Fallback window title when no [`ShellConfig`] is managed (shells are expected
 /// to manage one — see [`crate::spawn_meeting_pipeline`]).
-const DEFAULT_TITLE: &str = "Gilb";
+const DEFAULT_TITLE: &str = "WorkScreen";
 
 /// Managed Tauri state holding the sender half of the pipeline's stop-countdown
 /// resolution channel, so the `resolve_stop_countdown` command can hand the

@@ -3,14 +3,14 @@
 <plist version="1.0">
 <dict>
     <key>NSAccessibilityUsageDescription</key>
-    <string>Gilb records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
+    <string>WorkScreen records actions in the focused window via the Accessibility API to build a local journal of your work.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Gilb queries the active application and window for context.</string>
+    <string>WorkScreen queries the active application and window for context.</string>
     <key>NSAudioCaptureUsageDescription</key>
-    <string>Gilb records system audio during meetings so the other participants' voices can be transcribed on your device.</string>
+    <string>WorkScreen records system audio during meetings so the other participants' voices can be transcribed on your device.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Gilb records microphone audio while a recording session is active to capture spoken context alongside your actions.</string>
+    <string>WorkScreen records microphone audio while a recording session is active to capture spoken context alongside your actions.</string>
     <key>NSScreenCaptureDescription</key>
-    <string>Gilb captures the screen while a recording session is active to build a local journal of your work.</string>
+    <string>WorkScreen captures the screen while a recording session is active to build a local journal of your work.</string>
 </dict>
 </plist>

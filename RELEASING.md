@@ -1,4 +1,4 @@
-# Releasing Gilb
+# Releasing WorkScreen
 
 Releases are built, signed, and published by `.github/workflows/release.yml`
 (macOS aarch64 + x86_64, Windows x64). The updater endpoint
@@ -130,7 +130,7 @@ binary, each sidecar, the `.app`, and the `.dmg`, prints *"skipping app
 notarization"*, and — crucially — still runs its own `bundle_dmg.sh`. That
 script is what gives the image the drag-to-`/Applications` installer layout
 (the Applications symlink, icon placement). Do **not** assemble the `.dmg` by
-hand with `hdiutil create -srcfolder Gilb.app`: that mounts as a bare folder
+hand with `hdiutil create -srcfolder WorkScreen.app`: that mounts as a bare folder
 with an app in it, not the installer users expect — and packaging the raw
 `target/release/gilb-app-tauri` binary instead of the `.app` bundle is worse
 still. The `.dmg` tauri bundles is the one to ship.
@@ -150,7 +150,7 @@ xcrun stapler staple dmg/Gilb_<version>_aarch64.dmg
 ```
 
 Notarizing the `.dmg` covers everything inside it: Apple unpacks the image
-and issues tickets for every nested code signature (`Gilb.app`, the main
+and issues tickets for every nested code signature (`WorkScreen.app`, the main
 binary, each sidecar), so both the image and the app come back
 `Notarized Developer ID` — a bad nested signature would fail the whole
 submission as `Invalid`. Only the *staple* is dmg-only: the `.app` inside
@@ -179,7 +179,7 @@ Before a locally built `.dmg` leaves the machine — all three must pass:
 
 ```sh
 DMG=target/release/bundle/dmg/Gilb_*.dmg
-APP=target/release/bundle/macos/Gilb.app
+APP=target/release/bundle/macos/WorkScreen.app
 
 spctl -a -vvv -t install "$DMG"      # must say "Notarized Developer ID"
 stapler validate "$DMG"              # ticket is stapled

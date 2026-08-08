@@ -1,6 +1,6 @@
 # Real-time meeting suggestions
 
-While a call is running, Gilb can transcribe it on the fly and show short
+While a call is running, WorkScreen can transcribe it on the fly and show short
 suggestions — the next question to ask, the objection that just went
 unanswered — in a small always-on-top panel. Nothing here touches the
 recording: the pipeline reads a *copy* of the audio, and if any part of it
@@ -164,7 +164,7 @@ hide is remembered until the next meeting.
 
 ## Backends
 
-`AssistBackend` is what a product plugs in. Gilb ships `gilb-assist-acp`,
+`AssistBackend` is what a product plugs in. WorkScreen ships `gilb-assist-acp`,
 which speaks the [Agent Client Protocol](https://agentclientprotocol.com) over
 stdio to an agent already on the user's machine. ACP gives a persistent
 session, so the conversation is the agent's to remember (D5), and streaming,
