@@ -1,11 +1,18 @@
 //! Tests drive a **fake agent** — a shell script that speaks just enough ACP —
-//! so the whole client is exercised without an agent binary, a model or a
+//! so the whole backend is exercised without an agent binary, a model or a
 //! network. Same trick `gilb-analyzer` uses for `claude`.
+//!
+//! What is tested here is gilb's half: silence instead of a late suggestion,
+//! text only, nobody to answer a permission dialog, and a system prompt that
+//! rides in on the first turn. The wire itself — id spellings, process groups,
+//! abandoned turns, a knob that withdraws another — belongs to `acp-client`
+//! and is pinned by its suite, not duplicated here.
 
 #![cfg(unix)]
 
-use super::*;
 use std::os::unix::fs::PermissionsExt;
+
+use super::*;
 
 /// Writes an executable fake agent and returns its path (kept alive by `dir`).
 fn fake_agent(dir: &tempfile::TempDir, body: &str) -> PathBuf {
@@ -18,16 +25,13 @@ fn fake_agent(dir: &tempfile::TempDir, body: &str) -> PathBuf {
 fn config(bin: PathBuf) -> AcpConfig {
     AcpConfig {
         bin,
-        args: Vec::new(),
-        cwd: std::env::temp_dir(),
         turn_timeout: Duration::from_secs(5),
         startup_timeout: Duration::from_secs(5),
         ..AcpConfig::default()
     }
 }
 
-/// Reads a line per request and answers by method name. `$1` is the extra
-/// behaviour injected per test between the handshake and the prompt reply.
+/// Reads a line per request and answers by method name.
 const HANDSHAKE: &str = r#"
 read_line() { IFS= read -r line; }
 read_line   # initialize
@@ -44,8 +48,8 @@ async fn streams_the_answer_and_ends_the_turn() {
         &dir,
         &format!(
             r#"{HANDSHAKE}
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"**Спроси"}}}}}}}}\n'
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":" про бюджет**"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"**Спроси"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":" про бюджет**"}}}}}}}}\n'
 printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
 sleep 5
 "#
@@ -59,8 +63,8 @@ sleep 5
     assert_eq!(reply.as_deref(), Some("**Спроси про бюджет**"));
 }
 
-/// Thoughts and tool calls are not suggestions: only agent_message_chunk text
-/// reaches the panel, or the overlay fills with the agent thinking out loud.
+/// Thoughts and tool calls are not suggestions: only the answer reaches the
+/// panel, or the overlay fills with the agent thinking out loud.
 #[tokio::test]
 async fn ignores_thoughts_and_tool_calls() {
     let dir = tempfile::tempdir().unwrap();
@@ -68,9 +72,9 @@ async fn ignores_thoughts_and_tool_calls() {
         &dir,
         &format!(
             r#"{HANDSHAKE}
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_thought_chunk","content":{{"type":"text","text":"надо посмотреть CRM"}}}}}}}}\n'
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"tool_call","title":"crm_sql"}}}}}}\n'
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"уточни сроки"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_thought_chunk","content":{{"type":"text","text":"надо посмотреть CRM"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"tool_call","title":"crm_sql"}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"уточни сроки"}}}}}}}}\n'
 printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
 sleep 5
 "#
@@ -86,8 +90,8 @@ sleep 5
     );
 }
 
-/// A permission prompt with nobody watching would hang the turn forever, so the
-/// client answers it itself and the agent finishes with what it has.
+/// A permission prompt with nobody watching would hang the turn forever, so
+/// the client answers it itself and the agent finishes with what it has.
 #[tokio::test]
 async fn refuses_permission_requests_instead_of_hanging() {
     let dir = tempfile::tempdir().unwrap();
@@ -95,9 +99,9 @@ async fn refuses_permission_requests_instead_of_hanging() {
         &dir,
         &format!(
             r#"{HANDSHAKE}
-printf '{{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{{"sessionId":"s-1"}}}}\n'
+printf '{{"jsonrpc":"2.0","id":99,"method":"session/request_permission","params":{{"sessionId":"s-1","toolCall":{{"title":"Bash(ls)"}},"options":[{{"optionId":"y","kind":"allow_once"}}]}}}}\n'
 read_line   # our answer to the permission request
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"без инструментов: спроси про бюджет"}}}}}}}}\n'
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"без инструментов: спроси про бюджет"}}}}}}}}\n'
 printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
 sleep 5
 "#
@@ -161,15 +165,14 @@ async fn system_prompt_leads_the_first_turn_only() {
         &dir,
         &format!(
             r#"
-IFS= read -r line
+read_line() {{ IFS= read -r line; }}
+read_line
 printf '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}\n'
-IFS= read -r line
+read_line
 printf '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-1"}}}}\n'
-IFS= read -r line
-printf '%s\n' "$line" >> {out}
+IFS= read -r line; printf '%s\n' "$line" >> {out}
 printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
-IFS= read -r line
-printf '%s\n' "$line" >> {out}
+IFS= read -r line; printf '%s\n' "$line" >> {out}
 printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
 sleep 5
 "#,
@@ -188,92 +191,57 @@ sleep 5
     assert!(!lines.next().unwrap().contains("ТЫ СУФЛЁР"));
 }
 
-#[test]
-fn agent_availability_follows_the_binary() {
+/// `AssistSession::send` must be idempotent on failure: the engine keeps the
+/// turns buffered and calls again with the same input.
+///
+/// Cleared before the turn was made, a failed first `send` would take the
+/// instructions with it — and the agent would prompt the whole meeting having
+/// never been told what it is for.
+#[tokio::test]
+async fn a_system_prompt_survives_a_failed_first_turn() {
     let dir = tempfile::tempdir().unwrap();
-    let bin = fake_agent(&dir, "exit 0\n");
-
-    assert!(agent_available(&bin));
-    assert!(!agent_available(&dir.path().join("nope")));
-}
-
-/// The leak that produced the orphans, pinned end to end.
-///
-/// An adapter is reached through `npx`, so the process we spawn goes on to
-/// start the agent itself. Killing our own child leaves that grandchild
-/// running — reparented to init, holding its memory. Here a shell stands in
-/// for `npx` and a `sleep` for the agent: neither speaks ACP, so the
-/// handshake times out, which is exactly the path that used to leak (the
-/// options probe against a binary that is not an adapter).
-///
-/// Passing means the grandchild is gone and the registry is clean, without
-/// anyone calling the reaper — the failure path took the whole group.
-#[tokio::test]
-async fn a_failed_handshake_takes_the_whole_process_group() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let registry = dir.path().join("agents.json");
-    let marker = dir.path().join("grandchild.pid");
-
-    let config = AcpConfig {
-        bin: PathBuf::from("/bin/sh"),
-        // Start a "child agent", write down its pid, then sit there saying
-        // nothing — the shape of a binary that does not speak the protocol.
-        args: vec![
-            "-c".into(),
-            format!(
-                "sleep 60 & echo $! > {}; sleep 60",
-                marker.to_string_lossy()
-            ),
-        ],
-        startup_timeout: Duration::from_millis(600),
-        registry: Some(registry.clone()),
-        ..AcpConfig::default()
-    };
-
-    let err = match bootstrap(&config).await {
-        Err(err) => err,
-        // Not `expect_err`: the success value owns a live agent, and printing
-        // it is neither possible nor the point.
-        Ok(_) => panic!("a shell that says nothing cannot pass an ACP handshake"),
-    };
-    assert!(
-        err.to_string().contains("did not answer the ACP handshake"),
-        "unexpected failure: {err}"
+    let out = dir.path().join("seen.txt");
+    let bin = fake_agent(
+        &dir,
+        &format!(
+            r#"
+read_line() {{ IFS= read -r line; }}
+read_line
+printf '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}\n'
+read_line
+printf '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-1"}}}}\n'
+IFS= read -r line; printf '%s\n' "$line" >> {out}
+printf '{{"jsonrpc":"2.0","id":3,"error":{{"code":-32000,"message":"overloaded"}}}}\n'
+IFS= read -r line; printf '%s\n' "$line" >> {out}
+printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
+sleep 5
+"#,
+            out = out.display()
+        ),
     );
 
-    let pid: i32 = std::fs::read_to_string(&marker)
-        .expect("the stand-in agent recorded its pid")
-        .trim()
-        .parse()
-        .expect("a pid");
+    let backend = AcpBackend::new(config(bin));
+    let mut session = backend.begin("ТЫ СУФЛЁР").await.unwrap();
 
-    // The signal travels the group; give the kernel a moment to deliver it.
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let alive = unsafe { libc::kill(pid, 0) } == 0;
     assert!(
-        !alive,
-        "the grandchild outlived the failed handshake — this is the leak"
+        session.send("them: раз").await.is_err(),
+        "the agent refused"
     );
+    let _ = session.send("them: раз").await.unwrap();
 
-    let left = std::fs::read_to_string(&registry).unwrap_or_default();
+    let seen = std::fs::read_to_string(&out).unwrap();
+    let mut lines = seen.lines();
+    assert!(lines.next().unwrap().contains("ТЫ СУФЛЁР"));
     assert!(
-        !left.contains("/bin/sh"),
-        "a group that was cleaned up must not stay on the reaper's list: {left}"
+        lines.next().unwrap().contains("ТЫ СУФЛЁР"),
+        "a retry after a failed turn still carries the instructions"
     );
 }
 
-/// Choosing a model can withdraw the other knobs, and the client must notice.
-///
-/// The real case, from Claude Code's adapter: `model=haiku` succeeds and comes
-/// back with an option set that no longer has `effort` in it — haiku has no
-/// thinking tiers. Sending the remembered effort anyway earns an "Unknown
-/// config option: effort" and a warning in the log on every single session.
-///
-/// The fake agent below withdraws the option the same way, and records what it
-/// was asked for; passing means the client dropped the withdrawn knob and went
-/// straight on with the meeting.
+/// The knobs the user chose for this feature are applied before the first
+/// suggestion, not after it.
 #[tokio::test]
-async fn an_option_withdrawn_by_an_earlier_choice_is_not_asked_for() {
+async fn the_chosen_model_is_applied_before_the_first_turn() {
     let dir = tempfile::tempdir().unwrap();
     let asked = dir.path().join("asked.log");
     let bin = fake_agent(
@@ -283,12 +251,12 @@ async fn an_option_withdrawn_by_an_earlier_choice_is_not_asked_for() {
 read_line() {{ IFS= read -r line; printf '%s\n' "$line" >> {log}; }}
 read_line   # initialize
 printf '{{"jsonrpc":"2.0","id":1,"result":{{"protocolVersion":1}}}}\n'
-read_line   # session/new — both knobs on offer
-printf '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-1","configOptions":[{{"id":"model"}},{{"id":"effort"}}]}}}}\n'
-read_line   # set_config_option(model) — and effort goes away with the answer
+read_line   # session/new
+printf '{{"jsonrpc":"2.0","id":2,"result":{{"sessionId":"s-1","configOptions":[{{"id":"model"}}]}}}}\n'
+read_line   # set_config_option(model)
 printf '{{"jsonrpc":"2.0","id":3,"result":{{"configOptions":[{{"id":"model"}}]}}}}\n'
-read_line   # must already be the prompt
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"готово"}}}}}}}}\n'
+read_line   # and only then the prompt
+printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"sessionId":"s-1","update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"готово"}}}}}}}}\n'
 printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
 sleep 5
 "#,
@@ -297,34 +265,31 @@ sleep 5
     );
 
     let mut cfg = config(bin);
-    cfg.config_options = vec![
-        ("model".to_string(), "haiku".to_string()),
-        ("effort".to_string(), "low".to_string()),
-    ];
-
+    cfg.config_options = vec![("model".to_string(), "haiku".to_string())];
     let backend = AcpBackend::new(cfg);
-    let mut session = backend.begin("ты суфлёр").await.unwrap();
-    let reply = session.send("them: привет").await.unwrap();
-    assert_eq!(reply.as_deref(), Some("готово"), "the meeting carried on");
+    let mut session = backend.begin("").await.unwrap();
 
-    let log = std::fs::read_to_string(&asked).unwrap_or_default();
-    assert!(
-        log.contains(r#""configId":"model""#),
-        "the model must still be applied: {log}"
+    assert_eq!(
+        session.send("them: привет").await.unwrap().as_deref(),
+        Some("готово")
     );
+    let log = std::fs::read_to_string(&asked).unwrap_or_default();
+    let mut lines = log.lines().skip(2);
     assert!(
-        !log.contains(r#""configId":"effort""#),
-        "effort was withdrawn and must not be asked for: {log}"
+        lines
+            .next()
+            .unwrap_or_default()
+            .contains(r#""value":"haiku""#),
+        "the model is set before anything is asked: {log}"
     );
 }
 
 /// The agent is spawned with the PATH we hand it, not the one we inherited.
 ///
-/// This is what broke the packaged app while dev worked fine: an `npx`
-/// adapter is a `#!/usr/bin/env node` script, so it resolves `node` by name
-/// from its own PATH. A terminal-launched build inherits a login shell's and
-/// never notices; an `.app` from Finder gets launchd's, where no node exists,
-/// and the agent dies before the handshake — "agent closed the connection".
+/// This is what broke the packaged app while dev worked fine: an `npx` adapter
+/// is a `#!/usr/bin/env node` script, so it resolves `node` by name from its
+/// own PATH, and an `.app` from Finder is handed launchd's, where no node
+/// exists.
 #[tokio::test]
 async fn the_agent_is_given_the_path_we_configured() {
     let dir = tempfile::tempdir().unwrap();
@@ -354,50 +319,10 @@ sleep 5
     );
 }
 
-/// An agent that never answers `session/set_config_option` must not wedge
-/// the session: the knob is best-effort, the startup deadline applies to it
-/// the same as to the handshake, and the meeting goes on without it.
+/// The panel offers controls only for shapes the agent actually sends: a
+/// control for a type nobody has produced is a guess.
 #[tokio::test]
-async fn a_silent_config_option_does_not_wedge_the_session() {
-    let dir = tempfile::tempdir().unwrap();
-    let bin = fake_agent(
-        &dir,
-        r#"
-read_line() { IFS= read -r line; }
-read_line   # initialize
-printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}\n'
-read_line   # session/new
-printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1"}}\n'
-read_line   # session/set_config_option — never answered
-read_line   # session/prompt
-printf '{"jsonrpc":"2.0","method":"session/update","params":{"update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"без настроек"}}}}\n'
-printf '{"jsonrpc":"2.0","id":4,"result":{"stopReason":"end_turn"}}\n'
-sleep 5
-"#,
-    );
-
-    let mut cfg = config(bin);
-    cfg.startup_timeout = Duration::from_secs(2);
-    cfg.config_options = vec![("model".to_string(), "haiku".to_string())];
-    let backend = AcpBackend::new(cfg);
-    let mut session = tokio::time::timeout(Duration::from_secs(5), backend.begin(""))
-        .await
-        .expect("an unanswered config option must not wedge startup")
-        .unwrap();
-
-    let reply = session.send("them: дорого").await.unwrap();
-    assert_eq!(
-        reply.as_deref(),
-        Some("без настроек"),
-        "the meeting carried on"
-    );
-}
-
-/// A request whose write fails must not leave its response slot behind —
-/// otherwise every dead-agent turn piles a corpse into the pending map until
-/// the connection dies.
-#[tokio::test]
-async fn a_failed_write_leaves_no_pending_request() {
+async fn only_selectable_options_are_offered_to_the_panel() {
     let dir = tempfile::tempdir().unwrap();
     let bin = fake_agent(
         &dir,
@@ -405,61 +330,27 @@ async fn a_failed_write_leaves_no_pending_request() {
 IFS= read -r line
 printf '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}\n'
 IFS= read -r line
-printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1"}}\n'
-exit 0
+printf '{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s-1","configOptions":[{"id":"model","name":"Model","type":"select","category":"model","currentValue":"haiku","options":[{"value":"haiku","name":"Haiku"}]},{"id":"note","type":"string","currentValue":"x"},{"id":"empty","type":"select","options":[]}]}}\n'
+sleep 5
 "#,
     );
 
-    let mut session = AcpSession::start(config(bin), String::new()).await.unwrap();
-    // Let the agent's exit settle so the write below is what fails.
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    let options = probe_session_options(&config(bin)).await.unwrap();
 
-    assert!(session.send("them: дорого").await.is_err());
-    assert!(
-        session.conn.pending.lock().await.is_empty(),
-        "a request that could not be written must not stay pending"
+    assert_eq!(
+        options.len(),
+        1,
+        "a string knob and an empty one are not controls"
     );
+    assert_eq!(options[0].id, "model");
+    assert_eq!(options[0].choices[0].value, "haiku");
 }
 
-/// A turn that times out keeps streaming on the agent's side: its late chunks
-/// must not land in the NEXT turn's suggestion. The fake agent answers the
-/// first prompt a full second past the deadline; passing means the second
-/// turn contains only its own words.
-#[tokio::test]
-async fn late_chunks_do_not_leak_into_the_next_turn() {
+#[test]
+fn agent_availability_follows_the_binary() {
     let dir = tempfile::tempdir().unwrap();
-    let bin = fake_agent(
-        &dir,
-        &format!(
-            r#"{HANDSHAKE}
-sleep 1
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"поздняя"}}}}}}}}\n'
-printf '{{"jsonrpc":"2.0","id":3,"result":{{"stopReason":"end_turn"}}}}\n'
-read_line   # session/cancel for the timed-out turn
-read_line   # session/prompt #2
-printf '{{"jsonrpc":"2.0","method":"session/update","params":{{"update":{{"sessionUpdate":"agent_message_chunk","content":{{"type":"text","text":"свежая"}}}}}}}}\n'
-printf '{{"jsonrpc":"2.0","id":4,"result":{{"stopReason":"end_turn"}}}}\n'
-sleep 5
-"#
-        ),
-    );
+    let bin = fake_agent(&dir, "exit 0\n");
 
-    let mut cfg = config(bin);
-    // Long enough that turn #2 (answered as soon as the agent's sleep ends)
-    // still fits, short enough that turn #1 is abandoned mid-sleep.
-    cfg.turn_timeout = Duration::from_millis(700);
-    let backend = AcpBackend::new(cfg);
-    let mut session = backend.begin("").await.unwrap();
-
-    assert_eq!(
-        session.send("them: раз").await.unwrap(),
-        None,
-        "the slow turn is abandoned"
-    );
-    let reply = session.send("them: два").await.unwrap();
-    assert_eq!(
-        reply.as_deref(),
-        Some("свежая"),
-        "no words from the dead turn may leak in"
-    );
+    assert!(agent_available(&bin));
+    assert!(!agent_available(&dir.path().join("nope")));
 }

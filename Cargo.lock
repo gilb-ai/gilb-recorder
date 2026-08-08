@@ -12,6 +12,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "acp-agents"
+version = "0.1.0"
+source = "git+https://github.com/farol-team/acp-agents?tag=v0.1.0#ec5b1e4ea1161734ae575eaae6207d3f15478b9a"
+
+[[package]]
+name = "acp-client"
+version = "0.1.0"
+source = "git+https://github.com/farol-team/acp-agents?tag=v0.1.0#ec5b1e4ea1161734ae575eaae6207d3f15478b9a"
+dependencies = [
+ "libc",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2039,6 +2056,7 @@ dependencies = [
 name = "gilb-app-tauri"
 version = "2.1.0"
 dependencies = [
+ "acp-agents",
  "anyhow",
  "async-trait",
  "gilb-assist",
@@ -2086,11 +2104,11 @@ dependencies = [
 name = "gilb-assist-acp"
 version = "2.1.0"
 dependencies = [
+ "acp-agents",
+ "acp-client",
  "anyhow",
  "async-trait",
  "gilb-assist",
- "libc",
- "serde_json",
  "tempfile",
  "tokio",
  "tracing",

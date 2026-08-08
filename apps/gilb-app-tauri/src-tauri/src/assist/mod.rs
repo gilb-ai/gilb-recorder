@@ -24,7 +24,7 @@ mod harness;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use harness::{agent, seed_choices, AGENT_BIN_ENV, EFFORT_ENV, HARNESSES, MODEL_ENV};
+use harness::{agent, installed, seed_choices, AGENT_BIN_ENV, EFFORT_ENV, HARNESSES, MODEL_ENV};
 
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
@@ -162,7 +162,7 @@ impl AssistHost for GilbAssistHost {
                         .into_iter()
                         .map(|c| SessionChoiceInfo {
                             value: c.value,
-                            label: c.label,
+                            label: c.name,
                         })
                         .collect(),
                 })
@@ -189,7 +189,7 @@ impl AssistHost for GilbAssistHost {
             .map(|h| AgentChoice {
                 id: h.id.to_string(),
                 label: h.name.to_string(),
-                installed: h.installed_cli().is_some(),
+                installed: installed(h),
             })
             .collect()
     }
@@ -206,7 +206,7 @@ impl AssistHost for GilbAssistHost {
             .iter()
             .find(|h| h.id == agent_id)
             .ok_or_else(|| anyhow!("unknown agent `{agent_id}`"))?;
-        if harness.installed_cli().is_none() {
+        if !installed(harness) {
             return Err(anyhow!("{} is not installed on this machine", harness.name));
         }
         let agent = agent().ok_or_else(|| anyhow!("could not resolve {}", harness.name))?;
