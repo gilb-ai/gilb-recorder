@@ -13,7 +13,7 @@ interface ImportMetaEnv {
    */
   readonly VITE_LOCALE?: string;
   /**
-   * Product name shown in user-facing strings ("Gilb" by default). Lets a
+   * Product name shown in user-facing strings ("WorkScreen" by default). Lets a
    * differently-branded build reuse this frontend without forking it.
    */
   readonly VITE_BRAND_NAME?: string;

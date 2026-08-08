@@ -1,4 +1,4 @@
-# Gilb (Gilbreth)
+# WorkScreen (Gilbreth)
 
 A desktop app that records what you do — clicks, keystrokes, focus
 changes, clipboard — through OS accessibility APIs, into a local
@@ -36,21 +36,21 @@ while a password field had focus are masked at the SQL layer
 `password_flag = true`).
 
 Meetings are captured in parallel: when a video-conference app
-starts a call, Gilb records the meeting (start/end, app, audio/video
+starts a call, WorkScreen records the meeting (start/end, app, audio/video
 paths) into a `meetings` table and links subsequent actions to it via
 `actions.meeting_id`. After the call ends, the audio is transcribed
 fully on-device with whisper.cpp into `meeting_transcripts`.
 
 ## Real-time suggestions (optional)
 
-While a call is running, Gilb can transcribe it live and show short
+While a call is running, WorkScreen can transcribe it live and show short
 suggestions in a small always-on-top panel — powered by an agent on your
 own machine, talked to over [ACP](https://agentclientprotocol.com).
 Nothing leaves the machine except what that agent itself sends.
 
 It works with the coding CLI you already have — Claude Code or Gemini
 CLI. Nothing else to install: the interactive CLIs do not speak ACP
-themselves, so Gilb runs the adapter for you, fetching it with `npx` the
+themselves, so WorkScreen runs the adapter for you, fetching it with `npx` the
 first time if it is not already there. Point `GILB_ASSIST_AGENT` at
 something else if you would rather use your own.
 
@@ -96,22 +96,22 @@ Build options live in `RecordingSettings::from_env`:
 
 ## Querying recorded activity from Claude Code
 
-If you installed Gilb from a release (the macOS `.dmg`), the read-only
+If you installed WorkScreen from a release (the macOS `.dmg`), the read-only
 MCP server ships inside the app bundle — no build step needed. The
 binary lives at:
 
 ```
-/Applications/Gilb.app/Contents/MacOS/gilb-mcp
+/Applications/WorkScreen.app/Contents/MacOS/gilb-mcp
 ```
 
 Register it with Claude Code:
 
 ```sh
-claude mcp add gilb --scope user /Applications/Gilb.app/Contents/MacOS/gilb-mcp
+claude mcp add gilb --scope user /Applications/WorkScreen.app/Contents/MacOS/gilb-mcp
 ```
 
 Use `--scope user` so the server is available in every project, since
-Gilb records activity regardless of which repo you're working in. Drop
+WorkScreen records activity regardless of which repo you're working in. Drop
 the flag to register it for the current project only. Confirm it
 registered and connected:
 
@@ -121,8 +121,8 @@ claude mcp list
 
 Inside a Claude Code session the `gilb_*` tools are now available (see
 [`apps/gilb-mcp/help.md`](./apps/gilb-mcp/help.md) for the full
-catalog). The server reads `~/Documents/Gilb/db.sqlite` over stdio; `Gilb.app`
-itself does not need to be running. If you built Gilb from source, point
+catalog). The server reads `~/Documents/Gilb/db.sqlite` over stdio; `WorkScreen.app`
+itself does not need to be running. If you built WorkScreen from source, point
 the same command at the built binary instead (`cargo run -p gilb-mcp`,
 or `target/release/gilb-mcp`). See [`INSTALL.md`](./INSTALL.md) for the
 end-user install and permissions guide.

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-**Gilb (Gilbreth)** — a desktop app that records the user's actions
+**WorkScreen (Gilbreth)** — a desktop app that records the user's actions
 via accessibility APIs. Cargo workspace + Tauri 2. Both macOS
 (CGEventTap + AX) and Windows (UI Automation + event hooks) have real
 capture backends; Linux is out of scope.
@@ -25,7 +25,7 @@ first step toward it.
   Frontend strings live in `apps/gilb-app-tauri/src/i18n.ts` (en + ru
   dictionaries; static markup carries `data-i18n` attributes). The
   locale and product name are baked in per build via `VITE_LOCALE` /
-  `VITE_BRAND_NAME` (default: en / Gilb) so differently-branded builds
+  `VITE_BRAND_NAME` (default: en / WorkScreen) so differently-branded builds
   reuse this frontend without forking. New user-facing strings go
   through `t()` / `data-i18n`, with both dictionary entries filled.
 - **CLAUDE.md and any other docs read by an agent as instructions:
@@ -239,7 +239,7 @@ masking, `range` formats). Any migration that changes the shape of
 
 - `reference/` is gitignored. Updating is a normal `git pull` inside
   each clone: `cd reference/<project> && git pull`.
-- If you need to bring code from a reference project into Gilb, copy
+- If you need to bring code from a reference project into WorkScreen, copy
   it explicitly into our sources and cite the origin in the commit
   message.
 

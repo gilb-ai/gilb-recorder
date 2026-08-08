@@ -1,6 +1,6 @@
 // Build-time i18n + branding. The locale and product name are baked in per
 // build via Vite env (`VITE_LOCALE`, `VITE_BRAND_NAME`), so one frontend
-// serves differently-branded builds (e.g. an English "Gilb" and a Russian
+// serves differently-branded builds (e.g. an English "WorkScreen" and a Russian
 // build under another name) without forking — same mechanism as
 // `VITE_GILB_WEB_URL`.
 //
@@ -10,7 +10,7 @@
 // `t(key, params)`; `{placeholders}` are substituted from `params`, and
 // `{brand}` is always available.
 
-export const BRAND = import.meta.env.VITE_BRAND_NAME ?? "Gilb";
+export const BRAND = import.meta.env.VITE_BRAND_NAME ?? "WorkScreen";
 
 const LOCALE = import.meta.env.VITE_LOCALE === "ru" ? "ru" : "en";
 

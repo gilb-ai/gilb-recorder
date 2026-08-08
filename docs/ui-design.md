@@ -1,4 +1,4 @@
-# Gilb UI/UX conventions
+# WorkScreen UI/UX conventions
 
 The conventions every screen in the desktop app follows. New UI must match
 these unless there's a documented reason not to. Canonical implementations are
@@ -6,7 +6,7 @@ referenced inline — copy those, don't reinvent.
 
 ## Two capture subsystems — keep them distinct
 
-Gilb has **two independent capture subsystems**. They are different things with
+WorkScreen has **two independent capture subsystems**. They are different things with
 different lifecycles, consent models, and vocabulary. The UI must never conflate
 them — that confusion is what this section exists to prevent. Internally they
 already map to different tables (`sessions` vs `meetings`).
@@ -20,7 +20,7 @@ to the DB (`sessions`). Backed by `start_capture` / `stop_capture` on the engine
 - **Control: a switch** on the main window, next to the other capture switches.
   The user can stop and restart the always-on capture at any time (honest for a
   privacy tool); on maps to `start_capture`, off to `stop_capture`.
-- **Persistence:** the paused state is persisted. On launch Gilb auto-resumes
+- **Persistence:** the paused state is persisted. On launch WorkScreen auto-resumes
   tracking **only if not paused** — a deliberate pause survives restarts; it is
   never silently re-enabled.
 - **Indicator: calm, non-pulsing** — a steady dot next to the label (green =
@@ -51,7 +51,7 @@ subsystem's vocabulary or visual language for the other.
 
 ## Window model — one window, in-app screens
 
-There is **one** main OS window. All "inside Gilb" UI — settings, and any future
+There is **one** main OS window. All "inside WorkScreen" UI — settings, and any future
 secondary views (history, detail panes, wizards) — renders **inside it as a
 modal overlay**, never as a second `WebviewWindowBuilder` popup.
 
@@ -66,7 +66,7 @@ modal overlay**, never as a second `WebviewWindowBuilder` popup.
 The meeting **countdown** and **stop-countdown** popups (`countdown.html`,
 `stop-countdown.html`) are borderless, `always_on_top`, decorationless windows.
 They exist as separate windows **on purpose**: they must float over *other apps*
-(Zoom, Slack…), not just Gilb, so the user sees the prompt while Gilb is in the
+(Zoom, Slack…), not just WorkScreen, so the user sees the prompt while WorkScreen is in the
 background. That system-level-prompt role is the bar for a new window. "It's a
 different screen" is not — that's a modal overlay.
 
@@ -166,8 +166,8 @@ out. The auto-action is always the **safe** default:
 
 - User-facing strings are **English** (the app is open source).
 - Name the product where a bare label would be ambiguous out of context:
-  "Gilb Meeting Recording is about to start for …", not "Recording is about to…".
-  Floating/notification surfaces especially must self-identify as Gilb.
+  "WorkScreen Meeting Recording is about to start for …", not "Recording is about to…".
+  Floating/notification surfaces especially must self-identify as WorkScreen.
 - Rendered with `textContent`, never `innerHTML` — no HTML injection from
   meeting/app names or any dynamic string.
 

@@ -324,7 +324,7 @@ async function refreshAuth() {
 
 type AssistStatus = {
   /// Product-level availability, decided by the host (gilb_shell_tauri::assist).
-  /// Gilb answers "the agent CLI is installed"; a hosted product would answer
+  /// WorkScreen answers "the agent CLI is installed"; a hosted product would answer
   /// "signed in".
   available: boolean;
   model_ready: boolean;
@@ -1073,7 +1073,7 @@ window.addEventListener("DOMContentLoaded", () => {
   // Tray items ask to surface a specific screen.
   listen<string>("tray-navigate", (e) => navigateTray(e.payload));
 
-  // Register Gilb as a LaunchAgent on first run so it starts at login.
+  // Register WorkScreen as a LaunchAgent on first run so it starts at login.
   // Idempotent — `enable()` is a no-op once the agent plist is in place.
   (async () => {
     try {

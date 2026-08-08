@@ -120,7 +120,7 @@ jobs:
         with:
           projectPath: apps/gilb-app-tauri
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
-          releaseName: "Gilb __VERSION__"
+          releaseName: "WorkScreen __VERSION__"
           releaseDraft: true
           # Tags with a semver pre-release suffix (v1.1.0-beta.1, -rc.1, …) are
           # marked pre-release, so `releases/latest` (the stable updater

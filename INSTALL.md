@@ -48,14 +48,14 @@ Keychain Access) are dropped at the source.
 ## Install
 
 1. Open the `.dmg` you received. A Finder window appears with
-   `Gilb.app` and a shortcut to `/Applications`.
-2. Drag `Gilb.app` onto the `/Applications` shortcut.
+   `WorkScreen.app` and a shortcut to `/Applications`.
+2. Drag `WorkScreen.app` onto the `/Applications` shortcut.
 3. Eject the DMG (right-click the disk image in Finder → Eject).
-4. Open `/Applications` and double-click `Gilb`.
+4. Open `/Applications` and double-click `WorkScreen`.
 
 The build is notarized, so Gatekeeper should let it open directly.
 If macOS still refuses ("cannot be opened because Apple cannot check
-it for malicious software"), right-click `Gilb.app` → **Open** →
+it for malicious software"), right-click `WorkScreen.app` → **Open** →
 **Open** in the dialog. You only need to do this once.
 
 ## Grant permissions
@@ -69,13 +69,13 @@ launch you'll see a splash screen listing them — both must be on:
   events.
 
 The buttons on the splash open the matching System Settings pane
-*and* register `Gilb` with macOS so it appears in the list with its
+*and* register `WorkScreen` with macOS so it appears in the list with its
 own toggle — you do not need to drag the app into the list manually
-or click the `+` button. Flip the toggle to on, return to Gilb, and
+or click the `+` button. Flip the toggle to on, return to WorkScreen, and
 the splash will dismiss itself once both permissions are granted.
 
 If a toggle was already on but the splash still complains, quit and
-relaunch `Gilb`.
+relaunch `WorkScreen`.
 
 If macOS later asks for **Automation** permission (to control other
 apps), allow it — gilb uses it to read titles and identifiers from
@@ -99,24 +99,24 @@ start recording again.
 
 There is no Dock icon — gilb runs as a menu-bar-less utility (the
 window is the only entry point). Closing the window keeps the app
-running; quit it from **Gilb → Quit Gilb** in the menu bar, or with
+running; quit it from **WorkScreen → Quit WorkScreen** in the menu bar, or with
 ⌘Q while the window is focused.
 
 ### Disabling autostart at login
 
-Gilb registers itself as a Login Item on first launch (it writes
+WorkScreen registers itself as a Login Item on first launch (it writes
 `~/Library/LaunchAgents/app.farol.gilb.plist`). To stop it from
 launching automatically:
 
 - **From the UI:** System Settings → General → Login Items → uncheck
-  `Gilb`.
+  `WorkScreen`.
 - **From the terminal:**
   ```sh
   launchctl unload ~/Library/LaunchAgents/app.farol.gilb.plist
   rm ~/Library/LaunchAgents/app.farol.gilb.plist
   ```
 
-Note that the next time you launch `Gilb` manually it will re-enable
+Note that the next time you launch `WorkScreen` manually it will re-enable
 itself; if you want autostart off permanently, leave the app closed.
 
 ## Querying recorded activity
@@ -124,18 +124,18 @@ itself; if you want autostart off permanently, leave the app closed.
 The `.app` bundle ships a read-only MCP server, `gilb-mcp`, at:
 
 ```
-/Applications/Gilb.app/Contents/MacOS/gilb-mcp
+/Applications/WorkScreen.app/Contents/MacOS/gilb-mcp
 ```
 
 It reads `~/Documents/Gilb/db.sqlite` directly over stdio MCP transport. It
-does not need `Gilb.app` itself to be running. To wire it into
+does not need `WorkScreen.app` itself to be running. To wire it into
 Claude Desktop, add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "gilb": {
-      "command": "/Applications/Gilb.app/Contents/MacOS/gilb-mcp"
+      "command": "/Applications/WorkScreen.app/Contents/MacOS/gilb-mcp"
     }
   }
 }
@@ -169,14 +169,14 @@ after updating moves it into Documents for you — nothing is copied or
 re-downloaded, and if the move cannot be made the old folder is left
 untouched and the app says so in its log.
 
-To wipe everything, quit `Gilb` and delete the folder; a new database is
+To wipe everything, quit `WorkScreen` and delete the folder; a new database is
 created on next launch. The meeting folders are the bulky part — video,
 at meeting length.
 
 ## Storage format caveat
 
 The database schema is currently considered unstable: future versions
-of `Gilb` may change column names, add tables, or evolve the format
+of `WorkScreen` may change column names, add tables, or evolve the format
 without a migration path for data captured by older builds. If you
 need long-term archival of recordings, export to a separate format
 before upgrading.
@@ -189,8 +189,8 @@ before upgrading.
    launchctl unload ~/Library/LaunchAgents/app.farol.gilb.plist 2>/dev/null
    rm -f ~/Library/LaunchAgents/app.farol.gilb.plist
    ```
-   (Or System Settings → General → Login Items → uncheck `Gilb`.)
-3. Drag `Gilb.app` from `/Applications` to the Trash.
+   (Or System Settings → General → Login Items → uncheck `WorkScreen`.)
+3. Drag `WorkScreen.app` from `/Applications` to the Trash.
 4. Optionally, remove `~/Documents/Gilb/` to delete all recorded data.
 5. Optionally, revoke Accessibility / Input Monitoring permissions
    in System Settings (the entries remain even after the app is
