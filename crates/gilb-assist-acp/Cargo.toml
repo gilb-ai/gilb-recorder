@@ -4,19 +4,22 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
-description = "Assist backend over the Agent Client Protocol: suggestions from a local coding agent (claude, gemini, hermes) spoken to over stdio JSON-RPC"
+description = "Assist backend over the Agent Client Protocol: suggestions from a local coding agent, on top of the shared acp-client"
 
 [dependencies]
 anyhow = { workspace = true }
 async-trait = "0.1"
-serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 
 gilb-assist = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# Speaking ACP is not gilb's problem any more: the client, the process-group
+# bookkeeping and the agent catalogue are shared with the other products that
+# reach a local agent the same way. Pinned by tag — three repositories with
+# three release rhythms must not break on each other.
+acp-client = { git = "https://github.com/farol-team/acp-agents", tag = "v0.1.0" }
+acp-agents = { git = "https://github.com/farol-team/acp-agents", tag = "v0.1.0" }
 
 [dev-dependencies]
 tempfile = "3"
